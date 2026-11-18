@@ -25,7 +25,7 @@ Cubism Core binary, no C++ toolchain, no engine.
 | Headless offscreen render to PNG | ✅ `examples/offscreen.rs` |
 | Frame rate (release, 715 drawables) | ✅ ~50 fps, CPU-bound |
 | Desktop-pet shell (transparent / on-top / click-through / tray) | ❌ not started |
-| Breathing / eye blink ( /  equivalents) | ❌ not started |
+| Breathing / eye blink (`CubismBreath` / `CubismEyeBlink` equivalents) | ❌ not started |
 | Blink / breath / lip-sync | ❌ not started |
 
 | iced window | offscreen render |
