@@ -34,10 +34,10 @@ Cubism Core binary, no C++ toolchain, no engine.
 
 ## Fidelity against the official viewer
 
-Same model, same rest pose: the official Cubism Viewer 5.3 on the left, this
-renderer at `texture_scale = 1.0` on the right. Colours, mask edges, blend modes
-and draw order match; only the physics phase differs, because the two were
-captured at different moments.
+Same model, both in a neutral pose: the official Cubism Viewer 5.3 on the left,
+this renderer at `texture_scale = 1.0` on the right. Colours, mask edges, blend
+modes and draw order match. The two captures are not frame-synchronised, so the
+physics phase differs (mouth and hair sit a little differently).
 
 ![official viewer vs this renderer](docs/images/fidelity-vs-official.png)
 
