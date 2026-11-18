@@ -11,7 +11,7 @@ mod scene;
 
 pub use bounds::ModelBounds;
 pub use error::{Error, Result};
-pub use rig::{Binding, ModelFacts, Rig, Route, Slot, Source, TrackingMode, resolve};
+pub use rig::{Binding, LookAtMode, ModelFacts, Rig, Route, Slot, Source, resolve};
 pub use scene::{ClipRect, Live2dScene, STEP, SceneOptions};
 
 pub use mocari;

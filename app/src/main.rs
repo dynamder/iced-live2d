@@ -52,7 +52,7 @@ fn main() -> iced::Result {
     }
 
     let options = SceneOptions {
-        tracking: args.tracking,
+        look_at_mode: args.look_at_mode,
         ..SceneOptions::default()
     };
 

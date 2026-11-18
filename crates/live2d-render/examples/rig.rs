@@ -1,4 +1,4 @@
-//! Prints how cursor tracking would be routed for a model, before you trust it.
+//! Prints how a cursor LookAt target would be routed for a model, before you trust it.
 //!
 //! The routing is inferred from the model's physics wiring, so a new model can be
 //! inspected in a second — no GPU, no window — instead of by watching the render
@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use live2d_render::mocari::assets::load_model_runtime;
-use live2d_render::{ModelFacts, Rig, TrackingMode, resolve};
+use live2d_render::{LookAtMode, ModelFacts, Rig, resolve};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
@@ -26,12 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("model: {path}");
     println!("parameters: {}", runtime.parameter_ids().len());
 
-    for mode in [TrackingMode::Adapted, TrackingMode::ViewerDefault] {
+    for mode in [LookAtMode::Adapted, LookAtMode::ViewerDefault] {
         let rig = resolve(mode, &facts);
         println!("\n== {mode} ==");
         print_rig(&rig);
 
-        if mode == TrackingMode::Adapted {
+        if mode == LookAtMode::Adapted {
             let unbound: Vec<&str> = live2d_render::Slot::ALL
                 .iter()
                 .filter(|slot| rig.binding(**slot).is_none())

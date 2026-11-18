@@ -55,7 +55,7 @@ cargo run -p live2d-render --example offscreen -- "<model>.model3.json" out.png 
 | Ren | 73 | `Param*` direct | yes | no | 3 | 5 | few motions, no pose |
 | Rice | 96 | `Param*` direct, **no `ParamAngleY`** | yes | no | 4 | 0 | a rig that is missing a slot on purpose |
 | Wanko | 25 | `PARAM_ANGLE_X` style | yes | no | 12 | 0 | old upper-case/underscore naming, no eye-ball parameters |
-| DeepSeek 大肥鱼 | 509 | `AngleX` / `PositionX` (physics inputs) | yes (131 settings) | yes | 8 | 23 | the VTuber convention: tracking inputs feed physics outputs |
+| DeepSeek 大肥鱼 | 509 | `AngleX` / `PositionX` (physics inputs) | yes (131 settings) | yes | 8 | 23 | the VTuber convention: look-at inputs feed physics outputs |
 
 ## What the corpus already caught
 

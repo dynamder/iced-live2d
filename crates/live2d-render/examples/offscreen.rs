@@ -11,7 +11,7 @@
 //! state is set through the `LIVE2D_*` knobs documented in `README.md`.
 
 use live2d_render::wgpu;
-use live2d_render::{ClipRect, Live2dScene, SceneOptions};
+use live2d_render::{ClipRect, Live2dScene, LookAtMode, SceneOptions};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
@@ -48,11 +48,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = SceneOptions {
         texture_scale: knobs.texture_scale,
         mask_size: knobs.mask_size,
-        tracking: knobs::tracking()?,
         ..SceneOptions::default()
     };
 
     let mut scene = Live2dScene::load_with_options(&device, &queue, &model_path, format, options)?;
+    scene.set_look_at_mode(knobs.look_at_mode);
+
+    if let Some(fill) = knobs.fill {
+        scene.set_fill(&queue, fill);
+    }
+
     scene.resize(&queue, 1.0);
 
     knobs.apply(&mut scene);
@@ -142,7 +147,9 @@ struct Knobs {
     no_motion: bool,
     no_physics: bool,
     reclip: bool,
-    gaze: Option<[f32; 2]>,
+    look_at: Option<[f32; 2]>,
+    look_at_mode: LookAtMode,
+    fill: Option<f32>,
 }
 
 impl Knobs {
@@ -156,7 +163,9 @@ impl Knobs {
             no_motion: env_flag("LIVE2D_NO_MOTION"),
             no_physics: env_flag("LIVE2D_NO_PHYSICS"),
             reclip: env_flag("LIVE2D_RECLIP"),
-            gaze: env_gaze()?,
+            look_at: env_look_at()?,
+            look_at_mode: knobs::look_at_mode()?,
+            fill: env_f32("LIVE2D_FILL")?,
         })
     }
 
@@ -181,8 +190,8 @@ impl Knobs {
             scene.set_physics_enabled(false);
         }
 
-        if let Some(gaze) = self.gaze {
-            scene.set_gaze(gaze);
+        if let Some(target) = self.look_at {
+            scene.look_at(target);
         }
     }
 }
@@ -220,8 +229,8 @@ fn env_string(name: &str) -> Result<Option<String>, Box<dyn std::error::Error>> 
     }
 }
 
-fn env_gaze() -> Result<Option<[f32; 2]>, Box<dyn std::error::Error>> {
-    let Some(raw) = env_string("LIVE2D_GAZE")? else {
+fn env_look_at() -> Result<Option<[f32; 2]>, Box<dyn std::error::Error>> {
+    let Some(raw) = env_string("LIVE2D_LOOK_AT")? else {
         return Ok(None);
     };
 
@@ -229,10 +238,10 @@ fn env_gaze() -> Result<Option<[f32; 2]>, Box<dyn std::error::Error>> {
         .split(',')
         .map(|part| part.trim().parse())
         .collect::<Result<_, _>>()
-        .map_err(|_| format!("LIVE2D_GAZE must be two numbers, got {raw:?}"))?;
+        .map_err(|_| format!("LIVE2D_LOOK_AT must be two numbers, got {raw:?}"))?;
 
     match parts[..] {
         [x, y] => Ok(Some([x, y])),
-        _ => Err(format!("LIVE2D_GAZE needs exactly two numbers, got {raw:?}").into()),
+        _ => Err(format!("LIVE2D_LOOK_AT needs exactly two numbers, got {raw:?}").into()),
     }
 }

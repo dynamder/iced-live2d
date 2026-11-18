@@ -21,7 +21,7 @@ use wgpu::{CommandEncoder, Device, Queue, TextureFormat, TextureView};
 
 use crate::bounds::ModelBounds;
 use crate::error::{Error, Result};
-use crate::rig::{self, ModelFacts, Rig, Slot, TrackingMode};
+use crate::rig::{self, LookAtMode, ModelFacts, Rig, Slot};
 
 /// Default size of the single shared mask render target.
 ///
@@ -68,11 +68,11 @@ pub struct SceneOptions {
     /// Edge length of the shared mask render target. Raise it if a complex rig
     /// shows clipped geometry — packed mask contexts can run out of atlas space.
     pub mask_size: u32,
-    /// Where the cursor writes its angles. [`TrackingMode::Adapted`] follows the
-    /// rig's own conventions; [`TrackingMode::ViewerDefault`] reproduces the
+    /// Where a LookAt target is written. [`LookAtMode::Adapted`] follows the
+    /// rig's own conventions; [`LookAtMode::ViewerDefault`] reproduces the
     /// Cubism Viewer's mouse bindings, which on a physics rig means only the eyes
     /// respond.
-    pub tracking: TrackingMode,
+    pub look_at_mode: LookAtMode,
 }
 
 impl Default for SceneOptions {
@@ -81,7 +81,7 @@ impl Default for SceneOptions {
             texture_scale: 0.5,
             view_fill: DEFAULT_VIEW_FILL,
             mask_size: MASK_TARGET_SIZE,
-            tracking: TrackingMode::default(),
+            look_at_mode: LookAtMode::default(),
         }
     }
 }
@@ -116,8 +116,8 @@ pub struct Live2dScene {
     expression_paths: Vec<PathBuf>,
     player: Option<MotionPlayer>,
     expressions: ExpressionManager,
-    /// Set when something outside the animation timeline changed (gaze, model
-    /// swap) so the next step rebuilds meshes even if no motion is playing.
+    /// Set when something outside the animation timeline changed (look-at,
+    /// model swap) so the next step rebuilds meshes even if no motion is playing.
     dirty: bool,
     stepper: Stepper,
     gpu: GpuState,
@@ -125,8 +125,13 @@ pub struct Live2dScene {
     view_fill: f32,
     fit_aspect: f32,
     motion_cursor: usize,
-    /// Where the cursor writes, resolved once at load time by [`crate::rig`].
+    /// Where a LookAt target writes, resolved by [`crate::rig`] under
+    /// `look_at_mode`.
     rig: Rig,
+    look_at_mode: LookAtMode,
+    /// What [`crate::rig::resolve`] reads. Kept so the mode can change at
+    /// runtime without reloading the model.
+    facts: ModelFacts,
     physics_enabled: bool,
     profile: Option<Profile>,
     expression_cursor: usize,
@@ -218,10 +223,11 @@ impl Live2dScene {
         let transform =
             renderer.create_transform(device, &bounds.fit_matrix(1.0, options.view_fill));
 
-        // Rigs exported for VTuber software drive tracking through AngleX/Y/Z,
-        // PositionX/Y/Z and LeanInput; physics then derives ParamAngle*,
-        // ParamBodyAngle* and the rest. The resolver in `crate::rig` works out
-        // which of the two conventions a model uses, from its physics wiring.
+        // Rigs exported for VTuber software drive a LookAt target through
+        // AngleX/Y/Z, PositionX/Y/Z and LeanInput; physics then derives
+        // ParamAngle*, ParamBodyAngle* and the rest. The resolver in `crate::rig`
+        // works out which of the two conventions a model uses, from its physics
+        // wiring.
 
         let mut motion_groups = motion_paths_by_group(&model, model_dir.as_deref());
         let mut expression_paths = expression_paths(&model, model_dir.as_deref());
@@ -235,10 +241,8 @@ impl Live2dScene {
         let mut issues = Vec::new();
 
         let physics_outputs = physics_output_parameters(&model, model_dir.as_deref(), &mut issues);
-        let rig = rig::resolve(
-            options.tracking,
-            &ModelFacts::new(model.parameter_ids().to_vec(), physics_outputs),
-        );
+        let facts = ModelFacts::new(model.parameter_ids().to_vec(), physics_outputs);
+        let rig = rig::resolve(options.look_at_mode, &facts);
 
         if let Some(model_dir) = model_dir.as_deref()
             && (motion_groups.is_empty() || expression_paths.is_empty())
@@ -275,6 +279,8 @@ impl Live2dScene {
             fit_aspect: 1.0,
             motion_cursor: 0,
             rig,
+            look_at_mode: options.look_at_mode,
+            facts,
             physics_enabled: true,
             profile: std::env::var_os("LIVE2D_PROFILE").map(|_| Profile::default()),
             expression_cursor: 0,
@@ -354,7 +360,7 @@ impl Live2dScene {
         self.expressions.tick(seconds);
         self.expressions.apply(runtime);
 
-        // Overrides (gaze, user sliders) win over motion and expression.
+        // Overrides (look-at, user sliders) win over motion and expression.
         runtime.apply_parameter_overrides();
 
         if self.physics_enabled {
@@ -399,23 +405,47 @@ impl Live2dScene {
         }
 
         self.fit_aspect = aspect;
-        let matrix = self.bounds.fit_matrix(aspect, self.view_fill);
+        self.apply_fit(queue);
+    }
+
+    /// Scales the model inside the viewport, in the unit of
+    /// [`SceneOptions::view_fill`]: `2.0` fits its bounds to the whole view, and
+    /// the default is `1.85`.
+    pub fn set_fill(&mut self, queue: &Queue, fill: f32) {
+        if !fill.is_finite() || fill <= 0.0 {
+            return;
+        }
+
+        if (self.view_fill - fill).abs() < 1e-4 {
+            return;
+        }
+
+        self.view_fill = fill;
+        self.apply_fit(queue);
+    }
+
+    fn apply_fit(&mut self, queue: &Queue) {
+        let matrix = self.bounds.fit_matrix(self.fit_aspect, self.view_fill);
         self.gpu.transform.update_matrix(queue, &matrix);
     }
 
-    /// Makes the model look towards a point given in normalized widget space
-    /// (`-1.0..=1.0` on both axes, `-1` = left/top).
+    /// Points the model's head, body and eyes at `target`, given in normalized
+    /// widget space (`-1.0..=1.0` on both axes, `-1` = left/top).
     ///
-    /// Which parameters that means is decided at load time by [`crate::rig`]: a
-    /// rig authored for VTube Studio takes head rotation on `AngleX`/`AngleY` and
-    /// body motion on `PositionX`/`PositionY`, and physics derives
-    /// `ParamAngle*`/`ParamBodyAngle*` from them. Under
-    /// [`TrackingMode::ViewerDefault`] the conventional `ParamAngle*` names are
+    /// This is Cubism's LookAt input. Which parameters it lands on is decided by
+    /// [`crate::rig`]: a rig authored for VTube Studio takes head rotation on
+    /// `AngleX`/`AngleY` and body motion on `PositionX`/`PositionY`, and physics
+    /// derives `ParamAngle*`/`ParamBodyAngle*` from them. Under
+    /// [`LookAtMode::ViewerDefault`] the conventional `ParamAngle*` names are
     /// written instead, which on such a rig only moves the eyes — the same thing
     /// the Cubism Viewer does with its default bindings.
-    pub fn set_gaze(&mut self, gaze: [f32; 2]) {
-        let x = gaze[0].clamp(-1.0, 1.0);
-        let y = gaze[1].clamp(-1.0, 1.0);
+    ///
+    /// The value persists until [`Live2dScene::look_at`] is called again or
+    /// [`Live2dScene::set_look_at_mode`] resets the overrides, so a host with no
+    /// cursor can call it once and forget it.
+    pub fn look_at(&mut self, target: [f32; 2]) {
+        let x = target[0].clamp(-1.0, 1.0);
+        let y = target[1].clamp(-1.0, 1.0);
 
         let Self {
             model, rig, dirty, ..
@@ -430,11 +460,32 @@ impl Live2dScene {
             (Slot::EyeY, y),
         ] {
             if let Some(binding) = rig.binding(slot) {
-                set_tracking_input(model, &binding.parameter, value);
+                write_normalized_override(model, &binding.parameter, value);
             }
         }
 
         *dirty = true;
+    }
+
+    /// Switches where a LookAt target lands, without reloading the model.
+    ///
+    /// Every parameter override is dropped first, so the previous mode's inputs
+    /// do not linger at their last value: the model returns to its rest pose for
+    /// the parameters the new mode does not drive.
+    pub fn set_look_at_mode(&mut self, mode: LookAtMode) {
+        if self.look_at_mode == mode {
+            return;
+        }
+
+        self.look_at_mode = mode;
+        self.model.clear_parameter_overrides();
+        self.rig = rig::resolve(mode, &self.facts);
+        self.dirty = true;
+    }
+
+    /// The mode [`Live2dScene::look_at`] currently writes under.
+    pub fn look_at_mode(&self) -> LookAtMode {
+        self.look_at_mode
     }
 
     /// Records the mask pass and the visible model pass into `encoder`.
@@ -572,7 +623,7 @@ impl Live2dScene {
     /// Diagnostics only: it lets a test drive an intermediate parameter and tell
     /// "physics chaining is broken" apart from "the input never arrives".
     pub fn set_parameter_offset(&mut self, id: &str, offset: f32) {
-        set_tracking_input(&mut self.model, id, offset);
+        write_normalized_override(&mut self.model, id, offset);
         self.dirty = true;
     }
 
@@ -1117,13 +1168,13 @@ fn is_idle_clip(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Writes a Cubism-style `-1.0..=1.0` tracking offset into a parameter.
+/// Writes a Cubism-style `-1.0..=1.0` offset into a parameter.
 ///
 /// mocari's `*_normalized` setters take `0.0..=1.0` (the docs say so) and
 /// clamp, so passing a `-1.0..=1.0` value silently pins every negative offset to
-/// the parameter minimum: the model freezes until the cursor crosses its centre
+/// the parameter minimum: the model freezes until the target crosses its centre
 /// line and then snaps into motion. Convert here, once.
-fn set_tracking_input(runtime: &mut ModelRuntime, id: &str, offset: f32) {
+fn write_normalized_override(runtime: &mut ModelRuntime, id: &str, offset: f32) {
     let amount = (offset.clamp(-1.0, 1.0) + 1.0) * 0.5;
     runtime.set_parameter_override_normalized(id, amount);
 }

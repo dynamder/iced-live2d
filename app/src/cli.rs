@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use live2d_render::TrackingMode;
+use live2d_render::LookAtMode;
 
 /// Directories searched by `--model <name>` and `--list`, in order.
 ///
@@ -45,7 +45,7 @@ KEYS:
 #[derive(Debug)]
 pub struct Args {
     pub model: PathBuf,
-    pub tracking: TrackingMode,
+    pub look_at_mode: LookAtMode,
 }
 
 #[derive(Debug)]
@@ -133,7 +133,7 @@ fn parse_with(
     available: Vec<(String, PathBuf)>,
 ) -> Result<Invocation, String> {
     let mut wanted: Option<String> = None;
-    let mut tracking = TrackingMode::default();
+    let mut look_at_mode = LookAtMode::default();
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -145,7 +145,7 @@ fn parse_with(
             }
             "-t" | "--track" => {
                 let raw = args.next().ok_or("--track needs a mode")?;
-                tracking = raw.parse()?;
+                look_at_mode = raw.parse()?;
             }
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other:?}"));
@@ -159,7 +159,10 @@ fn parse_with(
         Some(wanted) => resolve(&wanted, &available)?,
     };
 
-    Ok(Invocation::Run(Args { model, tracking }))
+    Ok(Invocation::Run(Args {
+        model,
+        look_at_mode,
+    }))
 }
 
 fn resolve(wanted: &str, available: &[(String, PathBuf)]) -> Result<PathBuf, String> {
@@ -230,7 +233,7 @@ mod tests {
         };
 
         assert!(args.model.ends_with(DEFAULT_MODEL));
-        assert_eq!(args.tracking, TrackingMode::Adapted);
+        assert_eq!(args.look_at_mode, LookAtMode::Adapted);
     }
 
     #[test]
@@ -250,16 +253,16 @@ mod tests {
     }
 
     #[test]
-    fn the_tracking_mode_is_parsed() {
+    fn the_look_at_mode_is_parsed() {
         let Ok(Invocation::Run(args)) = parse_args(&["-m", "Wanko", "-t", "viewer"]) else {
             panic!("expected a run invocation");
         };
 
-        assert_eq!(args.tracking, TrackingMode::ViewerDefault);
+        assert_eq!(args.look_at_mode, LookAtMode::ViewerDefault);
     }
 
     #[test]
-    fn a_bad_tracking_mode_is_rejected() {
+    fn a_bad_look_at_mode_is_rejected() {
         assert!(parse_args(&["-t", "sideways"]).is_err());
     }
 

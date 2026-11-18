@@ -140,7 +140,7 @@ mocari 的文档写的就是“normalized `0.0..=1.0`”，但 Cubism 的追踪�
 
 表现：鼠标在角色中线**左侧**滑动时模型完全不动（`AngleX` 卡在 -30），一越过中线才开始跟随，看起来就是“过中线时身体顿一下”。而且**四角测试（±1）恰好两端都对**——`-1` 夹到 0 正好等于 `minimum`——所以这个 bug 很容易漏过目检。
 
-正确的写法（`scene.rs` 的 `set_tracking_input`，所有追踪写入都走它）：
+正确的写法（`scene.rs` 的 `write_normalized_override`，所有追踪写入都走它）：
 
 ```rust
 let amount = (offset.clamp(-1.0, 1.0) + 1.0) * 0.5;
@@ -166,7 +166,7 @@ VTuber 导出的绑定通常是这样分层的：
 
 所以：如果你把 `ParamAngleX` 当输入写，同一帧稍后的 `apply_physics` 会用 `AngleX`(=0) 推出的结果把它覆盖掉 —— **表现就是“鼠标动了，只有头发在摆，头和眼睛不动”**。
 
-代码里按“有 `AngleX` 就写追踪输入，否则退回 `ParamAngle*`”自动选择（`GazeInputs`）。至于具体写哪几条——**照官方 Viewer 的默认绑定表写，一条也别多加**：
+代码里按“有 `AngleX` 就写追踪输入，否则退回 `ParamAngle*`”自动选择（`crate::rig::resolve`）。至于具体写哪几条——**照官方 Viewer 的默认绑定表写，一条也别多加**：
 
 | 参数 | 绑定 |
 |---|---|
@@ -204,7 +204,7 @@ Cubism Viewer 的默认鼠标跟踪把 `ParamAngleX`/`ParamBodyAngleX` 绑到鼠
 | `PositionX`（艺术家约定） | 物理推出 `ParamBodyAngleX`，躯干/手臂跟着转 | 直接生效 |
 
 所以“身体不动”既不是模型缺陷也不是渲染器缺陷：**是没喂 `PositionX`**。补上之后
-（`Live2dScene::set_gaze` 现在也写 `PositionX`/`PositionY`），物理开着画面下半部也会动：
+（`Live2dScene::look_at` 现在也写 `PositionX`/`PositionY`），物理开着画面下半部也会动：
 
 | | 只写 `AngleX`/`AngleY` | 加上 `PositionX`/`PositionY` |
 |---|---|---|
@@ -222,7 +222,7 @@ Cubism Viewer 的默认鼠标跟踪把 `ParamAngleX`/`ParamBodyAngleX` 绑到鼠
 - 判据来自 `physics3.json`：如果约定名（`ParamAngleX`）是某个 setting 的输出，就去用它真正的输入
   （`AngleX`）；否则直接用约定名。解析器是纯函数，有 5 个单元测试覆盖两种 rig 形态。
 
-两种模式（`SceneOptions::tracking`，或在 app / 所有 example 里用 `LIVE2D_TRACK` 切换）：
+两种模式（`SceneOptions::look_at_mode`，或在 app / 所有 example 里用 `LIVE2D_TRACK` 切换）：
 
 | 模式 | 行为 | 实测（±1 全程，每帧变化像素） |
 |---|---|---|
@@ -380,7 +380,7 @@ scripts/shot-window.ps1        按标题前缀截任意窗口（用来截官方 
 
 视线跟随实测（左 vs 右）：
 
-![视线跟随](images/gaze-compare.png)
+![视线跟随](images/look-at-compare.png)
 
 同一姿势下与官方 Viewer 的逐像素对照见仓库根目录 `README.md` 的「Fidelity」一节。
 

@@ -1,4 +1,4 @@
-//! Sweeps the gaze at 60 fps and reports what moves, frame by frame.
+//! Sweeps the look-at target at 60 fps and reports what moves, frame by frame.
 //!
 //! Written to catch discontinuities: the cursor crossing the model's centre line
 //! is `AngleX` crossing its default value (0), which is where a wrong
@@ -10,7 +10,7 @@
 //! Knobs, all optional (the full list is in `README.md`):
 //!
 //! - `SWEEP_DIRECT=<ParamId>` write that parameter directly instead of driving
-//!   the gaze, in `-1.0..=1.0`
+//!   the look-at target, in `-1.0..=1.0`
 //! - `SWEEP_RANGE=<lo>,<hi>` input range, default `-1,1`. `lo == hi` holds the
 //!   input still, which separates "jumps with position" from "jumps with time".
 //! - `SWEEP_ALL=1` watch every parameter instead of the six printed by default
@@ -41,7 +41,7 @@ const TRACKED: &[&str] = &[
 fn drive(scene: &mut Live2dScene, direct: &Option<String>, x: f32) {
     match direct {
         Some(id) => scene.set_parameter_offset(id, x),
-        None => scene.set_gaze([x, 0.0]),
+        None => scene.look_at([x, 0.0]),
     }
 }
 
@@ -68,10 +68,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wgpu::TextureFormat::Rgba8Unorm,
         SceneOptions {
             texture_scale: 0.25,
-            tracking: knobs::tracking()?,
             ..SceneOptions::default()
         },
     )?;
+    scene.set_look_at_mode(knobs::look_at_mode()?);
 
     let direct = std::env::var("SWEEP_DIRECT").ok();
 

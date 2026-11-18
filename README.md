@@ -21,7 +21,7 @@ Cubism Core binary, no C++ toolchain, no engine.
 | Motion playback, looping, switching | ✅ `R` |
 | Expressions (23 scanned from disk) | ✅ `E` |
 | Physics (hair/tail follow) | ✅ |
-| Gaze follows the cursor (head + eyes + torso) | ✅ |
+| LookAt follows the cursor (head + eyes + torso) | ✅ |
 | Window resize keeps framing | ✅ |
 | Headless offscreen render to PNG | ✅ `examples/offscreen.rs` |
 | Frame rate (release, 715 drawables) | ✅ ~50 fps, CPU-bound |
@@ -41,13 +41,14 @@ physics phase differs (mouth and hair sit a little differently).
 
 ![official viewer vs this renderer](docs/images/fidelity-vs-official.png)
 
-Gaze tracking, cursor left vs right — head, eyes, shoulders and hair all move
-because the driver writes the rig's *tracking inputs* and lets physics derive
-`ParamAngle*`. It writes exactly the official viewer's five default bindings
-(`AngleX`, `AngleY`, `ParamBodyAngleX`, `ParamEyeBallX`, `ParamEyeBallY`) and
-nothing else; see `Live2dScene::set_gaze`.
+LookAt, cursor left vs right — head, eyes, shoulders and hair all move because the
+driver writes the rig's *look-at inputs* and lets physics derive `ParamAngle*`.
+Which inputs those are is resolved per rig, so the rig in this repo takes
+`AngleX`/`AngleY`/`PositionX`/`PositionY` while a classic rig takes the
+`ParamAngle*` names; `LIVE2D_TRACK` and `examples/rig` show both tables. See
+`Live2dScene::look_at`.
 
-![gaze](docs/images/gaze-compare.png)
+![look-at](docs/images/look-at-compare.png)
 
 ## Requirements
 
@@ -144,7 +145,8 @@ cargo run --release -p live2d-render --example offscreen -- \
 | `LIVE2D_TEXTURE_SCALE` | upload resolution multiplier, default `1.0` |
 | `LIVE2D_MASK` | mask render-target edge in pixels, default `1024` |
 | `LIVE2D_MOTION` / `LIVE2D_EXPR` | motion / expression index to apply before the capture |
-| `LIVE2D_GAZE` | `x,y` in `-1.0..=1.0`, applied as the cursor position |
+| `LIVE2D_LOOK_AT` | `x,y` in `-1.0..=1.0`, applied as the cursor position |
+| `LIVE2D_FILL` | how much of the view the model's bounds may occupy, in the unit of `SceneOptions::view_fill` (`2.0` = the whole view, default `1.85`) |
 | `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`, `LIVE2D_RECLIP` | flags — active when the variable is present, whatever its value |
 | `LIVE2D_PROFILE` | flag — prints per-frame step count, mesh rebuild and upload cost, and frame-interval statistics |
 
@@ -152,7 +154,7 @@ cargo run --release -p live2d-render --example offscreen -- \
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `SWEEP_DIRECT`, `SWEEP_RANGE`, `SWEEP_ALL`, `SWEEP_JUMP`, `SWEEP_SETTLE` | `sweep` | drive one parameter instead of the gaze, input range, watch every parameter, jump threshold, settle frames |
+| `SWEEP_DIRECT`, `SWEEP_RANGE`, `SWEEP_ALL`, `SWEEP_JUMP`, `SWEEP_SETTLE` | `sweep` | drive one parameter instead of the look-at target, input range, watch every parameter, jump threshold, settle frames |
 | `JOLT_MOTION`, `JOLT_RANGE`, `JOLT_SIZE`, `JOLT_SETTLE` | `jolt` | keep the idle motion, input range, capture size, settle frames |
 
 `LIVE2D_TRACK` picks how the cursor reaches the model, for the app and every
@@ -188,7 +190,7 @@ $ cargo run -p live2d-render --example rig -- "…/大肥鱼.model3.json"
 | `inspect` | what is in the *files*: physics settings, motion curves, expression targets, and how the art sits inside the canvas |
 | `probe <model> <x> <y>` | which drawables cover a model-space point, in paint order |
 | `switch <model> <Param> <v0> <v1>` | which drawables a parameter flips, and their metadata |
-| `sweep` | what physics does along a horizontal gaze sweep, at 60 fps |
+| `sweep` | what physics does along a horizontal sweep of the look-at target |
 | `jolt` | how many pixels change per frame during a slow sweep, and where |
 | `rig` | how cursor tracking is routed for a model, in both modes — no GPU needed |
 | `offscreen` | one frame to a PNG, no window |
@@ -196,7 +198,7 @@ $ cargo run -p live2d-render --example rig -- "…/大肥鱼.model3.json"
 `sweep` is the fastest way to check a tracking bug: it prints the input parameter
 and the physics outputs per frame, and flags any frame-to-frame jump. Prefix it
 with `SWEEP_DIRECT=<ParamId>` to write that parameter directly instead of driving
-the gaze.
+the look-at target.
 
 `inspect` takes `LIVE2D_PARAMS=<substring>[,<substring>...]` to dump the matching
 parameters with their ranges and current values, which is how you confirm a
@@ -313,7 +315,7 @@ not need changes.
 - **mocari's `*_normalized` setters take `0.0..=1.0`, not `-1.0..=1.0`.** They
   clamp silently, so a Cubism-style offset pins every negative value to the
   parameter minimum: the model freezes until the cursor crosses its centre line
-  and then snaps into motion. `set_tracking_input` in `scene.rs` converts once;
+  and then snaps into motion. `write_normalized_override` in `scene.rs` converts once;
   go through it rather than calling mocari directly.
 - **Framing must come from the `.moc3` canvas**, not from a bounding box of all
   drawables. This model has 715 drawables including hidden spares (props, spare

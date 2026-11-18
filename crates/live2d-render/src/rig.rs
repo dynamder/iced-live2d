@@ -1,14 +1,15 @@
-//! Where tracking should write, resolved per model instead of hardcoded.
+//! Where a LookAt target should be written, resolved per model instead of
+//! hardcoded.
 //!
 //! Live2D rigs disagree about which parameters a host is supposed to drive. A
 //! classic rig exposes `ParamAngleX` and the mesh reads it; a VTuber rig built
-//! for VTube Studio exposes `AngleX` as the tracking input and keeps
+//! for VTube Studio exposes `AngleX` as the look-at input and keeps
 //! `ParamAngleX` as a *physics output*, so writing `ParamAngleX` is silently
 //! undone by the next physics step.
 //!
 //! [`resolve`] collapses both shapes onto the same six slots. Two policies are
-//! available: [`TrackingMode::Adapted`] follows what the rig was authored for,
-//! and [`TrackingMode::ViewerDefault`] reproduces the Cubism Viewer's generic
+//! available: [`LookAtMode::Adapted`] follows what the rig was authored for,
+//! and [`LookAtMode::ViewerDefault`] reproduces the Cubism Viewer's generic
 //! mouse bindings exactly, which is what a pixel comparison against the Viewer
 //! needs.
 
@@ -16,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
-/// The six things a cursor can drive.
+/// The six slots a LookAt target drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Slot {
     HeadYaw,
@@ -102,9 +103,13 @@ pub struct Binding {
     pub source: Source,
 }
 
+/// Which parameters a LookAt target is written to.
+///
+/// Cubism's `CubismLookController` has the same switch under the name *blend
+/// mode*: it decides who receives the target, not where the target comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TrackingMode {
-    /// Follow the rig's own conventions: prefer the physics input when the
+pub enum LookAtMode {
+    /// Follow the rig's own conventions: prefer the look-at input when the
     /// conventional parameter is a physics output.
     #[default]
     Adapted,
@@ -112,30 +117,30 @@ pub enum TrackingMode {
     ViewerDefault,
 }
 
-impl fmt::Display for TrackingMode {
+impl fmt::Display for LookAtMode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            TrackingMode::Adapted => "adapted",
-            TrackingMode::ViewerDefault => "viewer",
+            LookAtMode::Adapted => "adapted",
+            LookAtMode::ViewerDefault => "viewer",
         })
     }
 }
 
-impl FromStr for TrackingMode {
+impl FromStr for LookAtMode {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         match text.trim().to_ascii_lowercase().as_str() {
-            "adapted" | "auto" => Ok(TrackingMode::Adapted),
-            "viewer" | "reference" => Ok(TrackingMode::ViewerDefault),
+            "adapted" | "auto" => Ok(LookAtMode::Adapted),
+            "viewer" | "reference" => Ok(LookAtMode::ViewerDefault),
             other => Err(format!(
-                "tracking mode must be `adapted` or `viewer`, got {other:?}"
+                "the look-at mode must be `adapted` or `viewer`, got {other:?}"
             )),
         }
     }
 }
 
-/// The resolved tracking table for one model.
+/// The resolved look-at table for one model.
 #[derive(Debug, Clone, Default)]
 pub struct Rig {
     bindings: Vec<Binding>,
@@ -212,15 +217,15 @@ fn normalize(parameter: &str) -> String {
         .collect()
 }
 
-/// Resolves the tracking table for `facts` under `mode`.
-pub fn resolve(mode: TrackingMode, facts: &ModelFacts) -> Rig {
+/// Resolves the look-at table for `facts` under `mode`.
+pub fn resolve(mode: LookAtMode, facts: &ModelFacts) -> Rig {
     let mut rig = Rig::default();
 
     match mode {
         // The Viewer binds the conventional names and nothing else, so on a
         // physics rig these writes are overwritten and only the eyes respond.
         // That is the point: it is the reference behaviour, not a good default.
-        TrackingMode::ViewerDefault => {
+        LookAtMode::ViewerDefault => {
             for (slot, parameter) in [
                 (Slot::HeadYaw, "ParamAngleX"),
                 (Slot::HeadPitch, "ParamAngleY"),
@@ -231,7 +236,7 @@ pub fn resolve(mode: TrackingMode, facts: &ModelFacts) -> Rig {
                 }
             }
         }
-        TrackingMode::Adapted => {
+        LookAtMode::Adapted => {
             resolve_adapted(&mut rig, facts, Slot::HeadYaw, "AngleX", "ParamAngleX");
             resolve_adapted(&mut rig, facts, Slot::HeadPitch, "AngleY", "ParamAngleY");
             resolve_adapted(
@@ -252,8 +257,8 @@ pub fn resolve(mode: TrackingMode, facts: &ModelFacts) -> Rig {
     }
 
     let eye_source = match mode {
-        TrackingMode::Adapted => Source::Convention,
-        TrackingMode::ViewerDefault => Source::ViewerDefault,
+        LookAtMode::Adapted => Source::Convention,
+        LookAtMode::ViewerDefault => Source::ViewerDefault,
     };
 
     for (slot, parameter) in [(Slot::EyeX, "ParamEyeBallX"), (Slot::EyeY, "ParamEyeBallY")] {
@@ -265,7 +270,7 @@ pub fn resolve(mode: TrackingMode, facts: &ModelFacts) -> Rig {
     rig
 }
 
-/// Picks between a rig's tracking input and its conventional parameter.
+/// Picks between a rig's own look-at input and its conventional parameter.
 ///
 /// The interesting case is `ParamAngleX` being a physics output: writing it is
 /// useless, and `AngleX` is the parameter the rig actually wants.
@@ -297,7 +302,7 @@ mod tests {
         )
     }
 
-    /// The rig in this repository: tracking inputs feed physics outputs.
+    /// The rig in this repository: look-at inputs feed physics outputs.
     fn vtuber_rig() -> ModelFacts {
         facts(
             &[
@@ -321,7 +326,7 @@ mod tests {
         )
     }
 
-    /// A classic rig with no tracking inputs at all.
+    /// A classic rig with no look-at inputs at all.
     fn classic_rig() -> ModelFacts {
         facts(
             &[
@@ -337,7 +342,7 @@ mod tests {
 
     #[test]
     fn adapted_prefers_the_physics_input() {
-        let rig = resolve(TrackingMode::Adapted, &vtuber_rig());
+        let rig = resolve(LookAtMode::Adapted, &vtuber_rig());
 
         assert_eq!(rig.binding(Slot::HeadYaw).unwrap().parameter, "AngleX");
         assert_eq!(
@@ -354,7 +359,7 @@ mod tests {
 
     #[test]
     fn adapted_falls_back_to_the_conventional_name() {
-        let rig = resolve(TrackingMode::Adapted, &classic_rig());
+        let rig = resolve(LookAtMode::Adapted, &classic_rig());
 
         assert_eq!(rig.binding(Slot::HeadYaw).unwrap().parameter, "ParamAngleX");
         assert_eq!(rig.binding(Slot::HeadYaw).unwrap().route, Route::Direct);
@@ -367,7 +372,7 @@ mod tests {
 
     #[test]
     fn viewer_mode_ignores_the_rig_conventions() {
-        let rig = resolve(TrackingMode::ViewerDefault, &vtuber_rig());
+        let rig = resolve(LookAtMode::ViewerDefault, &vtuber_rig());
 
         assert_eq!(rig.binding(Slot::HeadYaw).unwrap().parameter, "ParamAngleX");
         assert_eq!(
@@ -378,9 +383,9 @@ mod tests {
     }
 
     #[test]
-    fn tracking_input_without_a_conventional_name_is_written_directly() {
+    fn a_look_at_input_without_a_conventional_name_is_written_directly() {
         let rig = resolve(
-            TrackingMode::Adapted,
+            LookAtMode::Adapted,
             &facts(&["AngleX", "ParamEyeBallX"], &[]),
         );
 
@@ -392,7 +397,7 @@ mod tests {
     fn uppercase_underscore_ids_are_recognised() {
         // Wanko: an older rig with SHOUTING_IDS and no eye-ball parameters.
         let rig = resolve(
-            TrackingMode::Adapted,
+            LookAtMode::Adapted,
             &facts(&["PARAM_ANGLE_X", "PARAM_BODY_ANGLE_X"], &[]),
         );
 
@@ -409,7 +414,7 @@ mod tests {
 
     #[test]
     fn missing_parameters_are_skipped() {
-        let rig = resolve(TrackingMode::Adapted, &facts(&["AngleX"], &[]));
+        let rig = resolve(LookAtMode::Adapted, &facts(&["AngleX"], &[]));
 
         assert!(rig.binding(Slot::BodyYaw).is_none());
         assert!(rig.binding(Slot::EyeX).is_none());

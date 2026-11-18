@@ -263,7 +263,7 @@ pipeline）和 clipping plan。所以"无法吸收"这个判断对它们并不�
 
 ## 5. 测试方法（都可以复现）
 
-1. **像素 A/B**：`examples/offscreen` 输出 PNG，固定 `LIVE2D_GAZE`、`LIVE2D_NO_MOTION`、
+1. **像素 A/B**：`examples/offscreen` 输出 PNG，固定 `LIVE2D_LOOK_AT`、`LIVE2D_NO_MOTION`、
    固定 settle 步数；打补丁前后各渲一张，按通道逐像素比较。四个补丁都过了这一关。
 2. **参数级**：`examples/sweep` 逐帧打印指定参数（`SWEEP_DIRECT`、`SWEEP_ALL`、
    `SWEEP_JUMP`），用来判断"是输入没到"还是"物理没传导"；`examples/jolt` 统计每帧变化像素数，

@@ -59,7 +59,7 @@ pub struct Live2dPrimitive {
     model_path: PathBuf,
     options: SceneOptions,
     now: Instant,
-    gaze: Option<[f32; 2]>,
+    look_at: Option<[f32; 2]>,
     command: Option<(Live2dCommand, u64)>,
 }
 
@@ -72,14 +72,14 @@ impl shader::Program<Message> for Live2dView {
             model_path: self.model_path.clone(),
             options: self.options,
             now: self.now,
-            gaze: gaze_from_cursor(cursor, bounds),
+            look_at: look_at_from_cursor(cursor, bounds),
             command: self.command.map(|command| (command, self.command_seq)),
         }
     }
 }
 
 /// Maps the cursor inside the widget to `-1.0..=1.0` on both axes.
-fn gaze_from_cursor(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]> {
+fn look_at_from_cursor(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]> {
     let position: Point = cursor.position_in(bounds)?;
 
     if bounds.width <= 0.0 || bounds.height <= 0.0 {
@@ -147,8 +147,8 @@ impl shader::Primitive for Live2dPrimitive {
                         pipeline.format,
                     );
                     println!(
-                        "live2d: tracking ({}) {}",
-                        self.options.tracking,
+                        "live2d: look-at ({}) {}",
+                        self.options.look_at_mode,
                         scene
                             .rig()
                             .bindings()
@@ -181,8 +181,8 @@ impl shader::Primitive for Live2dPrimitive {
             scene.resize(queue, bounds.width / bounds.height);
         }
 
-        if let Some(gaze) = self.gaze {
-            scene.set_gaze(gaze);
+        if let Some(target) = self.look_at {
+            scene.look_at(target);
         }
 
         if let Some((command, seq)) = self.command

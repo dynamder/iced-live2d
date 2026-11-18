@@ -1,4 +1,4 @@
-//! Sweeps the gaze slowly and counts how many pixels change per frame.
+//! Sweeps the look-at target slowly and counts how many pixels change per frame.
 //!
 //! `sweep` watches parameters and can only see whole-parameter jumps. A part
 //! popping, a mask switching or a drawable appearing changes a small number of
@@ -52,10 +52,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format,
         SceneOptions {
             texture_scale: 0.5,
-            tracking: knobs::tracking()?,
             ..SceneOptions::default()
         },
     )?;
+    scene.set_look_at_mode(knobs::look_at_mode()?);
     scene.resize(&queue, 1.0);
 
     if !env_flag("JOLT_MOTION") {
@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = Target::new(&device, size, format);
 
     for _ in 0..settle {
-        scene.set_gaze([low, 0.0]);
+        scene.look_at([low, 0.0]);
         scene.advance(&device, &queue, live2d_render::STEP)?;
     }
 
@@ -82,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = frame as f32 / (frames.max(2) - 1) as f32;
         let x = low + (high - low) * t;
 
-        scene.set_gaze([x, 0.0]);
+        scene.look_at([x, 0.0]);
         scene.advance(&device, &queue, live2d_render::STEP)?;
 
         let rgba = capture(&device, &queue, &mut scene, &target, size)?;
