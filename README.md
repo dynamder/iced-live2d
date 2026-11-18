@@ -229,7 +229,7 @@ crates/live2d-render/          engine-agnostic: depends on wgpu + mocari only
 app/                           the iced shell
   src/main.rs                  application, subscription, keyboard
   src/live2d.rs                Program + Primitive + Pipeline
-patches/                       the three mocari fixes, as patch files
+patches/                       the four mocari fixes, as patch files
 scripts/vendor-mocari.ps1      rebuilds .refs/mocari from the registry + patches
 scripts/shot.ps1               DPI-aware window screenshot (dev tool)
 scripts/shot-window.ps1        screenshot any window by title prefix (dev tool)
@@ -239,9 +239,9 @@ docs/                          feasibility write-up, plan, defect records
 The split matters: keeping `live2d-render` free of iced means a `wgpu`/`iced`
 upgrade touches one layer, and the renderer stays testable headlessly.
 
-## The three patches
+## The four patches
 
-All three live in `patches/` and are applied to a vendored copy at `.refs/mocari`
+All four live in `patches/` and are applied to a vendored copy at `.refs/mocari`
 (wired up through `[patch.crates-io]` in `Cargo.toml`); `scripts/vendor-mocari.ps1`
 rebuilds that copy from the cargo registry.
 
@@ -275,7 +275,24 @@ lines; `FrontHairX1` goes from 0.000 to -0.136 while `ParamAngleX` sweeps to +26
 See [`patches/mocari-0.4.1-chained-physics.patch`](patches/mocari-0.4.1-chained-physics.patch)
 and [`docs/mocari-chained-physics.md`](docs/mocari-chained-physics.md).
 
-All three belong upstream — they should not be every consumer's problem.
+**4. Geometry is uploaded one drawable at a time, and dynamic masks are fatal.**
+Two problems in the same file, and together they are why the 715-drawable rig ran
+at 35 fps. Every drawable owned its own vertex buffer, so a frame that deforms the
+whole model issued 715 `write_buffer` calls. Worse, `update_drawables` returned an
+error when a drawable's mask set changed — and drawable 373 of this rig switches
+masks on **every frame**, because that is what dynamic masks are for. The caller's
+only option was to rebuild every GPU buffer, which is what cost 18 ms of upload
+time per frame. Neither masks, textures nor blend modes live in the vertex buffer:
+they belong to the draw loop and the clipping plan. The patch packs every drawable
+into one shared vertex buffer (one write per frame), applies those four values in
+place, and reports them through `WgpuMeshUpdate::structure_changed()` so the caller
+rebuilds clipping resources and nothing else. Upload time on this rig went from
+**18 ms to 1.2 ms per frame**, the scene went from 1.6 animation steps per frame
+(35 fps) to 1.00 (60 fps), and offscreen captures of both this rig and `Rice` are
+pixel-identical to the unpatched build.
+See [`patches/mocari-0.4.1-batched-vertex-upload.patch`](patches/mocari-0.4.1-batched-vertex-upload.patch).
+
+All four belong upstream — they should not be every consumer's problem.
 
 ## Why the git dependency on iced
 

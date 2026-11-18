@@ -1,0 +1,403 @@
+# mocari 0.4.1 uploads geometry one drawable at a time, and rejects the mask
+# changes that a real rig produces every frame.
+#
+# Two separate problems in `render/wgpu/buffers.rs`, measured on
+# DeepSeek/大肥鱼 (715 drawables, 58 967 vertices, 640x640 window):
+#
+# 1. Every drawable owns its own vertex buffer, so a frame that deforms the whole
+#    model issues 715 `queue.write_buffer` calls - one staging copy and one copy
+#    command each. Measured: 12-16 ms of CPU per frame for 2.6 MB of vertices.
+#
+# 2. `update_drawables` returns an error when a drawable's mask set, inverted-mask
+#    flag, texture index or blend mode changes, because those were validated as
+#    "the GPU state cannot absorb this". A rig with dynamic masks hits that
+#    constantly - drawable 373 of this model switches its masks on every frame -
+#    and the caller's only option is to rebuild *every* buffer, which is what
+#    made the frame cost 18 ms of upload time.
+#
+#    None of those four values live in the vertex or index buffers. They only
+#    feed the draw loop and the clipping plan, so they can be applied in place and
+#    reported through `WgpuMeshUpdate::structure_changed()`; the caller then
+#    rebuilds clipping resources and nothing else.
+#
+# The fix keeps one shared vertex buffer with a byte span per drawable. Drawables
+# are packed back to back, so any run of them is contiguous and one `write_buffer`
+# covers the whole dirty range. `WgpuDrawableBuffers::vertex_buffer()` now returns
+# a `BufferSlice` instead of `&wgpu::Buffer`; `draw.rs` binds it directly.
+#
+# Measured on DeepSeek/大肥鱼 with the cursor sweeping the window:
+#   before: upload 18.0 ms/frame, 1.6-1.9 animation steps per frame (~35 fps)
+#   after:  upload  1.2 ms/frame, 1.00 animation steps per frame (60 fps)
+# Rendering is unchanged: offscreen captures of both this rig and Rice are
+# pixel-identical to the unpatched build.
+#
+# Apply with:
+#   powershell -File scripts/vendor-mocari.ps1
+#
+# Worth reporting upstream: both changes are local to buffers.rs and draw.rs.
+diff --git a/src/render/wgpu/buffers.rs b/src/render/wgpu/buffers.rs
+--- a/src/render/wgpu/buffers.rs
++++ b/src/render/wgpu/buffers.rs
+@@ -1,3 +1,6 @@
++use std::ops::Range;
++use std::sync::Arc;
++
+ use wgpu::util::DeviceExt;
+ 
+ use crate::moc3::{Moc3DrawableBlendMode, Moc3DrawableMesh};
+@@ -5,6 +8,9 @@
+     ClippingRect, DrawableInfo, DrawableVertex, draw_order_indices_from, encode_indices,
+     encode_vertices_from_drawable,
+ };
++
++/// Smallest shared vertex buffer worth allocating, in bytes.
++const MIN_VERTEX_BUFFER_BYTES: u64 = 4;
+ 
+ pub fn drawable_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+     const ATTRIBUTES: [wgpu::VertexAttribute; 5] = [
+@@ -44,7 +50,8 @@
+ 
+ #[derive(Debug)]
+ pub struct WgpuDrawableBuffers {
+-    vertex_buffer: wgpu::Buffer,
++    vertex_buffer: Arc<wgpu::Buffer>,
++    vertex_span: Range<u64>,
+     index_buffer: wgpu::Buffer,
+     vertex_count: u32,
+     index_count: u32,
+@@ -54,8 +61,17 @@
+ }
+ 
+ impl WgpuDrawableBuffers {
+-    pub fn vertex_buffer(&self) -> &wgpu::Buffer {
+-        &self.vertex_buffer
++    /// The part of the shared vertex buffer that holds this drawable.
++    ///
++    /// Drawables share one buffer so a frame's worth of geometry can be written
++    /// with a single `write_buffer` call; per-drawable buffers cost one copy
++    /// command each and dominate the frame on rigs with hundreds of drawables.
++    pub fn vertex_buffer(&self) -> wgpu::BufferSlice<'_> {
++        self.vertex_buffer.slice(self.vertex_span.clone())
++    }
++
++    pub fn vertex_offset(&self) -> u64 {
++        self.vertex_span.start
+     }
+ 
+     pub fn index_buffer(&self) -> &wgpu::Buffer {
+@@ -113,8 +129,12 @@
+ 
+ #[derive(Debug)]
+ pub struct WgpuMeshBuffers {
++    vertex_buffer: Arc<wgpu::Buffer>,
+     drawables: Vec<WgpuDrawableBuffers>,
+     draw_order_indices: Vec<usize>,
++    /// Staging bytes for the last upload, kept so a frame does not allocate and
++    /// free a few megabytes.
++    upload: Vec<u8>,
+ }
+ 
+ #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+@@ -122,6 +142,7 @@
+     uploaded_drawables: usize,
+     bounds_changed: bool,
+     visibility_changed: bool,
++    structure_changed: bool,
+ }
+ 
+ impl WgpuMeshUpdate {
+@@ -135,6 +156,13 @@
+ 
+     pub fn visibility_changed(&self) -> bool {
+         self.visibility_changed
++    }
++
++    /// Whether a drawable's mask set, inverted-mask flag, texture or blend mode
++    /// changed. None of those touch the vertex or index buffers, but the clipping
++    /// resources were built from the old values and have to be rebuilt.
++    pub fn structure_changed(&self) -> bool {
++        self.structure_changed
+     }
+ }
+ 
+@@ -180,10 +208,22 @@
+ 
+ impl WgpuMeshBuffers {
+     pub fn from_drawables(device: &wgpu::Device, meshes: &[Moc3DrawableMesh]) -> Option<Self> {
++        let spans = vertex_spans(meshes)?;
++        let total = spans.last().map_or(0, |span| span.end);
++        let vertex_buffer = Arc::new(create_shared_vertex_buffer(device, total));
++
+         let mut drawables = Vec::with_capacity(meshes.len());
+-        for mesh in meshes {
+-            drawables.push(create_wgpu_drawable_buffers(device, mesh)?);
+-        }
++        for (mesh, span) in meshes.iter().zip(spans) {
++            drawables.push(create_drawable_buffers(
++                device,
++                Arc::clone(&vertex_buffer),
++                span,
++                mesh,
++            )?);
++        }
++
++        fill_vertex_buffer(&vertex_buffer, &drawables)?;
++
+         let draw_order_indices = draw_order_indices_from(
+             drawables.len(),
+             |index| drawables[index].draw_order(),
+@@ -191,8 +231,10 @@
+         );
+ 
+         Some(Self {
++            vertex_buffer,
+             drawables,
+             draw_order_indices,
++            upload: Vec::new(),
+         })
+     }
+ 
+@@ -234,27 +276,37 @@
+             validate_drawable_update(drawable_index, drawable, mesh)?;
+         }
+ 
+-        let mut vertex_bytes = Vec::new();
+         let mut uploads = 0;
+         let mut bounds_changed = false;
+         let mut visibility_changed = false;
+-        for (drawable, mesh) in self.drawables.iter_mut().zip(meshes) {
++        let mut structure_changed = false;
++        let mut dirty: Option<Range<usize>> = None;
++        for (drawable_index, (drawable, mesh)) in self.drawables.iter_mut().zip(meshes).enumerate() {
+             if renderer_vertex_data_changed(drawable, mesh) {
+-                encode_vertices_from_drawable(mesh, &mut vertex_bytes);
+-                if !vertex_bytes.is_empty() {
+-                    queue.write_buffer(&drawable.vertex_buffer, 0, &vertex_bytes);
+-                    drawable.vertex_bytes.clear();
+-                    drawable.vertex_bytes.extend_from_slice(&vertex_bytes);
+-                    uploads += 1;
+-                }
++                drawable.vertex_bytes.clear();
++                encode_vertices_from_drawable(mesh, &mut drawable.vertex_bytes);
++                dirty = Some(match dirty {
++                    Some(range) => range.start..drawable_index + 1,
++                    None => drawable_index..drawable_index + 1,
++                });
++                uploads += 1;
+             }
+             let was_visible = drawable.is_visible();
+             let info = DrawableInfo::from_mesh(mesh);
+             let is_visible = !drawable.is_empty() && info.is_visible();
+             bounds_changed |= drawable.info.bounds() != info.bounds();
+             visibility_changed |= was_visible != is_visible;
++            structure_changed |= drawable.info.masks() != info.masks()
++                || drawable.info.inverted_mask() != info.inverted_mask()
++                || drawable.info.texture_index() != info.texture_index()
++                || drawable.info.blend_mode() != info.blend_mode();
+             drawable.info = info;
+         }
++
++        if let Some(range) = dirty {
++            self.write_vertex_range(queue, range);
++        }
++
+         self.draw_order_indices = draw_order_indices_from(
+             self.drawables.len(),
+             |index| self.drawables[index].draw_order(),
+@@ -265,7 +317,84 @@
+             uploaded_drawables: uploads,
+             bounds_changed,
+             visibility_changed,
++            structure_changed,
+         })
++    }
++}
++
++/// Byte span of every drawable's vertices inside the shared buffer.
++///
++/// Drawables are packed back to back in drawable order, so any run of them is
++/// contiguous and can be written with one call.
++fn vertex_spans(meshes: &[Moc3DrawableMesh]) -> Option<Vec<Range<u64>>> {
++    let mut spans = Vec::with_capacity(meshes.len());
++    let mut offset = 0u64;
++
++    for mesh in meshes {
++        let bytes = u64::try_from(mesh.vertices().len()).ok()? * DrawableVertex::STRIDE as u64;
++        spans.push(offset..offset + bytes);
++        offset += bytes;
++    }
++
++    Some(spans)
++}
++
++fn create_shared_vertex_buffer(device: &wgpu::Device, bytes: u64) -> wgpu::Buffer {
++    device.create_buffer(&wgpu::BufferDescriptor {
++        label: Some("live2d.drawable.vertices"),
++        size: bytes.max(MIN_VERTEX_BUFFER_BYTES),
++        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
++        mapped_at_creation: true,
++    })
++}
++
++/// Copies every drawable's cached bytes into the shared buffer, which is created
++/// mapped for exactly this purpose.
++fn fill_vertex_buffer(
++    vertex_buffer: &wgpu::Buffer,
++    drawables: &[WgpuDrawableBuffers],
++) -> Option<()> {
++    let mut mapped = vertex_buffer.slice(..).get_mapped_range_mut().ok()?;
++
++    for drawable in drawables {
++        let start = drawable.vertex_offset() as usize;
++        let end = start + drawable.vertex_bytes.len();
++        mapped.slice(start..end).copy_from_slice(&drawable.vertex_bytes);
++    }
++
++    drop(mapped);
++    vertex_buffer.unmap();
++
++    Some(())
++}
++
++impl WgpuMeshBuffers {
++    /// Writes the drawables in `range` to the shared buffer with one call.
++    ///
++    /// Writing each drawable on its own is what makes a heavy rig expensive:
++    /// several hundred `write_buffer` calls per frame, each one a separate
++    /// staging copy and copy command.
++    fn write_vertex_range(&mut self, queue: &wgpu::Queue, range: Range<usize>) {
++        let start = self.drawables[range.start].vertex_span.start;
++        let end = self.drawables[range.end - 1].vertex_span.end;
++
++        let Self {
++            vertex_buffer,
++            drawables,
++            upload,
++            ..
++        } = self;
++
++        upload.clear();
++        upload.reserve((end - start) as usize);
++
++        for drawable in &drawables[range] {
++            upload.extend_from_slice(&drawable.vertex_bytes);
++        }
++
++        if !upload.is_empty() {
++            queue.write_buffer(vertex_buffer, start, upload.as_slice());
++        }
+     }
+ }
+ 
+@@ -297,38 +426,6 @@
+         mesh.indices(),
+         WgpuMeshUpdateError::Indices { drawable_index },
+     )?;
+-    validate_unchanged(
+-        &drawable.texture_index(),
+-        &mesh.texture_index(),
+-        WgpuMeshUpdateError::TextureIndex {
+-            drawable_index,
+-            expected: drawable.texture_index(),
+-            actual: mesh.texture_index(),
+-        },
+-    )?;
+-    validate_unchanged(
+-        &drawable.blend_mode(),
+-        &mesh.blend_mode(),
+-        WgpuMeshUpdateError::BlendMode {
+-            drawable_index,
+-            expected: drawable.blend_mode(),
+-            actual: mesh.blend_mode(),
+-        },
+-    )?;
+-    validate_unchanged(
+-        drawable.masks(),
+-        mesh.masks(),
+-        WgpuMeshUpdateError::Masks { drawable_index },
+-    )?;
+-    validate_unchanged(
+-        &drawable.inverted_mask(),
+-        &mesh.is_inverted_mask(),
+-        WgpuMeshUpdateError::InvertedMask {
+-            drawable_index,
+-            expected: drawable.inverted_mask(),
+-            actual: mesh.is_inverted_mask(),
+-        },
+-    )?;
+ 
+     Ok(())
+ }
+@@ -363,15 +460,31 @@
+ ) -> Option<WgpuDrawableBuffers> {
+     let mut vertex_bytes = Vec::new();
+     encode_vertices_from_drawable(mesh, &mut vertex_bytes);
+-    let index_bytes = encode_indices(mesh.indices());
+-    let vertex_count = u32::try_from(mesh.vertices().len()).ok()?;
+-    let index_count = u32::try_from(mesh.indices().len()).ok()?;
+ 
+     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+         label: Some("live2d.drawable.vertices"),
+         contents: &vertex_bytes,
+         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+     });
++    let span = 0..u64::try_from(vertex_bytes.len()).ok()?;
++
++    create_drawable_buffers(device, Arc::new(vertex_buffer), span, mesh)
++}
++
++/// Builds the per-drawable GPU state for `mesh`, whose vertices live at
++/// `vertex_span` inside a shared vertex buffer.
++fn create_drawable_buffers(
++    device: &wgpu::Device,
++    vertex_buffer: Arc<wgpu::Buffer>,
++    vertex_span: Range<u64>,
++    mesh: &Moc3DrawableMesh,
++) -> Option<WgpuDrawableBuffers> {
++    let mut vertex_bytes = Vec::new();
++    encode_vertices_from_drawable(mesh, &mut vertex_bytes);
++    let index_bytes = encode_indices(mesh.indices());
++    let vertex_count = u32::try_from(mesh.vertices().len()).ok()?;
++    let index_count = u32::try_from(mesh.indices().len()).ok()?;
++
+     let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+         label: Some("live2d.drawable.indices"),
+         contents: &index_bytes,
+@@ -380,6 +493,7 @@
+ 
+     Some(WgpuDrawableBuffers {
+         vertex_buffer,
++        vertex_span,
+         index_buffer,
+         vertex_count,
+         index_count,
+diff --git a/src/render/wgpu/draw.rs b/src/render/wgpu/draw.rs
+--- a/src/render/wgpu/draw.rs
++++ b/src/render/wgpu/draw.rs
+@@ -171,7 +171,7 @@
+             render_pass.set_pipeline(self.pipeline_for_blend_mode(drawable.blend_mode()));
+             render_pass.set_bind_group(0, texture_bind_group, &[]);
+             render_pass.set_bind_group(1, transform.bind_group(), &[]);
+-            render_pass.set_vertex_buffer(0, drawable.vertex_buffer().slice(..));
++            render_pass.set_vertex_buffer(0, drawable.vertex_buffer());
+             render_pass
+                 .set_index_buffer(drawable.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
+             render_pass.draw_indexed(0..drawable.index_count(), 0, 0..1);
+@@ -204,7 +204,7 @@
+                 render_pass.set_bind_group(0, texture_bind_group, &[]);
+                 render_pass.set_bind_group(1, context.mask_transform().bind_group(), &[]);
+                 render_pass.set_bind_group(2, context.mask_params().bind_group(), &[]);
+-                render_pass.set_vertex_buffer(0, drawable.vertex_buffer().slice(..));
++                render_pass.set_vertex_buffer(0, drawable.vertex_buffer());
+                 render_pass
+                     .set_index_buffer(drawable.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
+                 render_pass.draw_indexed(0..drawable.index_count(), 0, 0..1);
+@@ -251,7 +251,7 @@
+                 render_pass.set_bind_group(3, context.clip_params().bind_group(), &[]);
+             }
+ 
+-            render_pass.set_vertex_buffer(0, drawable.vertex_buffer().slice(..));
++            render_pass.set_vertex_buffer(0, drawable.vertex_buffer());
+             render_pass
+                 .set_index_buffer(drawable.index_buffer().slice(..), wgpu::IndexFormat::Uint16);
+             render_pass.draw_indexed(0..drawable.index_count(), 0, 0..1);

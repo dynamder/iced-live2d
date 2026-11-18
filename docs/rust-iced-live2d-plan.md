@@ -306,9 +306,10 @@ Cubism 的贴图是 4096–8192px，桌面宠物只画几百像素，等于 4–
 2. **取景坐标系搞错（已踩）**：用"所有 drawable 的包围盒"去居中会**明显偏掉**——模型有 715 个 drawable，其中大量是隐藏的替换件（钢盆、脱鞋、替换手、替换体型），包围盒被它们拉歪。正确做法是用 `.moc3` 的 **canvas info**（`runtime.canvas()`：`pixels_per_unit` / `origin` / `width` / `height`），这才是美术设定的画面。注意 `reverse_y_coordinate` 为真时要退回包围盒。
 3. **`model3.json` 不声明动作（已踩）**：这个 VTuber 模型的动作/表情文件都在 `Animation/`、`Exp3/` 子目录里，`FileReferences` 里**一个都没注册**。`Live2dScene::load` 会在 `model3.json` 为空时扫描模型目录（深度 2）兜底，并把 `IDLE*` 排到最前面。
 4. **性能（实测数字）**：715 个 drawable、5 张 4096² 级别贴图、1024² mask RT、640² 逻辑窗口（1.5 倍缩放 → 960² 渲染）。
-   - **release ≈ 48–50 fps**；
+   - **修完第四个 mocari 补丁后 release 稳 60 fps**（`steps` 恒为 1.00，帧时间 ≈ 4.5–5 ms CPU）；补丁前是 ≈ 35 fps；
    - **debug ≈ 5 fps** —— 每帧 delta 超过 0.1s 限幅，动画变成慢放。**别用 debug 构建判断性能，也别用 debug 构建看动画是否正常**（这一条花了我半轮排查）。
-   - **CPU 是瓶颈，不是 GPU**：实测 `advance()` 里"推进 + 重建 mesh + 上传顶点"每帧 **rebuild 3.6 ms + upload 18 ms**（715 个 drawable 每帧 `queue.write_buffer` 一次），而 render 提交几乎不占时间。**上传占了 28 ms 帧时间里的 2/3**，要上 60 fps 以上必须优化这一步（合并上传 / 跳过未变化的 drawable / 降低更新频率）。对比：Haru 这类几十个 drawable 的模型是同一步 **0.2 ms + 0.5 ms**。
+   - **CPU 是瓶颈，不是 GPU，而且瓶颈一开始藏起来了**：实测 `advance()` 每帧 **rebuild 3.6 ms + upload 18 ms**。那 18 ms 的直觉答案是"715 个 drawable 每帧 `queue.write_buffer` 一次"，但真正的元凶是 `update_drawables` 因为**动态遮罩**每帧返回 Err（本 rig 的 drawable 373 每帧都换遮罩），调用方只能整套重建 GPU buffer。修法见第四个补丁：共享顶点 buffer（一帧一次写）+ 遮罩/贴图/混合模式就地更新并只重建 clipping 资源，**upload 18 ms → 1.2 ms**。对比：Haru 这类几十个 drawable 的模型是同一步 **0.1 ms + 0.04 ms**。
+   - **教训**：被 `Err(_)` 吞掉的原因既看不见又最贵。现在这个分支会把第一次遇到的 `WgpuMeshUpdateError` 作为 issue 抛出来（同一原因只报一次），`LIVE2D_PROFILE=1` 里的 `upload`/`mesh`/`clip` 分项也保留着，方便下次一眼看出是谁慢。
 5. **内存：贴图是绝对大头，而且很容易泄漏一份**（实测 1 565 MB → 462 MB）：
    - 这 5 张贴图是 4096×8192、4096×8192、2048×2048、**8192×8192**、4096×4096，未压缩共 **592 MB**；
    - `load_model_runtime` 返回的 `RuntimeModel` 里**同时持有解码后的 RGBA**，如果把它留在场景结构里，就是 CPU 592 MB + GPU 592 MB ≈ **1.5 GB**；
