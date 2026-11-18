@@ -15,6 +15,7 @@ param(
     [int]$Samples = 5,
     [int]$Interval = 2,
     [string]$Url = '',
+    [string]$Exe = '',
     [string]$Shot = ''
 )
 
@@ -57,11 +58,12 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyCon
 
 try {
     if ($Kind -eq 'native') {
+        if ($Exe -eq '') { $Exe = "$repo\target\release\app.exe" }
         $app = if ($Model -eq '') {
-            Start-Process -FilePath "$repo\target\release\app.exe" -PassThru
+            Start-Process -FilePath $Exe -PassThru
         }
         else {
-            Start-Process -FilePath "$repo\target\release\app.exe" -ArgumentList '--model', $Model -PassThru
+            Start-Process -FilePath $Exe -ArgumentList '--model', $Model -PassThru
         }
     }
     elseif ($Kind -eq 'empty') {
