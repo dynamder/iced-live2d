@@ -215,7 +215,7 @@ at half resolution by default:
 | naive (keeps decoded textures, full res) | 1 565 MB |
 | assets dropped, full res | ~900 MB |
 | assets dropped, `texture_scale = 0.5` (default) | **462 MB** |
-| the above + mip chain (+33% VRAM) | ~488 MB |
+| the above + mip chain (textures x 4/3) | ~511 MB |
 
 Pass `SceneOptions { texture_scale: 1.0, ..Default::default() }` for full quality.
 
@@ -294,7 +294,10 @@ rebuilds clipping resources and nothing else. Upload time on this rig went from
 pixel-identical to the unpatched build.
 See [`patches/mocari-0.4.1-batched-vertex-upload.patch`](patches/mocari-0.4.1-batched-vertex-upload.patch).
 
-All four belong upstream — they should not be every consumer's problem.
+All four belong upstream — they should not be every consumer's problem. They are
+written up together, with upstream line references, the reference implementation
+each one follows and the measurements, in
+[`docs/mocari-upstream-report.md`](docs/mocari-upstream-report.md).
 
 ## Why the git dependency on iced
 
