@@ -134,7 +134,7 @@ crates/live2d-render/          engine-agnostic: depends on wgpu + mocari only
   src/scene.rs                 Live2dScene: load, advance, encode mask+model passes
   src/error.rs                 error taxonomy
   examples/*.rs                the diagnostics listed above
-  examples/shared/mod.rs       headless GPU bootstrap shared by the examples
+  examples/shared/gpu.rs       headless GPU bootstrap shared by the examples
 app/                           the iced shell
   src/main.rs                  application, subscription, keyboard
   src/live2d.rs                Program + Primitive + Pipeline

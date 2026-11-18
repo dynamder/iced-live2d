@@ -15,8 +15,8 @@ use std::time::Duration;
 use live2d_render::wgpu;
 use live2d_render::{ClipRect, Live2dScene, SceneOptions};
 
-#[path = "shared/mod.rs"]
-mod shared;
+#[path = "shared/gpu.rs"]
+mod gpu;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // after uploading 592 MB of textures.
     let knobs = Knobs::from_env()?;
 
-    let shared::Gpu { device, queue } = shared::open()?;
+    let gpu::Gpu { device, queue } = gpu::open()?;
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let options = SceneOptions {

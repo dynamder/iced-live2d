@@ -296,7 +296,7 @@ crates/live2d-render/          只依赖 wgpu + mocari，不依赖 iced（升级
   examples/switch.rs           某参数会翻转哪些 drawable
   examples/sweep.rs            60 fps 扫视线，打印物理输入/输出（查跟踪 bug）
   examples/offscreen.rs        无窗口渲染一帧成 PNG（CI 像素测试的雏形）
-  examples/shared/mod.rs       上面两个需要 GPU 的例子的公共引导
+  examples/shared/gpu.rs       上面两个需要 GPU 的例子的公共引导
 app/                           iced 0.15-dev 外壳
   src/main.rs                  application / subscription / 键盘
   src/live2d.rs                Program + Primitive + Pipeline

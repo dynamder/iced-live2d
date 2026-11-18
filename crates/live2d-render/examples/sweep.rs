@@ -16,8 +16,8 @@ use std::time::Duration;
 use live2d_render::wgpu;
 use live2d_render::{Live2dScene, SceneOptions};
 
-#[path = "shared/mod.rs"]
-mod shared;
+#[path = "shared/gpu.rs"]
+mod gpu;
 
 const TRACKED: &[&str] = &[
     "AngleX",
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?
         .unwrap_or(240);
 
-    let shared::Gpu { device, queue } = shared::open()?;
+    let gpu::Gpu { device, queue } = gpu::open()?;
 
     let mut scene = Live2dScene::load_with_options(
         &device,
