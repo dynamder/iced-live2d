@@ -17,6 +17,8 @@ use live2d_render::{ClipRect, Live2dScene, SceneOptions};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
+#[path = "shared/render.rs"]
+mod render;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -66,8 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     report_issues(&mut scene);
 
-    let target = create_target(&device, size, format);
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let target = render::Target::new(&device, size, format);
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("offscreen.encoder"),
@@ -78,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("offscreen.clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
+                view: &target.view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -95,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     scene.encode(
         &mut encoder,
-        &view,
+        &target.view,
         ClipRect {
             x: 0,
             y: 0,
@@ -104,49 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
 
-    let readback = create_readback(&device, size);
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback.buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(readback.padded_bytes_per_row),
-                rows_per_image: Some(size),
-            },
-        },
-        wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-    );
-
-    queue.submit([encoder.finish()]);
-
-    let slice = readback.buffer.slice(..);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |result| {
-        let _ = sender.send(result);
-    });
-    device.poll(wgpu::PollType::wait_indefinitely())?;
-    receiver.recv()??;
-
-    let mapped = slice.get_mapped_range()?;
-    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
-
-    for row in 0..size {
-        let start = (row * readback.padded_bytes_per_row) as usize;
-        rgba.extend_from_slice(&mapped[start..start + (size * 4) as usize]);
-    }
-
-    drop(mapped);
-    readback.buffer.unmap();
+    let rgba = render::read_back(&device, &queue, encoder, &target)?;
 
     write_png(&out_path, size, &rgba)?;
     println!("wrote {out_path} ({size}x{size})");
@@ -157,46 +116,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn report_issues(scene: &mut Live2dScene) {
     for issue in scene.take_issues() {
         eprintln!("{issue}");
-    }
-}
-
-fn create_target(device: &wgpu::Device, size: u32, format: wgpu::TextureFormat) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("offscreen.target"),
-        size: wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    })
-}
-
-struct Readback {
-    buffer: wgpu::Buffer,
-    padded_bytes_per_row: u32,
-}
-
-fn create_readback(device: &wgpu::Device, size: u32) -> Readback {
-    let unpadded_bytes_per_row = size * 4;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
-
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("offscreen.readback"),
-        size: u64::from(padded_bytes_per_row) * u64::from(size),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    Readback {
-        buffer,
-        padded_bytes_per_row,
     }
 }
 

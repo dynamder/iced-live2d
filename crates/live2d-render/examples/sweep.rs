@@ -1,15 +1,24 @@
-//! Sweeps the gaze horizontally at 60 fps and prints what physics does.
+//! Sweeps the gaze at 60 fps and reports what moves, frame by frame.
 //!
 //! Written to catch discontinuities: the cursor crossing the model's centre line
-//! is `AngleX` crossing its default value (0), which is exactly where a wrong
-//! normalisation branch shows up as a visible jolt.
+//! is `AngleX` crossing its default value (0), which is where a wrong
+//! normalisation branch, a dead zone or a stepped motion curve shows up as a
+//! visible jolt. See `docs/mocari-suspected-physics-chaining.md`.
 //!
 //! cargo run -p live2d-render --example sweep -- <model.model3.json> [frames]
 //!
-//! `SWEEP_DIRECT=<ParamId>` bypasses gaze tracking and writes that parameter
-//! directly (in `-1.0..=1.0`), which is how a broken physics chain is told apart
-//! from a value that never reaches physics. See
-//! `docs/mocari-suspected-physics-chaining.md`.
+//! Knobs, all optional (the full list is in `README.md`):
+//!
+//! - `SWEEP_DIRECT=<ParamId>` write that parameter directly instead of driving
+//!   the gaze, in `-1.0..=1.0`
+//! - `SWEEP_RANGE=<lo>,<hi>` input range, default `-1,1`. `lo == hi` holds the
+//!   input still, which separates "jumps with position" from "jumps with time".
+//! - `SWEEP_ALL=1` watch every parameter instead of the six printed by default
+//! - `SWEEP_JUMP=<f32>` report per-frame changes above this, default `0.02`
+//! - `SWEEP_SETTLE=<frames>` frames to let physics settle before recording,
+//!   default `60`; raise it when a swinging part drowns the jolt you are hunting
+//! - `SWEEP_MOTION=1` keep the idle motion playing, which is the app's normal
+//!   state; by default the sweep stops it to isolate physics
 
 use std::time::Duration;
 
@@ -44,6 +53,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?
         .unwrap_or(240);
 
+    let (low, high) = env_range("SWEEP_RANGE")?.unwrap_or((-1.0, 1.0));
+    let watch_all = env_flag("SWEEP_ALL");
+    let jump_threshold = env_f32("SWEEP_JUMP")?.unwrap_or(0.02);
+    let settle: usize = env_f32("SWEEP_SETTLE")?.unwrap_or(60.0) as usize;
+
     let gpu::Gpu { device, queue } = gpu::open()?;
 
     let mut scene = Live2dScene::load_with_options(
@@ -59,51 +73,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let direct = std::env::var("SWEEP_DIRECT").ok();
 
-    scene.stop_motion();
+    if !env_flag("SWEEP_MOTION") {
+        scene.stop_motion();
+    }
 
-    // Let physics settle at the left extreme before the sweep starts.
-    for _ in 0..60 {
-        drive(&mut scene, &direct, -1.0);
+    if env_flag("LIVE2D_NO_PHYSICS") {
+        scene.set_physics_enabled(false);
+    }
+
+    // Let physics settle at the left end before the first recorded frame.
+    for _ in 0..settle {
+        drive(&mut scene, &direct, low);
         scene.advance(&device, &queue, Duration::from_millis(16))?;
     }
 
     report_issues(&mut scene);
 
-    println!("frame\tangle_x\t{}", TRACKED.join("\t"));
+    let watched: Vec<String> = if watch_all {
+        scene.parameter_ids().to_vec()
+    } else {
+        TRACKED.iter().map(|id| (*id).to_owned()).collect()
+    };
+
+    if !watch_all {
+        println!("frame\tx\t{}", TRACKED.join("\t"));
+    }
 
     let mut previous: Option<Vec<f32>> = None;
 
     for frame in 0..frames {
         let t = frame as f32 / (frames.max(2) - 1) as f32;
-        let x = t * 2.0 - 1.0;
+        let x = low + (high - low) * t;
 
         drive(&mut scene, &direct, x);
         scene.advance(&device, &queue, Duration::from_millis(16))?;
 
-        let values: Vec<f32> = TRACKED
+        let values: Vec<f32> = watched
             .iter()
             .map(|id| scene.parameter_value(id).unwrap_or(f32::NAN))
             .collect();
 
-        let jump = previous
-            .as_ref()
-            .map(|previous| {
-                previous
+        if !watch_all {
+            println!(
+                "{frame}\t{x:.3}\t{}",
+                values
                     .iter()
-                    .zip(&values)
-                    .map(|(a, b)| (b - a).abs())
-                    .fold(0.0_f32, f32::max)
-            })
-            .unwrap_or(0.0);
+                    .map(|v| format!("{v:.3}"))
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            );
+        }
 
-        println!(
-            "{frame}\t{x:.3}\t{}\t(jump {jump:.3})",
-            values
+        if let Some(previous) = previous.as_ref() {
+            let mut jumps: Vec<(f32, &str, f32, f32)> = previous
                 .iter()
-                .map(|v| format!("{v:.3}"))
-                .collect::<Vec<_>>()
-                .join("\t")
-        );
+                .zip(&values)
+                .zip(&watched)
+                .filter_map(|((before, after), id)| {
+                    let delta = (after - before).abs();
+
+                    (delta > jump_threshold).then_some((delta, id.as_str(), *before, *after))
+                })
+                .collect();
+
+            jumps.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+            for (delta, id, before, after) in jumps.iter().take(4) {
+                println!(
+                    "  jump @ frame {frame:>3} x={x:+.4}  {id:<20} {before:+.3} -> {after:+.3}  ({delta:.3})"
+                );
+            }
+        }
 
         previous = Some(values);
     }
@@ -114,5 +154,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn report_issues(scene: &mut Live2dScene) {
     for issue in scene.take_issues() {
         eprintln!("{issue}");
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var_os(name).is_some()
+}
+
+fn env_f32(name: &str) -> Result<Option<f32>, Box<dyn std::error::Error>> {
+    let Some(raw) = std::env::var(name).ok() else {
+        return Ok(None);
+    };
+
+    Ok(Some(raw.parse().map_err(|_| {
+        format!("{name} must be a number, got {raw:?}")
+    })?))
+}
+
+fn env_range(name: &str) -> Result<Option<(f32, f32)>, Box<dyn std::error::Error>> {
+    let Some(raw) = std::env::var(name).ok() else {
+        return Ok(None);
+    };
+
+    let parts: Vec<f32> = raw
+        .split(',')
+        .map(|part| part.trim().parse())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("{name} must be two numbers, got {raw:?}"))?;
+
+    match parts[..] {
+        [low, high] => Ok(Some((low, high))),
+        _ => Err(format!("{name} needs exactly two numbers, got {raw:?}").into()),
     }
 }

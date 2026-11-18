@@ -541,6 +541,11 @@ impl Live2dScene {
         self.model.parameter_value(id)
     }
 
+    /// Every parameter id, in model order. Diagnostics and tests only.
+    pub fn parameter_ids(&self) -> &[String] {
+        self.model.parameter_ids()
+    }
+
     /// Enables or disables physics evaluation (diagnostics / still frames).
     pub fn set_physics_enabled(&mut self, enabled: bool) {
         self.physics_enabled = enabled;
