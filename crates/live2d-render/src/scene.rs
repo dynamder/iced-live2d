@@ -223,11 +223,7 @@ impl Live2dScene {
         let mut expression_paths = expression_paths(&model, model_dir.as_deref());
 
         // Everything below only needs the GPU copies.
-        if std::env::var_os("LIVE2D_KEEP_ASSETS").is_some() {
-            std::mem::forget(loaded);
-        } else {
-            drop(loaded);
-        }
+        drop(loaded);
 
         // Plenty of exported models (VTuber rigs in particular) ship their
         // motion and expression files next to the model without listing them in
