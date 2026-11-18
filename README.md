@@ -93,6 +93,13 @@ cargo run --release -p live2d-render --example offscreen -- \
 | `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`, `LIVE2D_RECLIP` | flags — active when the variable is present, whatever its value |
 | `LIVE2D_PROFILE` | flag — prints per-frame CPU and upload cost |
 
+`sweep` and `jolt` take their own knobs, documented in each file's header:
+
+| Variable | Used by | Meaning |
+|---|---|---|
+| `SWEEP_DIRECT`, `SWEEP_RANGE`, `SWEEP_ALL`, `SWEEP_JUMP`, `SWEEP_SETTLE` | `sweep` | drive one parameter instead of the gaze, input range, watch every parameter, jump threshold, settle frames |
+| `JOLT_MOTION`, `JOLT_RANGE`, `JOLT_SIZE`, `JOLT_SETTLE` | `jolt` | keep the idle motion, input range, capture size, settle frames |
+
 ## Other examples
 
 | Example | Answers |
@@ -102,6 +109,7 @@ cargo run --release -p live2d-render --example offscreen -- \
 | `probe <model> <x> <y>` | which drawables cover a model-space point, in paint order |
 | `switch <model> <Param> <v0> <v1>` | which drawables a parameter flips, and their metadata |
 | `sweep` | what physics does along a horizontal gaze sweep, at 60 fps |
+| `jolt` | how many pixels change per frame during a slow sweep, and where |
 | `offscreen` | one frame to a PNG, no window |
 
 `sweep` is the fastest way to check a tracking bug: it prints the input parameter
@@ -152,9 +160,9 @@ docs/                          feasibility write-up, plan, defect records
 The split matters: keeping `live2d-render` free of iced means a `wgpu`/`iced`
 upgrade touches one layer, and the renderer stays testable headlessly.
 
-## The two patches
+## The three patches
 
-Both live in `patches/` and are applied to a vendored copy at `.refs/mocari`
+All three live in `patches/` and are applied to a vendored copy at `.refs/mocari`
 (wired up through `[patch.crates-io]` in `Cargo.toml`); `scripts/vendor-mocari.ps1`
 rebuilds that copy from the cargo registry.
 
@@ -178,7 +186,17 @@ official viewer enables mipmaps by default. The patch builds the chain on upload
 and sets `mipmap_filter = Linear`; it costs +33% VRAM and ~0.5 s of startup.
 See [`patches/mocari-0.4.1-mipmaps.patch`](patches/mocari-0.4.1-mipmaps.patch).
 
-Both belong upstream — they should not be every consumer's problem.
+**3. Physics chains do not propagate.** Each physics setting writes its output back into the
+parameter cache, and that cache is how a later setting sees the result in the same
+substep — the official framework says so in a comment on the cache. mocari rebinds the
+cache slice and passes it as the computed value, so the write is a no-op. On this rig
+**113 reads** across settings depend on that propagation (hair, tail, ribbons, chest,
+skirt), so before the patch everything past the first hop stood still. The fix is two
+lines; `FrontHairX1` goes from 0.000 to -0.136 while `ParamAngleX` sweeps to +26.5.
+See [`patches/mocari-0.4.1-chained-physics.patch`](patches/mocari-0.4.1-chained-physics.patch)
+and [`docs/mocari-chained-physics.md`](docs/mocari-chained-physics.md).
+
+All three belong upstream — they should not be every consumer's problem.
 
 ## Why the git dependency on iced
 
@@ -225,8 +243,9 @@ this is not a project problem.
 
 - [`docs/rust-iced-live2d-plan.md`](docs/rust-iced-live2d-plan.md) — verified
   architecture, iced 0.15-dev API notes, pitfalls, calibrated effort estimate
-- [`docs/mocari-suspected-physics-chaining.md`](docs/mocari-suspected-physics-chaining.md)
-  — open suspicion: physics outputs may not reach downstream settings
+- [`docs/mocari-chained-physics.md`](docs/mocari-chained-physics.md) — confirmed
+  mocari defect: physics outputs never reached the parameter cache, so the chained
+  half of the rig stood still
 - [`docs/live2d-native-feasibility.md`](docs/live2d-native-feasibility.md) —
   broader survey of Live2D on native platforms (platform matrix, licensing,
   difficulty ladder)

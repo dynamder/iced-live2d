@@ -1,0 +1,50 @@
+# mocari 0.4.1 never feeds a physics output into the parameter cache, so a
+# setting cannot drive another setting through a parameter.
+#
+# The model used while building this spike leans on that: PhysicsSetting1 turns
+# AngleX into ParamAngleX, and 113 reads across the rig consume parameters that
+# another setting produced (ParamAngleX feeds PhysicsSetting27/50/54/59/95/...,
+# ParamBodyAngleX feeds a dozen more). With the cache never updated, every
+# downstream setting reads the parameter's pre-physics value - normally its
+# default - so the chained half of the rig stays still.
+#
+# Reference implementation, CubismPhysics::Evaluate (CubismNativeFramework,
+# src/Physics/CubismPhysics.cpp): each output is written into the cache, which is
+# what lets a later setting see it in the same substep.
+#
+#     UpdateOutputParameterValue(&_parameterCaches[dest], min, max, outputValue, &output);
+#
+# mocari's evaluate_setting rebinds `value` to the cache slot and then passes
+# `*value` as the computed result, so the write is `cache = blend(cache, cache)`:
+# a no-op. The pendulum result only survives in `current_outputs`, which reaches
+# the parameters at the end of the frame but never the other settings.
+#
+# Measured on DeepSeek/大肥鱼, driving AngleX from -1 to +1 at 60 fps:
+#   before: ParamAngleX +27.750, FrontHairX1 (Setting50's output) 0.000
+#   after:  ParamAngleX +27.750, FrontHairX1 -0.135
+#
+# Apply with:
+#   powershell -File scripts/vendor-mocari.ps1
+#
+# Worth reporting upstream: the fix belongs in evaluate_setting, not in a fork.
+diff --git a/src/core/physics.rs b/src/core/physics.rs
+index abb594a..9f30de2 100644
+--- a/src/core/physics.rs
++++ b/src/core/physics.rs
+@@ -693,14 +693,14 @@ fn evaluate_setting(
+         let Some(parameter_index) = output.parameter_index else {
+             continue;
+         };
+-        let Some((value, (&minimum, &maximum))) = parameter_cache.get_mut(parameter_index).zip(
++        let Some((target, (&minimum, &maximum))) = parameter_cache.get_mut(parameter_index).zip(
+             parameter_minimum_values
+                 .get(parameter_index)
+                 .zip(parameter_maximum_values.get(parameter_index)),
+         ) else {
+             continue;
+         };
+-        update_output_parameter(value, minimum, maximum, *value, output);
++        update_output_parameter(target, minimum, maximum, value, output);
+     }
+ }
+ 

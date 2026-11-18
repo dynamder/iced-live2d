@@ -3,7 +3,7 @@
 > 前提：开源项目、Rust、iced、桌面端（Win/macOS/Linux）
 > **状态：已按路线 B 做出可运行的 spike**（模型、动作、表情、物理、视线跟随全部实测通过）。
 > 实测环境：Windows 11 / RTX 5060 Laptop / Rust 1.97.1 / 显示缩放 150%
-> 实测基线：`iced` master `e5c350f`（`0.15.0-dev`）+ `wgpu 30.0.2` + `mocari 0.4.1`（打 2 个补丁）
+> 实测基线：`iced` master `e5c350f`（`0.15.0-dev`）+ `wgpu 30.0.2` + `mocari 0.4.1`（打 3 个补丁）
 
 ---
 
@@ -51,7 +51,7 @@ cargo run --release -p app -- "<你的模型>/xxx.model3.json"
 | 许可 | MIT，**零 Live2D 许可摩擦**，仓库干净 | Core 闭源，**仓库不能带二进制**，使用者需自己下载 SDK；发行时按 Live2D 协议走 |
 | 构建 | `cargo add mocari`，纯 Rust | 需 C++ 工具链 + CMake + 自写 FFI 桥（现成只有 Core 裸绑定，不含 Framework，motion/physics 还得自己做） |
 | 保真度 | **实测：遮罩/混合/物理/动作与官方 Viewer 观感一致**（见下图） | 官方级 |
-| 成熟度 | 单人项目，5 个月 18 个版本，**API 会变**，且已有 2 个必须打补丁的 bug（负 mask 哨兵、无 mipmap） | 稳定，但绑定层要自己维护 |
+| 成熟度 | 单人项目，5 个月 18 个版本，**API 会变**，且已有 3 个必须打补丁的 bug（负 mask 哨兵、无 mipmap、物理链路不传导） | 稳定，但绑定层要自己维护 |
 | 依赖风险 | 项目消失 = 你接盘 | Live2D 条款变化 / Core 版本升级 |
 
 ![离屏渲染结果](images/offscreen-frame.png)
@@ -178,7 +178,12 @@ VTuber 导出的绑定通常是这样分层的：
 
 其余全部“未设置”。我们一度多写了 `AngleZ` / `PositionX/Y` / `LeanInput`（官方未绑），又漏了 `ParamBodyAngleX`，两边画面因此根本对不上——**多余的输入会被物理链放大成明显的姿态差异**，而本项目的验收手段就是和参考渲染器对比，所以不能“顺手加戏改进跟踪”。
 
-> **待定的一条**：物理自己产出的参数值似乎不会进入下游 setting 的输入缓存（`AngleX` 驱动到 ±27.75 时 `ParamAngleX` 也到了 ±27.75，但依赖它的 `FrontHairX1` 读数是 0）。证据、已排除项与确认步骤见 [`mocari-suspected-physics-chaining.md`](mocari-suspected-physics-chaining.md)。
+> **已确认并已打补丁**：mocari 0.4.1 的 `evaluate_setting` 把重新绑定后的缓存值当成计算结果写回，
+> 等于 `cache = blend(cache, cache)`，所以物理输出**永远进不了** `parameter_cache`；本模型 **113 处**
+> 跨 setting 读取因此全部失效（`AngleX → ParamAngleX → 前发/后发`、`ParamBodyAngleX → 十余处`、
+> `ParamBreath → 胸腔/裙摆` …）。官方实现写的就是缓存，并且注释点名这是链路传导机制。
+> 补丁：`patches/mocari-0.4.1-chained-physics.patch`；实测 `FrontHairX1` 由 0.000 变为 -0.136。
+> 完整记录见 [`mocari-chained-physics.md`](mocari-chained-physics.md)。
 
 ### 坑 2：`ParamBreath` 存在，但没人驱动它
 
@@ -296,12 +301,13 @@ crates/live2d-render/          只依赖 wgpu + mocari，不依赖 iced（升级
   examples/switch.rs           某参数会翻转哪些 drawable
   examples/sweep.rs            60 fps 扫视线，打印物理输入/输出（查跟踪 bug）
   examples/offscreen.rs        无窗口渲染一帧成 PNG（CI 像素测试的雏形）
+  examples/jolt.rs             慢扫视线，逐帧比较渲染结果，找"顿一下"的位置
   examples/shared/gpu.rs       上面两个需要 GPU 的例子的公共引导
 app/                           iced 0.15-dev 外壳
   src/main.rs                  application / subscription / 键盘
   src/live2d.rs                Program + Primitive + Pipeline
-.refs/mocari                   mocari 0.4.1 + 两个补丁（Cargo.toml 里 [patch.crates-io] 指过来）
-patches/                       负 mask 索引 + mipmap 两个修复的 patch 文件
+.refs/mocari                   mocari 0.4.1 + 三个补丁（Cargo.toml 里 [patch.crates-io] 指过来）
+patches/                       负 mask 索引 + mipmap + 物理链路三个修复的 patch 文件
 scripts/vendor-mocari.ps1      一键重建 .refs/mocari
 scripts/shot.ps1               截图（DPI 感知，否则只截到左上角）
 scripts/shot-window.ps1        按标题前缀截任意窗口（用来截官方 Viewer 做对比）
