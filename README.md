@@ -62,9 +62,23 @@ nothing else; see `Live2dScene::set_gaze`.
 # one-time: vendor the patched mocari (see "The two patches" below)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vendor-mocari.ps1
 
-# run with any model
+# open the default rig
+cargo run --release -p app
+
+# open any model by name, or by path
+cargo run --release -p app -- --model Hiyori
 cargo run --release -p app -- "path/to/model/xxx.model3.json"
+
+# what can be named
+cargo run --release -p app -- --list
 ```
+
+`--model <name>` matches a model directory or file stem, case-insensitively,
+inside `models/`, `.refs/models/`,
+`.refs/cubism-web-samples/Samples/Resources/` and the rig under development.
+`--track viewer` switches to the Cubism Viewer's own bindings (see
+[the tracking section](#capturing-a-frame-without-a-window)). `--help` lists
+everything.
 
 Use `--release`. A debug build runs at ~5 fps because the per-frame CPU mesh work
 for hundreds of drawables is unoptimised, which also makes animation look like

@@ -1,3 +1,4 @@
+mod cli;
 mod live2d;
 
 use std::path::PathBuf;
@@ -7,28 +8,51 @@ use iced::keyboard;
 use iced::widget::shader;
 use iced::window;
 use iced::{Fill, Size, Subscription, Task, Widget};
-use live2d_render::{SceneOptions, TrackingMode};
+use live2d_render::SceneOptions;
 
 use live2d::{Live2dCommand, Live2dView};
 
-/// Default model, relative to the workspace root. Never committed to git.
-const DEFAULT_MODEL: &str = "DeepSeek-fish-live2d/DeepSeek/大肥鱼.model3.json";
-
 fn main() -> iced::Result {
-    let model_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_MODEL));
+    let invocation = match cli::parse(std::env::args().skip(1)) {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            eprintln!("live2d: {error}\n\n{}", cli::USAGE);
+            return Ok(());
+        }
+    };
+
+    let args = match invocation {
+        cli::Invocation::Help => {
+            println!("{}", cli::USAGE);
+            return Ok(());
+        }
+        cli::Invocation::List => {
+            let models = cli::discover();
+
+            if models.is_empty() {
+                println!("no models found; see docs/test-models.md");
+            }
+
+            for (name, path) in models {
+                println!("{name:<12} {}", path.display());
+            }
+
+            return Ok(());
+        }
+        cli::Invocation::Run(args) => args,
+    };
+
+    let model_path = args.model;
 
     if !model_path.exists() {
         eprintln!(
-            "live2d: model not found at {}\npass a .model3.json path as the first argument",
+            "live2d: model not found at {}\nrun `app --list` to see what is available",
             model_path.display()
         );
     }
 
     let options = SceneOptions {
-        tracking: tracking_from_env(),
+        tracking: args.tracking,
         ..SceneOptions::default()
     };
 
@@ -98,17 +122,4 @@ impl App {
             }),
         ])
     }
-}
-
-/// `LIVE2D_TRACK=viewer` reproduces the Cubism Viewer's own mouse bindings;
-/// anything else (or nothing) resolves the rig's conventions.
-fn tracking_from_env() -> TrackingMode {
-    let Ok(raw) = std::env::var("LIVE2D_TRACK") else {
-        return TrackingMode::default();
-    };
-
-    raw.parse().unwrap_or_else(|error| {
-        eprintln!("live2d: {error}; using adapted tracking");
-        TrackingMode::default()
-    })
 }
