@@ -101,6 +101,7 @@ pub struct Live2dPipeline {
     distinct_now: u64,
     last_now: Option<Instant>,
     report_start: Instant,
+    profile: bool,
     advance_nanos: u128,
 }
 
@@ -125,6 +126,7 @@ impl shader::Pipeline for Live2dPipeline {
             distinct_now: 0,
             last_now: None,
             report_start: Instant::now(),
+            profile: std::env::var_os("LIVE2D_PROFILE").is_some(),
             advance_nanos: 0,
         }
     }
@@ -149,7 +151,7 @@ impl shader::Primitive for Live2dPrimitive {
         }
 
         let report_elapsed = Instant::now().saturating_duration_since(pipeline.report_start);
-        if report_elapsed >= std::time::Duration::from_secs(1) {
+        if pipeline.profile && report_elapsed >= std::time::Duration::from_secs(1) {
             println!(
                 "live2d diag: prepares={} renders={} distinct_now={} in {:.2}s",
                 pipeline.prepares,
@@ -218,9 +220,12 @@ impl shader::Primitive for Live2dPrimitive {
             }
         }
 
-        let advance_start = Instant::now();
+        let advance_start = pipeline.profile.then(Instant::now);
         let advance_result = scene.advance(device, queue, delta);
-        pipeline.advance_nanos += advance_start.elapsed().as_nanos();
+
+        if let Some(start) = advance_start {
+            pipeline.advance_nanos += start.elapsed().as_nanos();
+        }
 
         if let Err(error) = advance_result {
             eprintln!("live2d: advance failed: {error}");

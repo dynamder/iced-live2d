@@ -17,7 +17,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $dest = Join-Path $root ".refs/mocari"
-$patch = Join-Path $root "patches/mocari-$Version-negative-masks.patch"
+$patchDir = Join-Path $root "patches"
 
 if ((Test-Path $dest) -and -not $Force) {
     Write-Output "$dest already exists (pass -Force to rebuild)"
@@ -49,9 +49,11 @@ Get-ChildItem $dest -Recurse -File | ForEach-Object { $_.IsReadOnly = $false }
 Push-Location $dest
 try {
     git init --quiet .
-    git apply $patch
-    if ($LASTEXITCODE -ne 0) { throw "git apply failed for $patch" }
-    Write-Output "patched: $(Split-Path -Leaf $patch)"
+    Get-ChildItem $patchDir -Filter "mocari-$Version-*.patch" | Sort-Object Name | ForEach-Object {
+        git apply $_.FullName
+        if ($LASTEXITCODE -ne 0) { throw "git apply failed for $($_.Name)" }
+        Write-Output "patched: $($_.Name)"
+    }
 }
 finally {
     Pop-Location

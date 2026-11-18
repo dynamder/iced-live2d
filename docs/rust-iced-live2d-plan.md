@@ -155,6 +155,20 @@ VTuber 导出的绑定通常是这样分层的：
 
 结论：**没有呼吸是绑定导出缺参数 + app 没补 `CubismBreath` 双重原因**，官方 Viewer 打开也不会呼吸。同理 `CubismEyeBlink` 也没有，`ParamEyeLOpen/ROpen` 存在但没人驱动，所以模型不会眨眼。这两个组件都是 20–40 行的活，属于"必须自己写"的清单。
 
+### 坑 3：mocari 上传贴图不生成 mipmap，细线稿会被采成虚线
+
+Cubism 的贴图是 4096–8192px，桌面宠物只画几百像素，等于 4–8 倍缩小。mocari 的 `create_rgba8_texture` 用 `mip_level_count: 1`，于是每个像素只有一次双线性采样：贴图里 1px 宽的线稿会**命中一部分片元、漏掉相邻的**，看起来就是虚线/麻点（本模型的“手”是半透明淡粉 + 细棕线，正好把这个缺陷放大）。
+
+**官方 Viewer 默认是开 mipmap 的**（用户实测确认），所以同一区域在 Viewer 里是连续的。
+
+修法：上传时在 CPU 侧生成整条 mip 链 + sampler 的 `mipmap_filter = Linear`。代价 +33% 显存、这个规模的模型约 +0.5s 启动。见 `patches/mocari-0.4.1-mipmaps.patch`。
+
+![对照](images/hand-mipmap.png)
+
+### 坑 4：贴图分辨率与输出分辨率的匹配
+
+同一个输出尺寸下，`texture_scale = 0.5`（2048–4096px）反而比 1.0（4096–8192px）**看起来更干净**——在没有 mipmap 的情况下，缩小倍数越大混叠越严重。有了 mipmap 之后这条规律消失，可以放心用高分辨率贴图换内存。
+
 ---
 
 ## 三、iced 0.15-dev 实测细节（0.14 文档里查不到的部分）
@@ -182,7 +196,7 @@ VTuber 导出的绑定通常是这样分层的：
    - 这 5 张贴图是 4096×8192、4096×8192、2048×2048、**8192×8192**、4096×4096，未压缩共 **592 MB**；
    - `load_model_runtime` 返回的 `RuntimeModel` 里**同时持有解码后的 RGBA**，如果把它留在场景结构里，就是 CPU 592 MB + GPU 592 MB ≈ **1.5 GB**；
    - 修法：`loaded.runtime().clone()` 之后 `drop(loaded)`（mocari 官方示例就是这么做的），再给一个 `texture_scale`（0.5 → 148 MB GPU），总占用降到 **462 MB**。
-6. **别用 cargo 重放的警告判断源码状态**：`cargo build` 会对"未重新编译"的依赖**重放上次的编译警告**。我改坏过一个 vendored 依赖、又改回来，但产物没重编，于是画面异常却看不到任何警告（反而看到旧的）。**怀疑构建不一致时：`cargo clean -p <crate> --release` 再编，确认警告一起消失。**
+7. **别用 cargo 重放的警告判断源码状态**：`cargo build` 会对"未重新编译"的依赖**重放上次的编译警告**。我改坏过一个 vendored 依赖、又改回来，但产物没重编，于是画面异常却看不到任何警告（反而看到旧的）。**怀疑构建不一致时：`cargo clean -p <crate> --release` 再编，确认警告一起消失。**
 7. **HiDPI / resize**：`bounds` 是逻辑像素、`viewport` 是物理像素。窗口跨显示器拖动时 `scale_factor` 会变，变换要在 `prepare` 里重算，别缓存成常量。spike 里用 `fit_aspect` 做脏检查。
 8. **透明窗口**：`Level::AlwaysOnTop` + `transparent: true` + `decorations: false` + 根样式 alpha=0，缺一不可；`alpha_mode` 要 `PreMultiplied`。**跨平台表现不一致，三平台各测一次**。
 9. **逐像素点击穿透**：iced 只提供整窗 `enable_mouse_passthrough`。要"只有角色可点"，拿 `window::raw_id()` / `HasWindowHandle` 自己处理：Windows 钩 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，macOS 改 `ignoresMouseEvents`，Linux 走 X11 shape / Wayland input region。

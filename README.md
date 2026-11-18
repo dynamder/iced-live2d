@@ -17,6 +17,7 @@ Cubism Core binary, no C++ toolchain, no engine.
 |---|---|
 | Model + textures load, correct colours | ✅ |
 | Clipping masks (eyes, mouth, hair, body behind tail) | ✅ |
+| Mipmapped textures — thin line art survives minification | ✅ (local patch) |
 | Motion playback, looping, switching | ✅ `R` |
 | Expressions (23 scanned from disk) | ✅ `E` |
 | Physics (hair/tail follow) | ✅ |
@@ -75,6 +76,7 @@ at half resolution by default:
 | naive (keeps decoded textures, full res) | 1 565 MB |
 | assets dropped, full res | ~900 MB |
 | assets dropped, `texture_scale = 0.5` (default) | **462 MB** |
+| the above + mip chain (+33% VRAM) | ~488 MB |
 
 Pass `SceneOptions { texture_scale: 1.0, ..Default::default() }` for full quality.
 
@@ -143,6 +145,11 @@ of glue should not need changes.
 - **`Primitive::draw` must return `false`** and the work must happen in
   `Primitive::render`, because the mask pass has to be inserted between the
   passes iced controls.
+- **Textures need mipmaps.** mocari uploads with `mip_level_count = 1`, so a
+  rig authored at 4096-8192 px and drawn a few hundred pixels tall minifies 4-8x
+  with a single bilinear tap. The result is fine line art breaking into dotted
+  speckles. The official Cubism Viewer enables mipmaps by default; our second
+  local patch builds the chain on upload (see `patches/`).
 
 ## Troubleshooting (this machine only)
 
