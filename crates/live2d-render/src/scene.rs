@@ -373,29 +373,33 @@ impl Live2dScene {
 
         let runtime = &mut self.model;
 
-        // The eye balls are plain inputs on both kinds of rig.
-        runtime.set_parameter_override_normalized("ParamEyeBallX", x);
-        runtime.set_parameter_override_normalized("ParamEyeBallY", -y);
-
+        // Mirrors the Cubism Viewer's default mouse-tracking bindings for this
+        // rig exactly:
+        //
+        //   AngleX          <- mouse X
+        //   AngleY          <- mouse Y
+        //   ParamBodyAngleX <- mouse X
+        //   ParamEyeBallX   <- mouse X
+        //   ParamEyeBallY   <- mouse Y
+        //
+        // and nothing else. Adding extra inputs (AngleZ, PositionX/Y, LeanInput)
+        // makes our output diverge from the reference renderer, so resist the
+        // urge to improve the tracking here.
         match self.gaze_inputs {
             GazeInputs::Tracking => {
-                // Head yaw/pitch/roll plus positional and lean input, so physics
-                // can carry the motion into the shoulders and torso instead of
-                // only swinging the hair.
                 runtime.set_parameter_override_normalized("AngleX", x);
-                runtime.set_parameter_override_normalized("AngleY", -y);
-                runtime.set_parameter_override_normalized("AngleZ", x * -0.4);
-                runtime.set_parameter_override_normalized("PositionX", x * 0.5);
-                runtime.set_parameter_override_normalized("PositionY", -y * 0.5);
-                runtime.set_parameter_override_normalized("LeanInput", x * 0.3);
+                runtime.set_parameter_override_normalized("AngleY", y);
+                runtime.set_parameter_override_normalized("ParamBodyAngleX", x);
             }
             GazeInputs::Model => {
                 runtime.set_parameter_override_normalized("ParamAngleX", x);
-                runtime.set_parameter_override_normalized("ParamAngleY", -y);
-                runtime.set_parameter_override_normalized("ParamAngleZ", x * -0.4);
-                runtime.set_parameter_override_normalized("ParamBodyAngleX", x * 0.5);
+                runtime.set_parameter_override_normalized("ParamAngleY", y);
+                runtime.set_parameter_override_normalized("ParamBodyAngleX", x);
             }
         }
+
+        runtime.set_parameter_override_normalized("ParamEyeBallX", x);
+        runtime.set_parameter_override_normalized("ParamEyeBallY", y);
 
         self.dirty = true;
     }

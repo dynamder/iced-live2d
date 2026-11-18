@@ -28,6 +28,11 @@ public class WinShot {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(int a, int b, bool attach);
+    [DllImport("kernel32.dll")] public static extern int GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     public struct RECT { public int Left, Top, Right, Bottom; }
 
     public static IntPtr Find(string prefix) {
@@ -75,7 +80,22 @@ if (-not $NoMove) {
     [WinShot]::MoveWindow($handle, 0, 0, $width, $height, $true) | Out-Null
 }
 
+# Windows refuses SetForegroundWindow from a background process; borrow the
+# foreground thread's input state for the call, which is the documented workaround.
+$foreground = [WinShot]::GetForegroundWindow()
+$foregroundThread = 0
+if ($foreground -ne [IntPtr]::Zero) { [void][WinShot]::GetWindowThreadProcessId($foreground, [ref]$null) }
+$currentThread = [WinShot]::GetCurrentThreadId()
+$attached = $false
+if ($foreground -ne [IntPtr]::Zero) {
+    $attached = [WinShot]::AttachThreadInput($currentThread, [int]$foreground, $true)
+}
+[WinShot]::BringWindowToTop($handle) | Out-Null
 [WinShot]::SetForegroundWindow($handle) | Out-Null
+if ($attached) { [WinShot]::AttachThreadInput($currentThread, [int]$foreground, $false) | Out-Null }
+# Windows often refuses SetForegroundWindow from a background process; temporarily
+# go topmost so CopyFromScreen actually sees this window and not whatever is on top.
+[WinShot]::SetWindowPos($handle, [IntPtr](-1), 0, 0, 0, 0, 0x0001 -bor 0x0002 -bor 0x0010) | Out-Null
 Start-Sleep -Milliseconds 900
 
 [WinShot]::GetWindowRect($handle, [ref]$rect) | Out-Null
@@ -86,6 +106,7 @@ Add-Type -AssemblyName System.Drawing
 $bitmap = New-Object System.Drawing.Bitmap $width, $height
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+[WinShot]::SetWindowPos($handle, [IntPtr](-2), 0, 0, 0, 0, 0x0001 -bor 0x0002 -bor 0x0010) | Out-Null
 $bitmap.Save($Out)
 $graphics.Dispose()
 $bitmap.Dispose()

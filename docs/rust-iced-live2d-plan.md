@@ -146,14 +146,28 @@ VTuber 导出的绑定通常是这样分层的：
 
 代码里已经按"有 `AngleX` 就写追踪输入，否则退回 `ParamAngle*`"自动选择（`GazeInputs`）。
 
-### 坑 2：这个绑定缺 `ParamBreath`，呼吸类物理整体是死的
+#### 与官方 Viewer 的默认鼠标跟踪逐项对齐
 
-`大肥鱼.physics3.json` 里 `ParamBreath` 被引用 **30 次**（作为输入，例如 `PositionY + ParamBreath(reflect) + LeanInput -> ParamBodyAngleY`），但 **`.moc3` 里根本没有 `ParamBreath` 这个参数**。
+Cubism Viewer 的默认绑定（本模型）只有 5 条，其余全部“未设置”：
 
-- mocari 对未注册的参数输入会跳过（`parameter_index` 为 `None`），不报错；
-- 官方 SDK 里 `ParamBreath` 不是模型自带的，而是由 **`CubismBreath`** 组件（app 层）按正弦写进去的 —— mocari **没有**实现 `CubismBreath`。
+| 参数 | 绑定 |
+|---|---|
+| `AngleX` | 鼠标 X |
+| `AngleY` | 鼠标 Y |
+| `ParamBodyAngleX` | 鼠标 X |
+| `ParamEyeBallX` | 鼠标 X |
+| `ParamEyeBallY` | 鼠标 Y |
 
-结论：**没有呼吸是绑定导出缺参数 + app 没补 `CubismBreath` 双重原因**，官方 Viewer 打开也不会呼吸。同理 `CubismEyeBlink` 也没有，`ParamEyeLOpen/ROpen` 存在但没人驱动，所以模型不会眨眼。这两个组件都是 20–40 行的活，属于"必须自己写"的清单。
+之前我们的实现多写了 `AngleZ` / `PositionX/Y` / `LeanInput`（官方未绑），又漏了 `ParamBodyAngleX`，所以两边画面根本对不上。**要对齐参考渲染器就照它的绑定表写，别自己加戏**——多余的输入会被物理链放大成明显的姿态差异。
+### 坑 2：`ParamBreath` 存在，但没人驱动它
+
+（**更正**：本文早前版本说这个绑定“没有 `ParamBreath`”，那是我筛参数时输出被 `head` 截断导致的误判。实测 `ParamBreath` 存在，范围 0..1，默认 0。）
+
+- `大肥鱼.physics3.json` 引用 `ParamBreath` **30 次**（作为输入），所以呼吸链路是**通的**，只是值恒为 0；
+- 官方 SDK 里这个值由 **`CubismBreath`** 组件（app 层）按正弦写入，mocari **没有**实现它；
+- 同理 **`CubismEyeBlink`** 也没有，`ParamEyeLOpen/ROpen` 存在但没人驱动，模型不会眨眼。
+
+这两个组件都是 20–40 行，属于“必须自己写”的清单。**不写它们，物理表现会明显偏死**（胸口、裙摆、缎带的一大半联动都挂在 `ParamBreath` 上）。
 
 ### 解析正确性：与官方 Viewer 的统计逐项核对（全中）
 
