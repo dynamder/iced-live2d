@@ -29,6 +29,11 @@ public class WinShot {
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint processId);
+    public static uint ThreadOf(IntPtr h) {
+        uint processId;
+        return GetWindowThreadProcessId(h, out processId);
+    }
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(int a, int b, bool attach);
     [DllImport("kernel32.dll")] public static extern int GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
@@ -83,12 +88,11 @@ if (-not $NoMove) {
 # Windows refuses SetForegroundWindow from a background process; borrow the
 # foreground thread's input state for the call, which is the documented workaround.
 $foreground = [WinShot]::GetForegroundWindow()
-$foregroundThread = 0
-if ($foreground -ne [IntPtr]::Zero) { [void][WinShot]::GetWindowThreadProcessId($foreground, [ref]$null) }
 $currentThread = [WinShot]::GetCurrentThreadId()
 $attached = $false
 if ($foreground -ne [IntPtr]::Zero) {
-    $attached = [WinShot]::AttachThreadInput($currentThread, [int]$foreground, $true)
+    $foregroundThread = [WinShot]::ThreadOf($foreground)
+    $attached = [WinShot]::AttachThreadInput($currentThread, $foregroundThread, $true)
 }
 [WinShot]::BringWindowToTop($handle) | Out-Null
 [WinShot]::SetForegroundWindow($handle) | Out-Null
