@@ -20,18 +20,21 @@ Cubism Core binary, no C++ toolchain, no engine.
 | Motion playback, looping, switching | ✅ `R` |
 | Expressions (23 scanned from disk) | ✅ `E` |
 | Physics (hair/tail follow) | ✅ |
-| Gaze follows the cursor | ✅ |
+| Gaze follows the cursor (head + eyes + torso) | ✅ |
 | Window resize keeps framing | ✅ |
 | Headless offscreen render to PNG | ✅ `examples/offscreen.rs` |
-| Frame rate (release, 715 drawables, 4096² textures) | ✅ ~50 fps |
+| Frame rate (release, 715 drawables) | ✅ ~50 fps, CPU-bound |
 | Desktop-pet shell (transparent / on-top / click-through / tray) | ❌ not started |
+| Breathing / eye blink ( /  equivalents) | ❌ not started |
 | Blink / breath / lip-sync | ❌ not started |
 
 | iced window | offscreen render |
 |---|---|
 | ![window](docs/images/iced-window.png) | ![offscreen](docs/images/offscreen-frame.png) |
 
-Gaze tracking, cursor left vs right:
+Gaze tracking, cursor left vs right — head, eyes, shoulders and hair all move because the
+driver writes the rig's *tracking inputs* (`AngleX/Y/Z`, `Position*`, `LeanInput`) and lets physics
+derive `ParamAngle*`:
 
 ![gaze](docs/images/gaze-compare.png)
 
@@ -58,6 +61,22 @@ slow motion (each frame's delta is clamped to 0.1 s).
 
 **Controls:** `R` next motion clip · `E` next expression · move the mouse over
 the window to make the model follow it.
+
+## Memory
+
+The rig's five atlases are 4096x8192, 4096x8192, 2048x2048, **8192x8192** and
+4096x4096 — 592 MB uncompressed. `load_model_runtime` keeps the decoded RGBA
+alive inside `RuntimeModel`, so holding onto it costs CPU *and* GPU copies
+(measured 1 565 MB). The scene clones the runtime, drops the assets, and uploads
+at half resolution by default:
+
+| | working set |
+|---|---|
+| naive (keeps decoded textures, full res) | 1 565 MB |
+| assets dropped, full res | ~900 MB |
+| assets dropped, `texture_scale = 0.5` (default) | **462 MB** |
+
+Pass `SceneOptions { texture_scale: 1.0, ..Default::default() }` for full quality.
 
 ## Layout
 
