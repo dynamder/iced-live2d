@@ -13,6 +13,7 @@ use live2d_render::mocari::assets::load_model_runtime;
 use live2d_render::mocari::expression::load_expression;
 use live2d_render::mocari::json::{Physics3, PhysicsValueKind};
 use live2d_render::mocari::motion::load_motion;
+use live2d_render::{ModelBounds, SceneOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
@@ -25,6 +26,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("== runtime ==");
     println!("drawables: {}", runtime.meshes().len());
+
+    report_framing(runtime);
 
     let mut per_texture = BTreeMap::<i32, usize>::new();
     let mut masked = 0usize;
@@ -210,6 +213,69 @@ fn axis(kind: PhysicsValueKind) -> &'static str {
         PhysicsValueKind::Y => ".Y",
         PhysicsValueKind::Angle => ".Angle",
     }
+}
+
+/// Reports how the artwork sits inside the canvas the scene frames it by.
+///
+/// A model that looks small or off-centre in a viewer is usually not a viewer
+/// bug: Cubism frames the model by the canvas box in the `.moc3` header, and an
+/// artist who leaves spare room in that box gets exactly that framing everywhere.
+/// The numbers here say how much spare room a model carries.
+fn report_framing(runtime: &live2d_render::mocari::ModelRuntime) {
+    let canvas = runtime.canvas();
+    let Some(frame) = ModelBounds::from_canvas(&canvas) else {
+        println!("\n== framing ==\ncanvas unusable, the scene falls back to drawable bounds");
+        return;
+    };
+    let art = ModelBounds::from_drawables(runtime.meshes());
+
+    let [frame_x, frame_y] = frame.center();
+    println!("\n== framing ==");
+    println!(
+        "canvas: {:.2} x {:.2} units (aspect {:.2}), origin ({:.0}, {:.0}) px, ppu {:.0}, reverse-y {}",
+        frame.width(),
+        frame.height(),
+        frame.width() / frame.height(),
+        canvas.origin_x(),
+        canvas.origin_y(),
+        canvas.pixels_per_unit(),
+        canvas.reverse_y_coordinate(),
+    );
+    println!("frame centre: ({frame_x:+.3}, {frame_y:+.3})");
+
+    let Some(art) = art else {
+        return;
+    };
+
+    let [art_x, art_y] = art.center();
+    let offset_x = art_x - frame_x;
+    let offset_y = art_y - frame_y;
+
+    println!(
+        "art bounds: centre ({art_x:+.3}, {art_y:+.3}), size {:.3} x {:.3}",
+        art.width(),
+        art.height(),
+    );
+    println!(
+        "art fills {:.0}% x {:.0}% of the canvas, centre offset {:+.0}% x {:+.0}%",
+        100.0 * art.width() / frame.width(),
+        100.0 * art.height() / frame.height(),
+        100.0 * offset_x / frame.width(),
+        100.0 * offset_y / frame.height(),
+    );
+
+    // The scene fits the canvas, not the art, so a canvas with spare room shrinks
+    // the model on screen. This is the footprint a square window shows.
+    let view_fill = SceneOptions::default().view_fill;
+    let scale = (view_fill / frame.width()).min(view_fill / frame.height());
+    let screen_width = 100.0 * art.width() * scale * 0.5;
+    let screen_height = 100.0 * art.height() * scale * 0.5;
+
+    println!(
+        "on screen: {screen_width:.0}% x {screen_height:.0}% of a square window, centre {:+.0}% x {:+.0}% off centre",
+        100.0 * offset_x * scale * 0.5,
+        100.0 * offset_y * scale * 0.5,
+    );
 }
 
 fn scan(dir: &Path, suffix: &str) -> Vec<PathBuf> {
