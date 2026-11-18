@@ -108,7 +108,7 @@ instant for it.
 `LIVE2D_PROFILE=1` prints the diagnosis once per 60 frames:
 
 ```
-live2d profile: 60 frames 1.00 steps, rebuild 0.25 ms, upload 0.05 ms (mesh 0.03 over 108 drawables, clip 0.02), delta 16.67..16.7 ms (mean 16.67, 0 zero, 0 under 1 ms)
+live2d profile: 60 frames 1.02 steps, rebuild 0.11 ms, upload 0.04 ms (mesh 0.03 over 84 drawables, clip 0.01), delta 16.67..16.7 ms (mean 16.67, 0 zero, 0 under 1 ms)
 ```
 
 `steps` above 1 means the host presents slower than 60 Hz and the scene is
