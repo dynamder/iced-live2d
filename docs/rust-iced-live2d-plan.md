@@ -146,6 +146,27 @@ VTuber 导出的绑定通常是这样分层的：
 
 代码里已经按"有 `AngleX` 就写追踪输入，否则退回 `ParamAngle*`"自动选择（`GazeInputs`）。
 
+#### 坑 0（最坑的一个）：mocari 的 `*_normalized` 是 `0..=1`，不是 `-1..=1`
+
+```rust
+fn raw_parameter_value_from_normalized_range(minimum: f32, maximum: f32, value: f32) -> f32 {
+    let amount = value.clamp(0.0, 1.0);      // <- 0..=1
+    minimum + (maximum - minimum) * amount
+}
+```
+
+mocari 的文档写的就是“normalized `0.0..=1.0`”，但 Cubism 的追踪输入习惯是 `-1.0..=1.0`。把 `-1..1` 直接丢进去，**负数全被 `clamp` 到 0 → 参数恒等于 `minimum`**。
+
+表现：鼠标在角色中线**左侧**滑动时模型完全不动（`AngleX` 卡在 -30），一越过中线才开始跟随，看起来就是“过中线时身体顿一下”。而且**四角测试（±1）恰好两端都对**——`-1` 夹到 0 正好等于 `minimum`——所以这个 bug 很容易漏过目检。
+
+正确的写法：
+
+```rust
+let amount = (offset.clamp(-1.0, 1.0) + 1.0) * 0.5;
+runtime.set_parameter_override_normalized(id, amount);
+```
+
+`examples/sweep.rs` 就是为这个写的：以 60 fps 把输入从 -1 扫到 +1，打印输入参数与物理输出。**修之前的输入列会在 -30 上停住 100 多帧，修之后是线性的**。任何“鼠标跟踪手感不对”的问题都先用它验一遍，比肉眼看快得多。
 #### 与官方 Viewer 的默认鼠标跟踪逐项对齐
 
 Cubism Viewer 的默认绑定（本模型）只有 5 条，其余全部“未设置”：

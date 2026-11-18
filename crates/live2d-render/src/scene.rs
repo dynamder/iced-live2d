@@ -387,19 +387,19 @@ impl Live2dScene {
         // urge to improve the tracking here.
         match self.gaze_inputs {
             GazeInputs::Tracking => {
-                runtime.set_parameter_override_normalized("AngleX", x);
-                runtime.set_parameter_override_normalized("AngleY", y);
-                runtime.set_parameter_override_normalized("ParamBodyAngleX", x);
+                set_tracking_input(runtime, "AngleX", x);
+                set_tracking_input(runtime, "AngleY", y);
+                set_tracking_input(runtime, "ParamBodyAngleX", x);
             }
             GazeInputs::Model => {
-                runtime.set_parameter_override_normalized("ParamAngleX", x);
-                runtime.set_parameter_override_normalized("ParamAngleY", y);
-                runtime.set_parameter_override_normalized("ParamBodyAngleX", x);
+                set_tracking_input(runtime, "ParamAngleX", x);
+                set_tracking_input(runtime, "ParamAngleY", y);
+                set_tracking_input(runtime, "ParamBodyAngleX", x);
             }
         }
 
-        runtime.set_parameter_override_normalized("ParamEyeBallX", x);
-        runtime.set_parameter_override_normalized("ParamEyeBallY", y);
+        set_tracking_input(runtime, "ParamEyeBallX", x);
+        set_tracking_input(runtime, "ParamEyeBallY", y);
 
         self.dirty = true;
     }
@@ -533,6 +533,20 @@ impl Live2dScene {
             self.motion_cursor = index.wrapping_add(1);
             self.dirty = true;
         }
+    }
+
+    /// Writes a Cubism-style `-1.0..=1.0` offset into a parameter directly.
+    ///
+    /// Diagnostics only: it lets a test drive an intermediate parameter and tell
+    /// "physics chaining is broken" apart from "the input never arrives".
+    pub fn set_parameter_offset(&mut self, id: &str, offset: f32) {
+        set_tracking_input(&mut self.model, id, offset);
+        self.dirty = true;
+    }
+
+    /// Reads a parameter value. Diagnostics and tests only.
+    pub fn parameter_value(&self, id: &str) -> Option<f32> {
+        self.model.parameter_value(id)
     }
 
     /// Enables or disables physics evaluation (diagnostics / still frames).
@@ -841,4 +855,15 @@ fn is_idle_clip(path: &Path) -> bool {
         .and_then(|name| name.to_str())
         .map(|name| name.to_ascii_lowercase().contains("idle"))
         .unwrap_or(false)
+}
+
+/// Writes a Cubism-style `-1.0..=1.0` tracking offset into a parameter.
+///
+/// mocari's `*_normalized` setters take `0.0..=1.0` (the docs say so) and
+/// clamp, so passing a `-1.0..=1.0` value silently pins every negative offset to
+/// the parameter minimum: the model freezes until the cursor crosses its centre
+/// line and then snaps into motion. Convert here, once.
+fn set_tracking_input(runtime: &mut ModelRuntime, id: &str, offset: f32) {
+    let amount = (offset.clamp(-1.0, 1.0) + 1.0) * 0.5;
+    runtime.set_parameter_override_normalized(id, amount);
 }
