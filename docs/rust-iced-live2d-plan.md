@@ -369,7 +369,7 @@ crates/live2d-render/          只依赖 wgpu + mocari，不依赖 iced（升级
 app/                           iced 0.15-dev 外壳
   src/main.rs                  application / subscription / 键盘
   src/live2d.rs                Program + Primitive + Pipeline
-.refs/mocari                   mocari 0.4.1 + 三个补丁（Cargo.toml 里 [patch.crates-io] 指过来）
+.refs/mocari                   mocari 0.4.1 + 四个补丁（Cargo.toml 里 [patch.crates-io] 指过来）
 patches/                       负 mask 索引 + mipmap + 物理链路三个修复的 patch 文件
 scripts/vendor-mocari.ps1      一键重建 .refs/mocari
 scripts/shot.ps1               截图（DPI 感知，否则只截到左上角）
