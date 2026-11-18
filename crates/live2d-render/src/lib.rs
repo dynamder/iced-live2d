@@ -6,10 +6,12 @@
 
 mod bounds;
 mod error;
+mod rig;
 mod scene;
 
 pub use bounds::ModelBounds;
 pub use error::{Error, Result};
+pub use rig::{Binding, ModelFacts, Rig, Route, Slot, Source, TrackingMode, resolve};
 pub use scene::{ClipRect, Live2dScene, SceneOptions};
 
 pub use mocari;

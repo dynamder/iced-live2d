@@ -27,9 +27,12 @@ use live2d_render::{Live2dScene, SceneOptions};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
+#[path = "shared/knobs.rs"]
+mod knobs;
 
 const TRACKED: &[&str] = &[
     "AngleX",
+    "ParamEyeBallX",
     "ParamAngleX",
     "ParamBodyAngleX",
     "HipAngleX",
@@ -67,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wgpu::TextureFormat::Rgba8Unorm,
         SceneOptions {
             texture_scale: 0.25,
+            tracking: knobs::tracking()?,
             ..SceneOptions::default()
         },
     )?;

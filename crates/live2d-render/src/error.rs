@@ -44,6 +44,16 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error("failed to read physics settings from {path}: {source}")]
+    PhysicsFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse physics settings in {path}")]
+    PhysicsParse { path: PathBuf },
+
     #[error("failed to allocate Live2D mesh buffers")]
     MeshBuffers,
 

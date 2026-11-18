@@ -12,7 +12,7 @@ use iced::mouse;
 use iced::wgpu;
 use iced::widget::shader;
 use iced::{Point, Rectangle};
-use live2d_render::{ClipRect, Live2dScene};
+use live2d_render::{ClipRect, Live2dScene, SceneOptions};
 
 use crate::Message;
 
@@ -25,15 +25,17 @@ pub enum Live2dCommand {
 
 pub struct Live2dView {
     model_path: PathBuf,
+    options: SceneOptions,
     now: Instant,
     command: Option<Live2dCommand>,
     command_seq: u64,
 }
 
 impl Live2dView {
-    pub fn new(model_path: PathBuf) -> Self {
+    pub fn new(model_path: PathBuf, options: SceneOptions) -> Self {
         Self {
             model_path,
+            options,
             now: Instant::now(),
             command: None,
             command_seq: 0,
@@ -55,6 +57,7 @@ impl Live2dView {
 #[derive(Debug)]
 pub struct Live2dPrimitive {
     model_path: PathBuf,
+    options: SceneOptions,
     now: Instant,
     gaze: Option<[f32; 2]>,
     command: Option<(Live2dCommand, u64)>,
@@ -67,6 +70,7 @@ impl shader::Program<Message> for Live2dView {
     fn draw(&self, _state: &(), cursor: mouse::Cursor, bounds: Rectangle) -> Live2dPrimitive {
         Live2dPrimitive {
             model_path: self.model_path.clone(),
+            options: self.options,
             now: self.now,
             gaze: gaze_from_cursor(cursor, bounds),
             command: self.command.map(|command| (command, self.command_seq)),
@@ -124,7 +128,15 @@ impl shader::Primitive for Live2dPrimitive {
         _viewport: &shader::Viewport,
     ) {
         if pipeline.scene.is_none() && pipeline.failure.is_none() {
-            match Live2dScene::load(device, queue, &self.model_path, pipeline.format) {
+            let loaded = Live2dScene::load_with_options(
+                device,
+                queue,
+                &self.model_path,
+                pipeline.format,
+                self.options,
+            );
+
+            match loaded {
                 Ok(mut scene) => {
                     println!(
                         "live2d: loaded {} ({} motions in {} groups, {} expressions, target {:?})",
@@ -133,6 +145,17 @@ impl shader::Primitive for Live2dPrimitive {
                         scene.motion_groups().count(),
                         scene.expression_count(),
                         pipeline.format,
+                    );
+                    println!(
+                        "live2d: tracking ({}) {}",
+                        self.options.tracking,
+                        scene
+                            .rig()
+                            .bindings()
+                            .iter()
+                            .map(|binding| format!("{}={}", binding.slot.name(), binding.parameter))
+                            .collect::<Vec<_>>()
+                            .join(" ")
                     );
                     report_issues(&mut scene);
                     pipeline.scene = Some(scene);

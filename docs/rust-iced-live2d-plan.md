@@ -211,6 +211,34 @@ Cubism Viewer 的默认鼠标跟踪把 `ParamAngleX`/`ParamBodyAngleX` 绑到鼠
 | 每帧变化像素（±1 全程） | 中位 1 931 | 中位 9 554 |
 | 变化中心 y（480 px 画布） | ≈124（脸/头发） | ≈232（胸口，上身整体） |
 
+#### 适配层：`crate::rig` 把“参数名”收敛成“意图”
+
+不同工程对“谁该被外部写”分歧很大（`ParamAngleX` 是输入还是物理输出、有没有
+`PositionX`、有没有 `LeanInput`…），所以绑定不再写死在代码里，而是**按模型解析**：
+
+- 六个语义槽位：`head-yaw` / `head-pitch` / `body-yaw` / `body-lean` / `eye-x` / `eye-y`；
+- 每条解析结果带 `route`（`through-physics` 或 `direct`）和 `source`
+  （`physics-input` / `convention` / `viewer-default`），**为什么这么绑是可打印的**；
+- 判据来自 `physics3.json`：如果约定名（`ParamAngleX`）是某个 setting 的输出，就去用它真正的输入
+  （`AngleX`）；否则直接用约定名。解析器是纯函数，有 5 个单元测试覆盖两种 rig 形态。
+
+两种模式（`SceneOptions::tracking`，或在 app / 所有 example 里用 `LIVE2D_TRACK` 切换）：
+
+| 模式 | 行为 | 实测（±1 全程，每帧变化像素） |
+|---|---|---|
+| `adapted`（默认） | 按工程约定：`AngleX/Y` + `PositionX/Y` → 物理 → `ParamAngle*`/`ParamBodyAngle*` | 中位 **11 593**，头/躯干/头发都动 |
+| `viewer` | 复刻 Cubism Viewer 的默认绑定：`ParamAngleX/Y`、`ParamBodyAngleX` + 眼珠 | 中位 **20**，只有眼珠动——与 Viewer 一致，用于逐像素对照 |
+
+换模型时先跑 `cargo run -p live2d-render --example rig -- <model>`，它不用开 GPU 就能打印两张表：
+
+```
+== adapted ==
+  head-yaw    -> AngleX             through-physics  (physics-input)
+  body-yaw    -> PositionX          through-physics  (physics-input)
+== viewer ==
+  head-yaw    -> ParamAngleX        direct           (viewer-default)
+```
+
 > **已确认并已打补丁**：mocari 0.4.1 的 `evaluate_setting` 把重新绑定后的缓存值当成计算结果写回，
 > 等于 `cache = blend(cache, cache)`，所以物理输出**永远进不了** `parameter_cache`；本模型 **113 处**
 > 跨 setting 读取因此全部失效（`AngleX → ParamAngleX → 前发/后发`、`ParamBodyAngleX → 十余处`、

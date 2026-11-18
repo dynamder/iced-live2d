@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use mocari::assets::load_model_runtime;
 use mocari::expression::load_expression;
+use mocari::json::Physics3;
 use mocari::motion::load_motion;
 use mocari::render::wgpu::{
     WgpuClippingPlan, WgpuClippingResources, WgpuLive2dRenderer, WgpuMaskRenderTarget,
@@ -20,6 +21,7 @@ use wgpu::{CommandEncoder, Device, Queue, TextureFormat, TextureView};
 
 use crate::bounds::ModelBounds;
 use crate::error::{Error, Result};
+use crate::rig::{self, ModelFacts, Rig, Slot, TrackingMode};
 
 /// Default size of the single shared mask render target.
 ///
@@ -52,6 +54,11 @@ pub struct SceneOptions {
     /// Edge length of the shared mask render target. Raise it if a complex rig
     /// shows clipped geometry — packed mask contexts can run out of atlas space.
     pub mask_size: u32,
+    /// Where the cursor writes its angles. [`TrackingMode::Adapted`] follows the
+    /// rig's own conventions; [`TrackingMode::ViewerDefault`] reproduces the
+    /// Cubism Viewer's mouse bindings, which on a physics rig means only the eyes
+    /// respond.
+    pub tracking: TrackingMode,
 }
 
 impl Default for SceneOptions {
@@ -60,18 +67,9 @@ impl Default for SceneOptions {
             texture_scale: 0.5,
             view_fill: DEFAULT_VIEW_FILL,
             mask_size: MASK_TARGET_SIZE,
+            tracking: TrackingMode::default(),
         }
     }
-}
-
-/// Which input set the gaze driver writes, decided once at load time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GazeInputs {
-    /// Rig exporting VTuber tracking inputs: write `AngleX`/`AngleY` and let
-    /// physics derive `ParamAngle*`.
-    Tracking,
-    /// Classic rig without tracking inputs: write `ParamAngle*` directly.
-    Model,
 }
 
 /// A scissor/viewport rectangle in physical target pixels.
@@ -112,9 +110,8 @@ pub struct Live2dScene {
     view_fill: f32,
     fit_aspect: f32,
     motion_cursor: usize,
-    gaze_inputs: GazeInputs,
-    /// Whether the rig exports the body-tracking inputs (`PositionX`/`PositionY`).
-    body_inputs: bool,
+    /// Where the cursor writes, resolved once at load time by [`crate::rig`].
+    rig: Rig,
     physics_enabled: bool,
     profile: bool,
     profile_frames: u32,
@@ -208,14 +205,8 @@ impl Live2dScene {
 
         // Rigs exported for VTuber software drive tracking through AngleX/Y/Z,
         // PositionX/Y/Z and LeanInput; physics then derives ParamAngle*,
-        // ParamBodyAngle* and the rest. Writing ParamAngle* directly on such a
-        // rig is useless: those are physics outputs and are overwritten later in
-        // the same frame.
-        let gaze_inputs = if model.parameter_index("AngleX").is_some() {
-            GazeInputs::Tracking
-        } else {
-            GazeInputs::Model
-        };
+        // ParamBodyAngle* and the rest. The resolver in `crate::rig` works out
+        // which of the two conventions a model uses, from its physics wiring.
 
         let mut motion_groups = motion_paths_by_group(&model, model_dir.as_deref());
         let mut expression_paths = expression_paths(&model, model_dir.as_deref());
@@ -227,6 +218,12 @@ impl Live2dScene {
         // motion and expression files next to the model without listing them in
         // `model3.json`. Fall back to scanning the model directory.
         let mut issues = Vec::new();
+
+        let physics_outputs = physics_output_parameters(&model, model_dir.as_deref(), &mut issues);
+        let rig = rig::resolve(
+            options.tracking,
+            &ModelFacts::new(model.parameter_ids().to_vec(), physics_outputs),
+        );
 
         if let Some(model_dir) = model_dir.as_deref()
             && (motion_groups.is_empty() || expression_paths.is_empty())
@@ -241,9 +238,6 @@ impl Live2dScene {
                 expression_paths = scanned.expressions;
             }
         }
-
-        let body_inputs = model.parameter_index("PositionX").is_some()
-            && model.parameter_index("PositionY").is_some();
 
         let mut scene = Self {
             renderer,
@@ -264,8 +258,7 @@ impl Live2dScene {
             view_fill: options.view_fill,
             fit_aspect: 1.0,
             motion_cursor: 0,
-            gaze_inputs,
-            body_inputs,
+            rig,
             physics_enabled: true,
             profile: std::env::var_os("LIVE2D_PROFILE").is_some(),
             profile_frames: 0,
@@ -373,40 +366,35 @@ impl Live2dScene {
     /// Makes the model look towards a point given in normalized widget space
     /// (`-1.0..=1.0` on both axes, `-1` = left/top).
     ///
-    /// The parameter set follows the model's saved VTube Studio configuration,
-    /// which is what the rig was authored for: head rotation arrives on
-    /// `AngleX`/`AngleY`, body motion on `PositionX`/`PositionY`, and physics
-    /// derives `ParamAngle*` / `ParamBodyAngle*` from them. Writing
-    /// `ParamAngle*` instead is what the Cubism Viewer's generic default does;
-    /// on a physics rig those are outputs, so physics overwrites them and only
-    /// the eyes move.
+    /// Which parameters that means is decided at load time by [`crate::rig`]: a
+    /// rig authored for VTube Studio takes head rotation on `AngleX`/`AngleY` and
+    /// body motion on `PositionX`/`PositionY`, and physics derives
+    /// `ParamAngle*`/`ParamBodyAngle*` from them. Under
+    /// [`TrackingMode::ViewerDefault`] the conventional `ParamAngle*` names are
+    /// written instead, which on such a rig only moves the eyes — the same thing
+    /// the Cubism Viewer does with its default bindings.
     pub fn set_gaze(&mut self, gaze: [f32; 2]) {
         let x = gaze[0].clamp(-1.0, 1.0);
         let y = gaze[1].clamp(-1.0, 1.0);
 
-        let runtime = &mut self.model;
+        let Self {
+            model, rig, dirty, ..
+        } = self;
 
-        match self.gaze_inputs {
-            GazeInputs::Tracking => {
-                set_tracking_input(runtime, "AngleX", x);
-                set_tracking_input(runtime, "AngleY", y);
-
-                if self.body_inputs {
-                    set_tracking_input(runtime, "PositionX", x);
-                    set_tracking_input(runtime, "PositionY", y);
-                }
-            }
-            GazeInputs::Model => {
-                set_tracking_input(runtime, "ParamAngleX", x);
-                set_tracking_input(runtime, "ParamAngleY", y);
-                set_tracking_input(runtime, "ParamBodyAngleX", x);
+        for (slot, value) in [
+            (Slot::HeadYaw, x),
+            (Slot::HeadPitch, y),
+            (Slot::BodyYaw, x),
+            (Slot::BodyLean, y),
+            (Slot::EyeX, x),
+            (Slot::EyeY, y),
+        ] {
+            if let Some(binding) = rig.binding(slot) {
+                set_tracking_input(model, &binding.parameter, value);
             }
         }
 
-        set_tracking_input(runtime, "ParamEyeBallX", x);
-        set_tracking_input(runtime, "ParamEyeBallY", y);
-
-        self.dirty = true;
+        *dirty = true;
     }
 
     /// Records the mask pass and the visible model pass into `encoder`.
@@ -556,6 +544,11 @@ impl Live2dScene {
     /// Every parameter id, in model order. Diagnostics and tests only.
     pub fn parameter_ids(&self) -> &[String] {
         self.model.parameter_ids()
+    }
+
+    /// Where the cursor writes, as resolved for this model at load time.
+    pub fn rig(&self) -> &Rig {
+        &self.rig
     }
 
     /// Enables or disables physics evaluation (diagnostics / still frames).
@@ -789,6 +782,46 @@ fn expression_paths(runtime: &mocari::ModelRuntime, model_dir: Option<&Path>) ->
 struct ScannedSidecars {
     motions: Vec<PathBuf>,
     expressions: Vec<PathBuf>,
+}
+
+/// Every parameter a physics setting writes, i.e. the ones a host must not drive.
+///
+/// Read from the `physics3.json` the model references. A missing or unparsable
+/// file yields an empty set — the resolver then falls back to the conventional
+/// names — but it is reported rather than silently ignored.
+fn physics_output_parameters(
+    model: &ModelRuntime,
+    model_dir: Option<&Path>,
+    issues: &mut Vec<Error>,
+) -> Vec<String> {
+    let (Some(dir), Some(file)) = (model_dir, model.model().physics()) else {
+        return Vec::new();
+    };
+
+    let path = dir.join(file);
+
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(source) => {
+            issues.push(Error::PhysicsFile { path, source });
+            return Vec::new();
+        }
+    };
+
+    let physics = match Physics3::from_json_str(&source) {
+        Ok(physics) => physics,
+        Err(_) => {
+            issues.push(Error::PhysicsParse { path });
+            return Vec::new();
+        }
+    };
+
+    physics
+        .settings()
+        .iter()
+        .flat_map(|setting| setting.outputs())
+        .map(|output| output.destination().id().to_owned())
+        .collect()
 }
 
 /// Walks the model directory looking for `.motion3.json` / `.exp3.json` files.

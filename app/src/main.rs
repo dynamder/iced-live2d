@@ -7,6 +7,7 @@ use iced::keyboard;
 use iced::widget::shader;
 use iced::window;
 use iced::{Fill, Size, Subscription, Task, Widget};
+use live2d_render::{SceneOptions, TrackingMode};
 
 use live2d::{Live2dCommand, Live2dView};
 
@@ -26,14 +27,23 @@ fn main() -> iced::Result {
         );
     }
 
-    iced::application(move || App::new(model_path.clone()), App::update, App::view)
-        .title("Live2D · iced 0.15-dev + mocari")
-        .subscription(App::subscription)
-        .window(window::Settings {
-            size: Size::new(640.0, 640.0),
-            ..window::Settings::default()
-        })
-        .run()
+    let options = SceneOptions {
+        tracking: tracking_from_env(),
+        ..SceneOptions::default()
+    };
+
+    iced::application(
+        move || App::new(model_path.clone(), options),
+        App::update,
+        App::view,
+    )
+    .title("Live2D · iced 0.15-dev + mocari")
+    .subscription(App::subscription)
+    .window(window::Settings {
+        size: Size::new(640.0, 640.0),
+        ..window::Settings::default()
+    })
+    .run()
 }
 
 struct App {
@@ -48,9 +58,9 @@ enum Message {
 }
 
 impl App {
-    fn new(model_path: PathBuf) -> Self {
+    fn new(model_path: PathBuf, options: SceneOptions) -> Self {
         Self {
-            view: Live2dView::new(model_path),
+            view: Live2dView::new(model_path, options),
         }
     }
 
@@ -88,4 +98,17 @@ impl App {
             }),
         ])
     }
+}
+
+/// `LIVE2D_TRACK=viewer` reproduces the Cubism Viewer's own mouse bindings;
+/// anything else (or nothing) resolves the rig's conventions.
+fn tracking_from_env() -> TrackingMode {
+    let Ok(raw) = std::env::var("LIVE2D_TRACK") else {
+        return TrackingMode::default();
+    };
+
+    raw.parse().unwrap_or_else(|error| {
+        eprintln!("live2d: {error}; using adapted tracking");
+        TrackingMode::default()
+    })
 }

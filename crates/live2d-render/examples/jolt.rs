@@ -24,6 +24,8 @@ use live2d_render::{ClipRect, Live2dScene, SceneOptions};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
+#[path = "shared/knobs.rs"]
+mod knobs;
 #[path = "shared/render.rs"]
 mod render;
 
@@ -52,6 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format,
         SceneOptions {
             texture_scale: 0.5,
+            tracking: knobs::tracking()?,
             ..SceneOptions::default()
         },
     )?;

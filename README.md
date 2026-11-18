@@ -100,6 +100,31 @@ cargo run --release -p live2d-render --example offscreen -- \
 | `SWEEP_DIRECT`, `SWEEP_RANGE`, `SWEEP_ALL`, `SWEEP_JUMP`, `SWEEP_SETTLE` | `sweep` | drive one parameter instead of the gaze, input range, watch every parameter, jump threshold, settle frames |
 | `JOLT_MOTION`, `JOLT_RANGE`, `JOLT_SIZE`, `JOLT_SETTLE` | `jolt` | keep the idle motion, input range, capture size, settle frames |
 
+`LIVE2D_TRACK` picks how the cursor reaches the model, for the app and every
+example:
+
+- `adapted` (default) — resolve what the rig was authored for. A rig built for
+  VTube Studio takes head rotation on `AngleX`/`AngleY` and body motion on
+  `PositionX`/`PositionY`; physics then derives `ParamAngle*` and
+  `ParamBodyAngle*`. Measured on the rig in this repo: 11 593 changed pixels per
+  frame across a full sweep (head, torso, hair, tail).
+- `viewer` — reproduce the Cubism Viewer's own mouse bindings
+  (`ParamAngleX`/`ParamAngleY`/`ParamBodyAngleX` + the eyes). Those are *physics
+  outputs*, so physics overwrites them and only the eyes respond: 20 changed
+  pixels per frame. Use this when comparing frames against the Viewer.
+
+`examples/rig` prints both tables for a model in a second, without a GPU:
+
+```
+$ cargo run -p live2d-render --example rig -- "…/大肥鱼.model3.json"
+== adapted ==
+  head-yaw    -> AngleX             through-physics  (physics-input)
+  body-yaw    -> PositionX          through-physics  (physics-input)
+  eye-x       -> ParamEyeBallX      direct           (convention)
+== viewer ==
+  head-yaw    -> ParamAngleX        direct           (viewer-default)
+```
+
 ## Other examples
 
 | Example | Answers |
@@ -110,6 +135,7 @@ cargo run --release -p live2d-render --example offscreen -- \
 | `switch <model> <Param> <v0> <v1>` | which drawables a parameter flips, and their metadata |
 | `sweep` | what physics does along a horizontal gaze sweep, at 60 fps |
 | `jolt` | how many pixels change per frame during a slow sweep, and where |
+| `rig` | how cursor tracking is routed for a model, in both modes — no GPU needed |
 | `offscreen` | one frame to a PNG, no window |
 
 `sweep` is the fastest way to check a tracking bug: it prints the input parameter
@@ -230,14 +256,13 @@ not need changes.
   `Primitive::render`, because the mask pass has to be inserted between the
   passes iced controls.
 - **Textures need mipmaps** — see patch 2 above.
-- **Mouse tracking follows the model's own VTube Studio setup, not the Cubism
-  Viewer's default.** `*.vtube.json` next to the model maps face rotation onto
-  `AngleX`/`AngleY` (head) *and* `PositionX`/`PositionY` (body), plus
-  `ParamEyeBallX`/`Y`; physics derives `ParamAngle*` and `ParamBodyAngle*`. The
-  Viewer's generic default binds `ParamAngleX`/`ParamBodyAngleX` instead — on a
-  physics rig those are *outputs*, so with physics on they get overwritten and only
-  the eyes move. Driving `PositionX` is what makes the torso and arms swing, and it
-  is why this renderer looks alive with physics on where the Viewer does not.
+- **Mouse tracking is resolved per model, not hardcoded.** `live2d-render/src/rig.rs`
+  maps six slots (head yaw/pitch, body yaw/lean, eyes) onto whatever the rig
+  exposes. A rig built for VTube Studio takes `AngleX`/`AngleY` and
+  `PositionX`/`PositionY` because its `ParamAngle*` parameters are physics
+  outputs; a classic rig takes the `Param*` names directly. The choice is decided
+  from `physics3.json`, printed at load and inspectable with `examples/rig`.
+  `LIVE2D_TRACK=viewer` forces the Cubism Viewer's own binding set instead.
 
 ## Troubleshooting (this machine only)
 
