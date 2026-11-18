@@ -58,7 +58,7 @@ struct App {
     status: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Message {
     Live2d(usize, Live2dEvent),
     Key(keyboard::Event),

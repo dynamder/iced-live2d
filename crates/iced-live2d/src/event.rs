@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use live2d_render::Error;
 
@@ -10,7 +11,7 @@ use live2d_render::Error;
 /// Delivered one frame late: the render layer cannot publish a message while it
 /// is preparing a frame, so it hands events to the widget and the next `update`
 /// publishes them.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Live2dEvent {
     /// The model is loaded and is drawn from this frame on.
     ModelLoaded {
@@ -34,7 +35,9 @@ pub enum Live2dEvent {
     },
     /// A motion played to its end.
     ///
-    /// Auto-played motions are reported too, so a host that cycles motions by
+    /// Only clips the model marks `Loop: false` end at all — a looping clip never
+    /// finishes by design, so a host that cycles looping clips has to time them
+    /// itself. Auto-played one-shots are reported too, so a host that cycles by
     /// index stays in step with the model.
     MotionFinishedPlaying {
         /// The motion that ended.
@@ -54,21 +57,24 @@ pub struct ModelSummary {
 }
 
 /// Which model failed to load, and why.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LoadFailure {
     /// The `.model3.json` that was asked for.
     pub path: PathBuf,
     /// The failure itself.
-    pub error: Error,
+    ///
+    /// Shared so events stay cloneable, which hosts commonly want from their
+    /// message type.
+    pub error: Arc<Error>,
 }
 
 /// A problem that did not stop playback.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Problem {
     /// The render layer could not do something it was asked to do.
     Renderer {
-        /// What went wrong.
-        error: Error,
+        /// What went wrong. Shared so events stay cloneable.
+        error: Arc<Error>,
     },
     /// The host queued more than 64 commands before the render layer took them.
     ///

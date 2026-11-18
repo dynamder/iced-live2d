@@ -89,7 +89,9 @@ impl shader::Primitive for Live2dPrimitive {
 
         for issue in ready.scene.take_issues() {
             self.send(Live2dEvent::ModelReportedProblem {
-                problem: Problem::Renderer { error: issue },
+                problem: Problem::Renderer {
+                    error: Arc::new(issue),
+                },
             });
         }
 
@@ -123,7 +125,9 @@ impl shader::Primitive for Live2dPrimitive {
             Err(error) => {
                 if !ready.render_problem.swap(true, Ordering::Relaxed) {
                     self.send(Live2dEvent::ModelReportedProblem {
-                        problem: Problem::Renderer { error },
+                        problem: Problem::Renderer {
+                            error: Arc::new(error),
+                        },
                     });
                 }
             }
@@ -164,7 +168,7 @@ impl Live2dPrimitive {
                 self.send(Live2dEvent::ModelFailedToLoad {
                     failure: LoadFailure {
                         path: self.path.as_ref().clone(),
-                        error,
+                        error: Arc::new(error),
                     },
                 });
 
@@ -221,7 +225,9 @@ impl Ready {
         self.last_problem = Some(message);
 
         let _ = events.send(Live2dEvent::ModelReportedProblem {
-            problem: Problem::Renderer { error },
+            problem: Problem::Renderer {
+                error: Arc::new(error),
+            },
         });
     }
 }
