@@ -96,16 +96,22 @@ widget 侧读）。前者用单线程容器，后者用通道，全链路没有�
 ```rust
 pub struct Live2dPrimitive {
     id: u64,
-    model_path: Arc<PathBuf>,
+    path: Arc<PathBuf>,
     settings: RenderSettings,
-    look_at: Option<[f32; 2]>,      // 本帧的目标（来自 look_at 函数或 model.look_at）
-    commands: Vec<Command>,          // 本帧要执行的动作
+    look_at: Option<[f32; 2]>,      // 本帧解析后的目标（look_at 函数 or model.look_at）
+    look_at_mode: LookAtMode,
     physics_enabled: bool,
     paused: bool,
+    fill: f32,
+    commands: Vec<Command>,          // 本帧要执行的动作
     presence: Arc<Presence>,         // RAII 令牌
     events: crossbeam_channel::Sender<Live2dEvent>,
 }
 ```
+
+`look_at_mode` / `physics_enabled` / `fill` 是**期望状态**而不是"命令"：pipeline 每帧把它们和
+scene 的现状对齐（三个 setter 都是幂等的，值没变就直接返回），所以宿主可以随时改，
+不需要自己记"上次设过什么"。
 
 时间：`prepare` 里用 `Instant::now()` 自测 delta。`Live2dScene::advance` 已经是固定 1/60 s 步进，
 时钟不精确只会少走一步，不会破坏姿势，所以组件不需要宿主喂时间。
@@ -181,31 +187,39 @@ Live2dModel::builder(path)
     .build();
 ```
 
-### 4.3 运行期控制（`&self` 链式，`!Clone`）
+### 4.3 运行期控制（`&self`，全部经 `Cell` / `RefCell`）
 
 ```rust
 impl Live2dModel {
     /// 让角色看向控件坐标系里的一点：`-1.0..=1.0`，原点在控件中心，`+y` 朝上。
-    /// 具体写哪几个参数由 rig 在加载时解析（见 `LookAtMode`）。
-    pub fn look_at(&self, target: [f32; 2]) -> &Self;
+    /// 具体写哪几个参数由 rig 解析（见 `LookAtMode`）。值一直保留到下次调用。
+    pub fn look_at(&self, target: [f32; 2]);
 
-    /// 追踪参数写入口径。切换会清掉旧的参数覆盖并重新解析 rig。
-    pub fn look_at_mode(&self, mode: LookAtMode) -> &Self;
+    /// 当前写入口径；切换会清掉旧的参数覆盖并重新解析 rig。
+    pub fn look_at_mode(&self) -> LookAtMode;
+    pub fn set_look_at_mode(&self, mode: LookAtMode);
 
-    pub fn set_physics_enabled(&self, enabled: bool) -> &Self;
+    pub fn physics_enabled(&self) -> bool;
+    pub fn set_physics_enabled(&self, enabled: bool);
 
-    /// 暂停：组件不再请求重绘，也不再推进时间。
-    pub fn pause(&self) -> &Self;
-    pub fn resume(&self) -> &Self;
+    /// 暂停：组件不再请求重绘，也不再推进时间；暂停期间流逝的时间不会被补播。
+    pub fn pause(&self);
+    pub fn resume(&self);
+    pub fn is_paused(&self) -> bool;
 
-    pub fn play_motion(&self, motion: Motion) -> &Self;
-    pub fn play_expression(&self, expression: Expression) -> &Self;
-    pub fn stop_motion(&self) -> &Self;
+    /// 按 model 自己的顺序取下标（`ModelSummary::motions` 报告的就是这个顺序）。
+    pub fn play_motion(&self, index: usize);
+    pub fn play_expression(&self, index: usize);
+    pub fn stop_motion(&self);
 
-    /// 还有多少命令没被消费（诊断用）。
-    pub fn pending_commands(&self) -> usize;
+    pub fn path(&self) -> &PathBuf;
+    pub fn settings(&self) -> RenderSettings;
 }
 ```
+
+方法都返回 `()`，不返回 `&Self`：模型不是构建器，`model.play_motion(3)` 读起来就是一条命令。
+命令都在 `RefCell<VecDeque<Command>>` 里排队（上限 64，溢出丢最旧并计一次
+`Problem::CommandQueueOverflow`），组件每帧取走；取命令的入口是 crate 私有的，宿主不该自己去掏队列。
 
 ### 4.4 控件
 
@@ -227,18 +241,22 @@ impl<'a, Message> Live2d<'a, Message> {
 
 - `impl Program<Message> for Live2d<'_, Message>`：回调存 `Option<Rc<dyn Fn(Live2dEvent) -> Message + 'a>>`
   （`Box` 不行：`Widget` 转发需要一个可克隆的临时值）。
-- `impl Widget<Message, Theme, Renderer> for Live2d<'_, Message> where Renderer: shader::primitive::Renderer`：
-  **委托给 iced 的 `shader::Shader`**，不复制它的 tag/state/layout 逻辑。因此只支持 wgpu 后端
-  （tiny-skia 后端无 `shader`）。
-- 用法与原生控件同构：
+- `impl Widget<Message, Theme, Renderer> for Live2d<'_, Message>`：**委托给 iced 的 `shader::Shader`**，
+  不复制它的 tag/state/layout 逻辑。因此只支持 wgpu 后端（tiny-skia 后端无 `shader`）。
+  绑定写成 `where shader::Shader<Message, Self>: Widget<Message, Theme, Renderer>`：真正需要的
+  `Renderer: shader::primitive::Renderer` 在 iced 里是私有模块，外部 crate 写不出来，用这条等价约束绕开。
+  该 crate 必须启用 iced 的 `advanced` feature，否则 `Shell` 等 trait 类型不可达。
+- 用法与原生控件同构（iced master 没有 `From<Widget> for Element`，所以进树靠 `column!` / `row!` /
+  `Widget::_boxed`，不要写 `.into()`）：
 
 ```rust
-live2d(&self.hiyori)
-    .on_event(Message::Live2d)
-    .look_at(look_at::cursor)
-    .width(Fill)
-    .height(Fill)
-    .into()
+column![
+    live2d(&self.hiyori)
+        .on_event(Message::Live2d)
+        .look_at(look_at::cursor)
+        .width(Fill)
+        .height(Fill)
+]
 ```
 
 ### 4.5 LookAt 输入
@@ -258,7 +276,8 @@ pub mod look_at {
 
 1. 每帧在 `draw` 里被调用一次（只有那里同时有 `mouse::Cursor` 和 `bounds`；宿主拿不到 bounds）。
 2. 返回 `Some(p)`：本帧 LookAt 目标就是 `p`；返回 `None`（光标在控件外）：回落到
-   `Live2dModel::look_at` 设过的值，没设过则保持默认朝向。
+   `Live2dModel::look_at` 设过的值，没设过则回到正前方 `[0.0, 0.0]`。也就是说配了 source 就等于
+   把视线交给它，光标离开不会把角色定在最后一次的边缘角度上。
 3. 传自定义函数即完全接管（例如只跟随水平方向、加阻尼）。是 `fn` 指针而非闭包，没有所有权噪音。
 
 ### 4.6 事件与载荷
@@ -266,12 +285,19 @@ pub mod look_at {
 ```rust
 pub struct ModelSummary { pub motions: usize, pub motion_groups: usize, pub expressions: usize }
 pub struct LoadFailure { pub path: PathBuf, pub error: Error }      // Error = live2d_render::Error
-pub struct Problem { pub error: Error }
 pub struct MotionId { pub index: usize }
+
+pub enum Problem {
+    /// 渲染层拒绝或做不到宿主请求的事。
+    Renderer { error: Error },
+    /// 宿主排队超过 64 条命令，最旧的被丢弃。
+    CommandQueueOverflow { dropped: usize },
+}
 ```
 
-- 载荷携带**类型化的错误**（`live2d_render::Error`），不转成 `String`：宿主可以 `match`。
-  若该类型不满足 `Send + Sync`（通道要求），退化为 `Arc<Error>` 或字符串——实现时确认并在此更新。
+- 载荷携带**类型化的错误**（`live2d_render::Error`，已确认满足 `Send + Sync`，不需要 `Arc` / 字符串）。
+- `Problem` 是枚举而不是 `{ error: Error }` 结构体：命令队列溢出没有对应的渲染层错误，
+  硬塞一个假的 `Error` 变体是往渲染层里掺组件策略。
 - 加载状态不在模型上暴露：宿主用 `ModelLoaded` / `ModelFailedToLoad` 自己维护 UI 状态
   （Elm 的单一真相在宿主）。
 - 事件**晚一帧**到达：`prepare` 无 `Shell`，只能在下一次 `update` 里 `publish`。
@@ -289,7 +315,7 @@ pub struct MotionId { pub index: usize }
 | 4   | `RenderSettings`                                    | `ModelSettings`：Cubism 的 "model setting" 专指 `model3.json`；`SceneOptions`：那是 renderer 内部装载参数，不该整体暴露               |
 | 5   | `look_at` / `look_at::cursor`                       | `gaze`：6 个槽里只有 2 个是眼睛，且 `set_gaze` 是渲染层内部叫法；`follow_cursor`：那是一个 target 实现，不是行为                                  |
 | 6   | 光标跟随**默认关闭**，显式 `.look_at(look_at::CURSOR)`         | 默认跟随：与 iced "显式优先"哲学冲突，且用户看不见这个行为                                                                                |
-| 7   | 控件实现 `Widget`，`.into()` 走 iced 的泛型转换                | 自定义 `impl From<Live2d> for Element` + `.map()`：不是 iced 的写法                                                       |
+| 7   | 控件实现 `Widget`，用 `column!` / `Widget::_boxed` 进树           | `.into()`：iced master 没有 `From<Widget> for Element`；自定义 `impl From<Live2d> for Element` + `.map()` 能编译但和 iced 自己的控件不一致 |
 | 8   | 委托给 `shader::Shader` 实现 `Widget`                    | 复制 `Shader` 的 70 行实现：两份真相                                                                                        |
 | 9   | `from_path` + typestate builder **都保留**             | 只留 builder：缺设置只能靠运行时 `Err`；只留 `from_path`：失去链式风格与逐项 override 的可读性（用户选择两者并存）                                      |
 | 10  | builder 的 base 必须显式传入（`builder(path).settings(..)`） | `builder(path, settings)` 或带默认值的 builder：后者会掩盖未设置的字段                                                             |
@@ -302,6 +328,9 @@ pub struct MotionId { pub index: usize }
 | 17  | 事件载荷用类型化错误                                          | `String`：丢掉可 `match` 的信息                                                                                         |
 | 18  | 控件方法与模型方法同名 `look_at`                               | 前者是"每帧从哪儿取目标"（`Live2d::look_at(LookAtSource)`），后者是"目标是多少"（`Live2dModel::look_at([f32;2])`）：同一个动词，参数类型区分，读起来是同一件事 |
 | 19  | 不把 macOS/Linux 之外的平台拆开                              | 组件只依赖 iced + wgpu，平台问题沿用 iced                                                                                    |
+| 20  | v1 的加载是同步的：`prepare` 里直接 `load`，只有 `Ready` / `Failed` 两种槽位 | 后台解码（Phase 3）已预留通道；把 `Loading` 枚举先写出来但永远观察不到，等于给读者撒谎                                                        |
+| 21  | 下一帧的截止时间是 `now + STEP/2`                            | `now + STEP`：iced 把重绘请求量化到显示器刷新网格并**向上取整**，正好一个周期的截止时间会被推到下一格，帧率直接减半（实测 33.3 ms/帧 → 16.7 ms/帧）                     |
+| 22  | 命令队列的取用入口是 crate 私有的                                   | 公开 `pending_commands()`：宿主一旦自己去掏队列，组件和宿主就都以为命令归自己所有                                                                         |
 
 ---
 
@@ -309,7 +338,7 @@ pub struct MotionId { pub index: usize }
 
 每一步都必须独立可验证、独立提交，验不过不进下一步。
 
-进度：Step 1 ✅ `4d22f71` · Step 2–4 未开始。
+进度：Step 1 ✅ `4d22f71` · Step 2 + 3 ✅ `f11fa22`（一并落地，原因见 Step 2/3）· Step 4 未开始。
 
 ### Step 1 · `live2d-render` 术语对齐与两个新入口（不改行为）
 
@@ -349,6 +378,13 @@ crates/iced-live2d/
 
 提交：`feat(iced-live2d): model object, settings and look-at source`
 
+实测：10 个单元测试（构造不碰文件、命令顺序、队列溢出计一次、`look_at` 最后写入值胜、pause/physics
+回读、每个模型 id 与 `Presence` 唯一……）。**Step 2 与 Step 3 合并成一个提交**（`f11fa22`）：
+单单 Step 2 的代码在 `clippy --all-targets` 下是一片 `dead_code`——模型对象的所有面向控件的入口
+（`drain_commands`、`presence`、队列与 `Presence` 字段）只有 widget 会读，拆开提交等于故意交一个
+半成品中间态。计划里"两步各自可验证"的意图没有丢：单元测试不依赖 GPU，`examples/minimal`
+才是 GPU 那一半。
+
 ### Step 3 · 控件 + primitive + pipeline
 
 ```
@@ -357,8 +393,9 @@ crates/iced-live2d/
   examples/minimal.rs
 ```
 
-- `update`：drain 接收端 → `Action::publish`；`RedrawRequested(now)` → 未暂停时
-  `Action::request_redraw_at(now + STEP)`。
+- `update`：drain 接收端 → `Action::publish`（一条消息一个 `Action`，多出来的排队等下一帧，
+  `publish` 本身会带来重绘所以队列会自己排空）；`RedrawRequested(now)` → 未暂停时
+  `Action::request_redraw_at(now + STEP/2)`（见决策 21）。
 - `draw`：从 `&Live2dModel` 取纯数据快照（含 LookAt 目标、命令、`LookAtSource` 的结果）放进 Primitive。
 - `prepare`：按 id 找/建 `Slot`，`Instant::now()` 算 delta 调 `advance`；加载失败 → 推事件 + 状态置
   `Failed` 不再重试。
@@ -372,6 +409,21 @@ crates/iced-live2d/
 `fmt` 干净、所有 pub item 有 doc。
 
 提交：`feat(iced-live2d): render a model as a shader widget`
+
+实测：
+- ① 窗口截图确认 Hiyori 在播（`LIVE2D_PROFILE` 每帧 1.00 步）。
+- ② 光标移到左半区 → 头/眼转向左；移到右半区 → Hiyori 回正、Wanko 转向左；移到状态栏（两个控件外）
+  → 都回正。截图 `.tmp-after/s2-left.png`、`s3-right.png`、`s4-outside.png` 三张对比。
+- ③ `R` 经队列下发，未产生任何 problem 事件；`E` 在 0 expression 的模型上被宿主跳过。
+- ④ 同窗口两个模型各自加载、各自 60 fps（截图 `two.png`）。
+- ⑤ 按 `2` drop 第二个模型：画面即刻只剩一个，日志打印 `model 2 dropped`，槽位在下一帧 `trim` 回收。
+- ⑥ release，`LIVE2D_PROFILE`：大肥鱼 `rebuild 1.9–2.2 ms + upload 0.55–0.61 ms`（≤5 ms）；
+  Haru `0.20 + 0.15 ms`（≤1 ms）；两者 `delta` 均值 16.7 ms、每帧 1.00 步。
+- ⑦ 不存在的路径 → 宿主打印
+  `model 1 failed to load …: failed to load Live2D model assets: failed to read …`，只报一次、不重试。
+- ⑧ `cargo clippy --workspace --all-targets` 0 告警、`cargo fmt --check` 干净、`missing_docs` 无告警。
+- 额外：`p` 暂停期间 `LIVE2D_PROFILE` 行不再增长（7 → 7），恢复后继续（7 → 9），证明自驱动帧
+  由组件而不是宿主驱动。
 
 ### Step 4 · `app` 迁移 + 文档
 
@@ -412,6 +464,8 @@ wasm。
 | drop 后晚一帧释放显存        | scene 在下一帧 `trim` 回收                                                                          |
 | 自驱动帧与宿主重绘请求共享槽位      | `RedrawRequest` 是单槽，"后设置者胜"：用本组件时不要再订阅 `window::frames()`                                     |
 | 多控件共享一个模型            | 同一帧会被 prepare 两次；`Stepper` 保证第二次是无操作。v1 允许但写入文档                                               |
+| 首次绘制阻塞一帧             | 同步加载：贴图上传几百毫秒，期间 UI 线程不响应。异步解码是 Phase 3（通道与 `Slot` 都留好了口子）                                      |
+| 重绘节奏假设 60 Hz 网格        | `STEP/2` 的提前量对任何刷新率都落在"下一格"内；显示器刷新率低于 60 Hz 时组件跟着降频（模型仍然按墙钟时间推进）                                                     |
 
 ---
 
@@ -426,3 +480,13 @@ wasm。
    触发重派发；实现时要守的纪律是：**不要每帧 `publish` 消息**，只在真有事件时发。
 3. `Shader` 的 `Widget` 方法转发在 `Rc` 回调下的可克隆性（`Live2d: Clone` 是否成立）。
 4. `crossbeam-channel` 版本锁定（当前 0.5.x）。
+
+结论（Step 2/3 落地时核对）：
+
+1. `live2d_render::Error` 满足 `Send + Sync`（其 source 只有 `io::Error` / `image::ImageError` /
+   字符串），事件载荷直接携带它，不需要 `Arc` / `String` 退化。
+2. 自驱动帧不会触发重派发；每帧只 `request_redraw_at`，只有真有事件时才 `publish`。
+3. 成立：`on_event` 存 `Option<Rc<dyn Fn …>>`，`Widget` 每帧用 `self.clone()` 造一个临时
+   `shader::Shader` 转发即可。
+4. `crossbeam-channel 0.5.17`。注意：仓库离线解析会把一批无关依赖降级，加依赖后要手工把
+   `Cargo.lock` 收敛回原版本（只加新包），并用 `cargo build --locked` 验证。
