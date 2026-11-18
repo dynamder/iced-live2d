@@ -7,6 +7,7 @@
 //! cargo run -p live2d-render --example probe -- <model> <x> <y> [ParamId=value ...]
 
 use live2d_render::mocari::assets::load_model_runtime;
+use live2d_render::mocari::moc3::Moc3DrawableMesh;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -75,8 +76,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Coarse point-in-drawable test: inside the drawable's bounding box.
-fn covers(mesh: &moc3_mesh::Mesh, x: f32, y: f32) -> bool {
+/// Coarse containment test: the point is inside the drawable's bounding box.
+fn covers(mesh: &Moc3DrawableMesh, x: f32, y: f32) -> bool {
     let mut min = [f32::MAX; 2];
     let mut max = [f32::MIN; 2];
 
@@ -89,8 +90,4 @@ fn covers(mesh: &moc3_mesh::Mesh, x: f32, y: f32) -> bool {
     }
 
     x >= min[0] && x <= max[0] && y >= min[1] && y <= max[1]
-}
-
-mod moc3_mesh {
-    pub use live2d_render::mocari::moc3::Moc3DrawableMesh as Mesh;
 }

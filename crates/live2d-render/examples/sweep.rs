@@ -5,11 +5,19 @@
 //! normalisation branch shows up as a visible jolt.
 //!
 //! cargo run -p live2d-render --example sweep -- <model.model3.json> [frames]
+//!
+//! `SWEEP_DIRECT=<ParamId>` bypasses gaze tracking and writes that parameter
+//! directly (in `-1.0..=1.0`), which is how a broken physics chain is told apart
+//! from a value that never reaches physics. See
+//! `docs/mocari-suspected-physics-chaining.md`.
 
 use std::time::Duration;
 
 use live2d_render::wgpu;
 use live2d_render::{Live2dScene, SceneOptions};
+
+#[path = "shared/mod.rs"]
+mod shared;
 
 const TRACKED: &[&str] = &[
     "AngleX",
@@ -30,21 +38,13 @@ fn drive(scene: &mut Live2dScene, direct: &Option<String>, x: f32) {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let model_path = args.next().ok_or("usage: sweep <model> [frames]")?;
-    let frames: usize = args.next().map(|v| v.parse()).transpose()?.unwrap_or(240);
+    let frames: usize = args
+        .next()
+        .map(|value| value.parse())
+        .transpose()?
+        .unwrap_or(240);
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    }))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("sweep.device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
-        ..Default::default()
-    }))?;
+    let shared::Gpu { device, queue } = shared::open()?;
 
     let mut scene = Live2dScene::load_with_options(
         &device,
@@ -60,11 +60,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let direct = std::env::var("SWEEP_DIRECT").ok();
 
     scene.stop_motion();
+
     // Let physics settle at the left extreme before the sweep starts.
     for _ in 0..60 {
         drive(&mut scene, &direct, -1.0);
         scene.advance(&device, &queue, Duration::from_millis(16))?;
     }
+
+    report_issues(&mut scene);
 
     println!("frame\tangle_x\t{}", TRACKED.join("\t"));
 
@@ -106,4 +109,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn report_issues(scene: &mut Live2dScene) {
+    for issue in scene.take_issues() {
+        eprintln!("{issue}");
+    }
 }

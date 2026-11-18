@@ -6,11 +6,25 @@
 //! `docs/rust-iced-live2d-plan.md`.
 //!
 //! cargo run -p live2d-render --example offscreen -- <model.model3.json> [out.png] [size] [steps]
+//!
+//! Every knob below is optional and exists so a capture is reproducible from the
+//! command line alone. The documented list lives in `README.md`.
+//!
+//! - `LIVE2D_TEXTURE_SCALE` f32, upload resolution multiplier (default 1.0)
+//! - `LIVE2D_MASK` u32, mask render target edge (default 1024)
+//! - `LIVE2D_MOTION`, `LIVE2D_EXPR` usize, motion / expression index to apply
+//! - `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`,
+//!   `LIVE2D_RECLIP` — flags, active when the variable is present
+//! - `LIVE2D_GAZE` "x,y" in `-1.0..=1.0`
+//! - `LIVE2D_PROFILE` — flag, prints per-frame CPU and upload cost
 
 use std::time::Duration;
 
 use live2d_render::wgpu;
 use live2d_render::{ClipRect, Live2dScene, SceneOptions};
+
+#[path = "shared/mod.rs"]
+mod shared;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -30,57 +44,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(30);
     let frame_time = Duration::from_millis(16);
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    }))?;
-    println!("adapter: {}", adapter.get_info().name);
-
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("offscreen.device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
-        ..Default::default()
-    }))?;
+    let shared::Gpu { device, queue } = shared::open()?;
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let options = SceneOptions {
-        texture_scale: env_f32("LIVE2D_TEXTURE_SCALE").unwrap_or(1.0),
-        mask_size: env_usize("LIVE2D_MASK").map(|v| v as u32).unwrap_or(1024),
+        texture_scale: env_f32("LIVE2D_TEXTURE_SCALE")?.unwrap_or(1.0),
+        mask_size: env_u32("LIVE2D_MASK")?.unwrap_or(1024),
         ..SceneOptions::default()
     };
+
     let mut scene = Live2dScene::load_with_options(&device, &queue, &model_path, format, options)?;
     scene.resize(&queue, 1.0);
 
-    // Deterministic state control for diagnostics.
-    if let Some(index) = env_usize("LIVE2D_MOTION") {
+    if let Some(index) = env_usize("LIVE2D_MOTION")? {
         scene.play_motion(index);
     }
-    if let Some(index) = env_usize("LIVE2D_EXPR") {
+    if let Some(index) = env_usize("LIVE2D_EXPR")? {
         scene.play_expression(index);
     }
-    if env_usize("LIVE2D_CLEAR_EXPR").is_some() {
+    if env_flag("LIVE2D_CLEAR_EXPR") {
         scene.clear_expressions();
     }
-    if env_usize("LIVE2D_NO_MOTION").is_some() {
+    if env_flag("LIVE2D_NO_MOTION") {
         scene.stop_motion();
     }
-    if env_usize("LIVE2D_NO_PHYSICS").is_some() {
+    if env_flag("LIVE2D_NO_PHYSICS") {
         scene.set_physics_enabled(false);
     }
-    if let Ok(gaze) = std::env::var("LIVE2D_GAZE") {
-        let parts: Vec<f32> = gaze
-            .split(',')
-            .filter_map(|value| value.trim().parse().ok())
-            .collect();
-        if parts.len() == 2 {
-            scene.set_gaze([parts[0], parts[1]]);
-        }
+    if let Some(gaze) = env_gaze()? {
+        scene.set_gaze(gaze);
     }
-    let reclip_every_frame = env_usize("LIVE2D_RECLIP").is_some();
+
+    let reclip_every_frame = env_flag("LIVE2D_RECLIP");
 
     // Let physics and the first motion settle a little so the frame is
     // representative instead of the rest pose.
@@ -91,6 +86,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scene.force_clipping_rebuild(&device, &queue)?;
         }
     }
+
+    report_issues(&mut scene);
 
     let target = create_target(&device, size, format);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
@@ -180,6 +177,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn report_issues(scene: &mut Live2dScene) {
+    for issue in scene.take_issues() {
+        eprintln!("{issue}");
+    }
+}
+
 fn create_target(device: &wgpu::Device, size: u32, format: wgpu::TextureFormat) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("offscreen.target"),
@@ -232,10 +235,64 @@ fn write_png(path: &str, size: u32, rgba: &[u8]) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn env_f32(name: &str) -> Option<f32> {
-    std::env::var(name).ok()?.parse().ok()
+/// Reads an optional `f32` from the environment, rejecting values that do not
+/// parse instead of silently treating them as unset.
+fn env_f32(name: &str) -> Result<Option<f32>, Box<dyn std::error::Error>> {
+    let Some(raw) = env_string(name)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(raw.parse().map_err(|_| {
+        format!("{name} must be a number, got {raw:?}")
+    })?))
 }
 
-fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name).ok()?.parse().ok()
+fn env_u32(name: &str) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+    let Some(raw) = env_string(name)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(raw.parse().map_err(|_| {
+        format!("{name} must be a positive integer, got {raw:?}")
+    })?))
+}
+
+fn env_usize(name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+    let Some(raw) = env_string(name)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(raw.parse().map_err(|_| {
+        format!("{name} must be an index, got {raw:?}")
+    })?))
+}
+
+/// A flag is on whenever the variable is present, whatever its value.
+fn env_flag(name: &str) -> bool {
+    std::env::var_os(name).is_some()
+}
+
+fn env_string(name: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn env_gaze() -> Result<Option<[f32; 2]>, Box<dyn std::error::Error>> {
+    let Some(raw) = env_string("LIVE2D_GAZE")? else {
+        return Ok(None);
+    };
+
+    let parts: Vec<f32> = raw
+        .split(',')
+        .map(|part| part.trim().parse())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("LIVE2D_GAZE must be two numbers, got {raw:?}"))?;
+
+    match parts[..] {
+        [x, y] => Ok(Some([x, y])),
+        _ => Err(format!("LIVE2D_GAZE needs exactly two numbers, got {raw:?}").into()),
+    }
 }

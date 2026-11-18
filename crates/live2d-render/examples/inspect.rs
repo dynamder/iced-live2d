@@ -6,7 +6,7 @@
 //!
 //! cargo run -p live2d-render --example inspect -- <path/to/model.model3.json>
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use live2d_render::mocari::assets::load_model_runtime;
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("== runtime ==");
     println!("drawables: {}", runtime.meshes().len());
 
-    let mut per_texture = std::collections::BTreeMap::<i32, usize>::new();
+    let mut per_texture = BTreeMap::<i32, usize>::new();
     let mut masked = 0usize;
     let mut inverted = 0usize;
     let mut vertices = 0usize;
@@ -43,8 +43,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let polygons: usize = runtime.meshes().iter().map(|m| m.indices().len() / 3).sum();
-    let mut all_sets: std::collections::BTreeSet<Vec<i32>> = std::collections::BTreeSet::new();
-    let mut visible_sets: std::collections::BTreeSet<Vec<i32>> = std::collections::BTreeSet::new();
+    let mut all_sets: BTreeSet<Vec<i32>> = BTreeSet::new();
+    let mut visible_sets: BTreeSet<Vec<i32>> = BTreeSet::new();
     for mesh in runtime.meshes() {
         let masks: Vec<i32> = mesh.masks().iter().copied().filter(|m| *m >= 0).collect();
         if masks.is_empty() {
@@ -130,7 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n== no physics3 referenced by model3.json ==");
     }
 
-    if let Some(filter) = std::env::var("LIVE2D_PARAMS").ok() {
+    if let Ok(filter) = std::env::var("LIVE2D_PARAMS") {
         println!("\n== parameters matching '{filter}' ==");
         for info in runtime.parameter_infos() {
             let id = info.id();
