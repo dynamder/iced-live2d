@@ -43,10 +43,16 @@ for the real rig**. A blank webview alone costs 1.6× the entire native app with
 Hiyori loaded.
 
 Sample-to-sample spread was ±5% on the web rows (Chromium sheds idle helpers
-over the first ~20 s) and ±1 MB on the native rows. The rig row is 491 MB of
-working set here; the figure in the README's memory table (462 MB) is an earlier
-measurement of the same metric with a different window size, not a different
-model.
+over the first ~20 s) and ±1 MB on the native rows.
+
+Two follow-ups worth recording. First, the rig row is 491 MB of working set
+here, while the README's memory table says 462 MB: same metric, earlier
+measurement, and the cause is not pinned down — working set counts pages shared
+with the GPU driver, so adapter/driver state moves it. Private working set, the
+metric that does not include shared pages, is stable at 388 MB. Second, the Rust
+toolchain was ruled out by A/B: the same sources built with 1.97.1 and 1.100.0
+land at 388.3 MB / 491.8 MB and 388.4 MB / 491.6 MB, i.e. inside each other's
+noise.
 
 ## Where the bytes go
 
