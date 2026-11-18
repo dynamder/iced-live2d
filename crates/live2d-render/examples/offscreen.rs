@@ -7,16 +7,8 @@
 //!
 //! cargo run -p live2d-render --example offscreen -- <model.model3.json> [out.png] [size] [steps]
 //!
-//! Every knob below is optional and exists so a capture is reproducible from the
-//! command line alone. The documented list lives in `README.md`.
-//!
-//! - `LIVE2D_TEXTURE_SCALE` f32, upload resolution multiplier (default 1.0)
-//! - `LIVE2D_MASK` u32, mask render target edge (default 1024)
-//! - `LIVE2D_MOTION`, `LIVE2D_EXPR` usize, motion / expression index to apply
-//! - `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`,
-//!   `LIVE2D_RECLIP` — flags, active when the variable is present
-//! - `LIVE2D_GAZE` "x,y" in `-1.0..=1.0`
-//! - `LIVE2D_PROFILE` — flag, prints per-frame CPU and upload cost
+//! A capture must be reproducible from the command line alone, so every piece of
+//! state is set through the `LIVE2D_*` knobs documented in `README.md`.
 
 use std::time::Duration;
 
@@ -44,45 +36,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(30);
     let frame_time = Duration::from_millis(16);
 
+    // Validated before the GPU opens, so a typo fails in a millisecond instead of
+    // after uploading 592 MB of textures.
+    let knobs = Knobs::from_env()?;
+
     let shared::Gpu { device, queue } = shared::open()?;
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let options = SceneOptions {
-        texture_scale: env_f32("LIVE2D_TEXTURE_SCALE")?.unwrap_or(1.0),
-        mask_size: env_u32("LIVE2D_MASK")?.unwrap_or(1024),
+        texture_scale: knobs.texture_scale,
+        mask_size: knobs.mask_size,
         ..SceneOptions::default()
     };
 
     let mut scene = Live2dScene::load_with_options(&device, &queue, &model_path, format, options)?;
     scene.resize(&queue, 1.0);
 
-    if let Some(index) = env_usize("LIVE2D_MOTION")? {
-        scene.play_motion(index);
-    }
-    if let Some(index) = env_usize("LIVE2D_EXPR")? {
-        scene.play_expression(index);
-    }
-    if env_flag("LIVE2D_CLEAR_EXPR") {
-        scene.clear_expressions();
-    }
-    if env_flag("LIVE2D_NO_MOTION") {
-        scene.stop_motion();
-    }
-    if env_flag("LIVE2D_NO_PHYSICS") {
-        scene.set_physics_enabled(false);
-    }
-    if let Some(gaze) = env_gaze()? {
-        scene.set_gaze(gaze);
-    }
-
-    let reclip_every_frame = env_flag("LIVE2D_RECLIP");
+    knobs.apply(&mut scene);
 
     // Let physics and the first motion settle a little so the frame is
     // representative instead of the rest pose.
     for _ in 0..steps {
         scene.advance(&device, &queue, frame_time)?;
 
-        if reclip_every_frame {
+        if knobs.reclip {
             scene.force_clipping_rebuild(&device, &queue)?;
         }
     }
@@ -235,8 +212,61 @@ fn write_png(path: &str, size: u32, rgba: &[u8]) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-/// Reads an optional `f32` from the environment, rejecting values that do not
-/// parse instead of silently treating them as unset.
+/// Everything the capture reads from the environment, validated up front.
+struct Knobs {
+    texture_scale: f32,
+    mask_size: u32,
+    motion: Option<usize>,
+    expression: Option<usize>,
+    clear_expressions: bool,
+    no_motion: bool,
+    no_physics: bool,
+    reclip: bool,
+    gaze: Option<[f32; 2]>,
+}
+
+impl Knobs {
+    fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            texture_scale: env_f32("LIVE2D_TEXTURE_SCALE")?.unwrap_or(1.0),
+            mask_size: env_index("LIVE2D_MASK")?.unwrap_or(1024) as u32,
+            motion: env_index("LIVE2D_MOTION")?,
+            expression: env_index("LIVE2D_EXPR")?,
+            clear_expressions: env_flag("LIVE2D_CLEAR_EXPR"),
+            no_motion: env_flag("LIVE2D_NO_MOTION"),
+            no_physics: env_flag("LIVE2D_NO_PHYSICS"),
+            reclip: env_flag("LIVE2D_RECLIP"),
+            gaze: env_gaze()?,
+        })
+    }
+
+    fn apply(&self, scene: &mut Live2dScene) {
+        if let Some(index) = self.motion {
+            scene.play_motion(index);
+        }
+
+        if let Some(index) = self.expression {
+            scene.play_expression(index);
+        }
+
+        if self.clear_expressions {
+            scene.clear_expressions();
+        }
+
+        if self.no_motion {
+            scene.stop_motion();
+        }
+
+        if self.no_physics {
+            scene.set_physics_enabled(false);
+        }
+
+        if let Some(gaze) = self.gaze {
+            scene.set_gaze(gaze);
+        }
+    }
+}
+
 fn env_f32(name: &str) -> Result<Option<f32>, Box<dyn std::error::Error>> {
     let Some(raw) = env_string(name)? else {
         return Ok(None);
@@ -247,23 +277,13 @@ fn env_f32(name: &str) -> Result<Option<f32>, Box<dyn std::error::Error>> {
     })?))
 }
 
-fn env_u32(name: &str) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+fn env_index(name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
     let Some(raw) = env_string(name)? else {
         return Ok(None);
     };
 
     Ok(Some(raw.parse().map_err(|_| {
-        format!("{name} must be a positive integer, got {raw:?}")
-    })?))
-}
-
-fn env_usize(name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
-    let Some(raw) = env_string(name)? else {
-        return Ok(None);
-    };
-
-    Ok(Some(raw.parse().map_err(|_| {
-        format!("{name} must be an index, got {raw:?}")
+        format!("{name} must be a non-negative integer, got {raw:?}")
     })?))
 }
 
