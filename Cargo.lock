@@ -91,7 +91,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "iced",
- "live2d-render",
+ "iced-live2d",
 ]
 
 [[package]]

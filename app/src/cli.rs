@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use live2d_render::LookAtMode;
+use iced_live2d::LookAtMode;
 
 /// Directories searched by `--model <name>` and `--list`, in order.
 ///
