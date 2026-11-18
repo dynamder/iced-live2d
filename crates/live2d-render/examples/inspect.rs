@@ -25,6 +25,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("== runtime ==");
     println!("drawables: {}", runtime.meshes().len());
+
+    let mut per_texture = std::collections::BTreeMap::<i32, usize>::new();
+    let mut masked = 0usize;
+    let mut inverted = 0usize;
+    let mut vertices = 0usize;
+
+    for mesh in runtime.meshes() {
+        *per_texture.entry(mesh.texture_index()).or_default() += 1;
+        if !mesh.masks().is_empty() && mesh.masks().iter().all(|mask| *mask >= 0) {
+            masked += 1;
+            if mesh.is_inverted_mask() {
+                inverted += 1;
+            }
+        }
+        vertices += mesh.vertices().len();
+    }
+
+    let polygons: usize = runtime.meshes().iter().map(|m| m.indices().len() / 3).sum();
+    let mut all_sets: std::collections::BTreeSet<Vec<i32>> = std::collections::BTreeSet::new();
+    let mut visible_sets: std::collections::BTreeSet<Vec<i32>> = std::collections::BTreeSet::new();
+    for mesh in runtime.meshes() {
+        let masks: Vec<i32> = mesh.masks().iter().copied().filter(|m| *m >= 0).collect();
+        if masks.is_empty() { continue; }
+        all_sets.insert(masks.clone());
+        if mesh.opacity() > 0.0 { visible_sets.insert(masks); }
+    }
+
+    println!("vertices: {vertices}, polygons: {polygons}");
+    println!(
+        "distinct mask sets: {} (visible drawables only: {})",
+        all_sets.len(),
+        visible_sets.len()
+    );
+    println!(
+        "per-texture drawable counts: {:?}",
+        per_texture
+            .iter()
+            .map(|(t, n)| format!("{t}:{n}"))
+            .collect::<Vec<_>>()
+    );
+    println!(
+        "masked drawables: {masked} (inverted {inverted}, normal {})",
+        masked - inverted
+    );
     println!("parameters: {}", runtime.parameter_ids().len());
     println!("parts: {}", runtime.part_ids().len());
     println!("physics loaded: {}", runtime.physics().is_some());
