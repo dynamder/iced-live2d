@@ -32,7 +32,7 @@ cargo run --release -p app -- "<你的模型>/xxx.model3.json"
 → 两条路，难度差一倍：
 
 - **路线 A（iced 0.14，wgpu 27）**：mocari 的 wgpu 后端用不了 → 关掉 `mocari/wgpu`，**自己写 600–900 行渲染器**。
-- **路线 B（iced master，wgpu 30）**：大版本对齐 → 复用 `WgpuLive2dRenderer`，**只写胶水加一个薄播放层**（实测：`app/src/live2d.rs` 217 行 iced 胶水 + `crates/live2d-render` 约 1 000 行播放/取景/诊断代码；渲染数学——遮罩、混合、物理——一行都没写）。
+- **路线 B（iced master，wgpu 30）**：大版本对齐 → 复用 `WgpuLive2dRenderer`，**只写胶水加一个薄播放层**（实测：当初 217 行 iced 胶水 + `crates/live2d-render` 约 1 000 行播放/取景/诊断代码；渲染数学——遮罩、混合、物理——一行都没写。这 217 行后来收进了 `crates/iced-live2d`，`app` 只剩 CLI、按键和事件打印）。
 
 **路线 B 的代价（实测，很小）**：
 
@@ -366,9 +366,14 @@ crates/live2d-render/          只依赖 wgpu + mocari，不依赖 iced（升级
   examples/offscreen.rs        无窗口渲染一帧成 PNG（CI 像素测试的雏形）
   examples/jolt.rs             慢扫视线，逐帧比较渲染结果，找"顿一下"的位置
   examples/shared/gpu.rs       上面两个需要 GPU 的例子的公共引导
-app/                           iced 0.15-dev 外壳
-  src/main.rs                  application / subscription / 键盘
-  src/live2d.rs                Program + Primitive + Pipeline
+app/                           iced 0.15-dev 外壳（已迁到 iced-live2d，见组件计划）
+  src/main.rs                  application / 键盘 / 事件打印
+  src/cli.rs                   --model / --track / --list
+crates/iced-live2d/            可复用组件：Program + Primitive + Pipeline 都在这里
+  src/widget.rs                Live2d 控件（委托 shader::Shader）+ Live2dState
+  src/pipeline.rs              Live2dPipeline（按模型 id 建槽位）+ Live2dPrimitive
+  src/model.rs                 Live2dModel：设置、look-at、命令队列、RAII 令牌
+  src/event.rs / src/look_at.rs 事件载荷 / LookAtSource + look_at::cursor
 .refs/mocari                   mocari 0.4.1 + 四个补丁（Cargo.toml 里 [patch.crates-io] 指过来）
 patches/                       负 mask 索引 + mipmap + 物理链路三个修复的 patch 文件
 scripts/vendor-mocari.ps1      一键重建 .refs/mocari

@@ -94,17 +94,20 @@ the window to make the model follow it.
 fixed 1/60 s steps, keeping the rest for the next call. The pose is therefore a
 function of elapsed time alone, not of how the host sliced it.
 
-A host can hand the scene a **zero-length** interval, and a desktop window does:
-iced delivers roughly 2–10% of its `window::frames()` messages with an instant
-that equals the previous one, so `advance` gets `delta == 0` several times per
-second. Treating such a frame as a real one is what used to make parts flicker —
-`advance` reset every parameter to its default and then `apply_physics(0.0)`
-returned before writing the physics outputs, so for one frame the hair, skirt and
-accessories snapped to their rest pose and back. Only the parts the cursor does
-not drive and physics does are affected, which is why it looked like isolated
-components blinking. Under `--model 大肥鱼` the same bug is invisible in practice:
-that rig takes ~28 ms per frame, so iced almost never produces the duplicate
-instant for it.
+A host can hand the scene a **zero-length** interval, and desktop windows do: an
+iced window delivers roughly 2–10% of its frames with an instant that equals the
+previous one, so `advance` gets `delta == 0` several times per second. Treating
+such a frame as a real one is what used to make parts flicker — `advance` reset
+every parameter to its default and then `apply_physics(0.0)` returned before
+writing the physics outputs, so for one frame the hair, skirt and accessories
+snapped to their rest pose and back. Only the parts the cursor does not drive and
+physics does are affected, which is why it looked like isolated components
+blinking. Under `--model 大肥鱼` the same bug is invisible in practice: that rig
+took ~28 ms per frame, so the duplicate instant almost never happened for it.
+
+The component that ships here drives its own frames and runs at a steady 16.7 ms
+even on the models where the old subscription-based loop averaged 23 ms with a
+quarter of its frames zero-length.
 
 `LIVE2D_PROFILE=1` prints the diagnosis once per 60 frames:
 
@@ -195,6 +198,14 @@ $ cargo run -p live2d-render --example rig -- "…/大肥鱼.model3.json"
 | `rig` | how cursor tracking is routed for a model, in both modes — no GPU needed |
 | `offscreen` | one frame to a PNG, no window |
 
+The component has its own example, which needs a window:
+
+| Example | Answers |
+|---|---|
+| `minimal` | two models in one window, keys `R`/`E`/`P`/`1`/`2`, every component event printed |
+
+`cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second>]`
+
 `sweep` is the fastest way to check a tracking bug: it prints the input parameter
 and the physics outputs per frame, and flags any frame-to-frame jump. Prefix it
 with `SWEEP_DIRECT=<ParamId>` to write that parameter directly instead of driving
@@ -226,13 +237,21 @@ Pass `SceneOptions { texture_scale: 1.0, ..Default::default() }` for full qualit
 ```
 crates/live2d-render/          engine-agnostic: depends on wgpu + mocari only
   src/bounds.rs                canvas info -> view-fit matrix
+  src/rig.rs                   per-model look-at routing (which params a target writes)
   src/scene.rs                 Live2dScene: load, advance, encode mask+model passes
   src/error.rs                 error taxonomy
   examples/*.rs                the diagnostics listed above
   examples/shared/gpu.rs       headless GPU bootstrap shared by the examples
-app/                           the iced shell
-  src/main.rs                  application, subscription, keyboard
-  src/live2d.rs                Program + Primitive + Pipeline
+crates/iced-live2d/            the reusable component: iced + live2d-render
+  src/model.rs                 Live2dModel: settings, look-at, command queue, RAII presence
+  src/widget.rs                Live2d widget + Live2dState (event channel, frame pacing)
+  src/pipeline.rs              per-model GPU slots + the primitive that draws one frame
+  src/event.rs                 Live2dEvent and its payloads
+  src/look_at.rs               LookAtSource + look_at::cursor
+  examples/minimal.rs          two models, keys, every event printed
+app/                           the demo app, now a thin host of the component
+  src/main.rs                  CLI dispatch, key bindings, event printing
+  src/cli.rs                   --model / --track / --list
 patches/                       the four mocari fixes, as patch files
 scripts/vendor-mocari.ps1      rebuilds .refs/mocari from the registry + patches
 scripts/shot.ps1               DPI-aware window screenshot (dev tool)
@@ -241,7 +260,56 @@ docs/                          feasibility write-up, plan, defect records
 ```
 
 The split matters: keeping `live2d-render` free of iced means a `wgpu`/`iced`
-upgrade touches one layer, and the renderer stays testable headlessly.
+upgrade touches one layer, and the renderer stays testable headlessly. Above it,
+`iced-live2d` is the only crate that knows about iced, and `app` is the only place
+with policy.
+
+## Using the component
+
+`iced-live2d` draws one model as an ordinary iced widget. The host owns the model,
+the widget borrows it, and everything else — GPU state, frame pacing, look-at
+routing — is behind the component. There is no frame subscription to write and no
+iced plumbing to copy:
+
+```rust
+use iced::widget::column;
+use iced_live2d::{Live2dModel, RenderSettings, live2d, look_at};
+
+struct App {
+    hiyori: Live2dModel,
+}
+
+fn view(app: &App) -> impl iced::Widget<Message> {
+    column![
+        live2d(&app.hiyori)
+            .on_event(Message::Live2d)
+            .look_at(look_at::cursor)
+    ]
+}
+```
+
+- **Loading is deferred and reported.** `Live2dModel::from_path` does no IO; the
+  first frame that draws the model loads it, and the outcome arrives as
+  `Live2dEvent::ModelLoaded { summary }` or `ModelFailedToLoad { failure }`. A
+  failed load is not retried, and the widget keeps reserving its space.
+- **The widget drives its own frames.** It asks for a redraw one refresh ahead
+  while the model is not paused, so do **not** also subscribe to
+  `window::frames()` — `RedrawRequest` is a single slot and the last writer wins.
+- **Events are one frame late.** The render layer cannot publish a message while
+  preparing a frame; it hands events to the widget, whose next `update` publishes
+  them.
+- **Cursor look-at is opt-in.** Without `.look_at(..)` the model is driven only by
+  its own motion and physics. With it the source owns the gaze, and the cursor
+  leaving the widget returns the model to `Live2dModel::look_at(..)`, or straight
+  ahead if the host never set one.
+- **Only the wgpu renderer.** The widget delegates to iced's `shader` widget,
+  which the tiny-skia backend does not have.
+- **Dropping the model frees its GPU state** at the end of the next rendered
+  frame, not immediately.
+
+`cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second>]`
+shows two models side by side with keys `R` (motion), `E` (expression), `P`
+(pause) and `1`/`2` (drop that model); every event the component sends is printed.
 
 ## The four patches
 
@@ -329,17 +397,21 @@ not need changes.
   you `*UnormSrgb`, you must render into your own `Rgba8Unorm` target and do
   gamma→linear when compositing, or the model washes out. The startup line
   prints the format it got.
-- **`Primitive::draw` must return `false`** and the work must happen in
-  `Primitive::render`, because the mask pass has to be inserted between the
-  passes iced controls.
+- **The component's primitive must not implement `draw`** — it has to return
+  `false` and do the work in `render`, because the mask pass has to be inserted
+  between the passes iced controls.
 - **Textures need mipmaps** — see patch 2 above.
-- **Mouse tracking is resolved per model, not hardcoded.** `live2d-render/src/rig.rs`
+- **Look-at routing is resolved per model, not hardcoded.** `live2d-render/src/rig.rs`
   maps six slots (head yaw/pitch, body yaw/lean, eyes) onto whatever the rig
   exposes. A rig built for VTube Studio takes `AngleX`/`AngleY` and
   `PositionX`/`PositionY` because its `ParamAngle*` parameters are physics
   outputs; a classic rig takes the `Param*` names directly. The choice is decided
-  from `physics3.json`, printed at load and inspectable with `examples/rig`.
-  `LIVE2D_TRACK=viewer` forces the Cubism Viewer's own binding set instead.
+  from `physics3.json`, inspectable with `examples/rig`.
+  `LIVE2D_TRACK=viewer` (component example and `examples/*`) or `--track viewer`
+  (the app) forces the Cubism Viewer's own binding set instead.
+- **The component needs iced's `advanced` feature** — `Widget`, `Shell` and the
+  layout types live behind it, and `shader::primitive::Renderer` is not publicly
+  reachable, so the `Widget` impl bounds on `shader::Shader<Message, Self>` instead.
 
 ## Troubleshooting (this machine only)
 

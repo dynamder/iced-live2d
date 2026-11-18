@@ -338,7 +338,7 @@ pub enum Problem {
 
 每一步都必须独立可验证、独立提交，验不过不进下一步。
 
-进度：Step 1 ✅ `4d22f71` · Step 2 + 3 ✅ `f11fa22`（一并落地，原因见 Step 2/3）· Step 4 未开始。
+进度：Step 1 ✅ `4d22f71` · Step 2 + 3 ✅ `f11fa22`（一并落地，原因见 Step 2/3）· Step 4 ✅ `deb8a42`。
 
 ### Step 1 · `live2d-render` 术语对齐与两个新入口（不改行为）
 
@@ -419,6 +419,8 @@ crates/iced-live2d/
 - ⑤ 按 `2` drop 第二个模型：画面即刻只剩一个，日志打印 `model 2 dropped`，槽位在下一帧 `trim` 回收。
 - ⑥ release，`LIVE2D_PROFILE`：大肥鱼 `rebuild 1.9–2.2 ms + upload 0.55–0.61 ms`（≤5 ms）；
   Haru `0.20 + 0.15 ms`（≤1 ms）；两者 `delta` 均值 16.7 ms、每帧 1.00 步。
+- 额外：`MotionFinishedPlaying` 只对 `Loop: false` 的片段成立（样本库里的动作全是循环的，永远不会结束）。
+  用一份把 `Loop` 改成 false、时长 1.2 s 的 Wanko 副本验证：启动后约 1 秒打印 `model 1 finished motion #0`。
 - ⑦ 不存在的路径 → 宿主打印
   `model 1 failed to load …: failed to load Live2D model assets: failed to read …`，只报一次、不重试。
 - ⑧ `cargo clippy --workspace --all-targets` 0 告警、`cargo fmt --check` 干净、`missing_docs` 无告警。
@@ -427,10 +429,19 @@ crates/iced-live2d/
 
 ### Step 4 · `app` 迁移 + 文档
 
-`app` 缩到 <80 行，`--track` 映射到 `look_at_mode`，去掉 `window::frames()`（证明自驱动帧有效），
-README 增加 "as a component" 一节并更新目录结构。
+`app` 只留 CLI、按键和事件打印；`--track` 变成 `Live2dModel::set_look_at_mode`；删掉 `window::frames()`
+订阅与整个 `app/src/live2d.rs`（program / primitive / pipeline 都在组件里了）；README 增加
+"Using the component" 一节并更新目录结构。
 
 验收：8 个模型逐个开窗、`--list` 无窗口、大肥鱼 profile 不倒退、画面与迁移前一致。
+
+实测：`app/src/main.rs` 176 行（CLI 分发 + 事件打印 + 两个键，`cli.rs` 未动），依赖里不再有
+`live2d-render`；`--help` / `--list` / 未知参数（exit 2）行为不变；`--track viewer` 生效。
+Hiyori 迁移前 `0.70 steps/帧、delta 均值 23.35 ms、26 个零长度帧`，迁移后 `1.00 steps/帧、16.66 ms、
+0 个零长度帧`——自驱动帧比原来的 `window::frames()` 订阅更稳。同一窗口、同一模型的前后截图取景一致
+（模型上下边与中心位置相同，姿势不同是因为帧不同）。代价：app 不再打印加载期的 rig 绑定表
+（组件不暴露 `Live2dScene::rig()`），要看用 `examples/rig`。
+
 提交：`refactor(app): host the model through iced-live2d`
 
 ### 不在本轮范围
