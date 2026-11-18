@@ -131,6 +131,9 @@ pub struct Live2dScene {
     profile: Option<Profile>,
     expression_cursor: usize,
     issues: Vec<Error>,
+    /// Last error that repeats every frame, so it is queued once, not 60 times a
+    /// second.
+    repeating_issue: Option<String>,
 }
 
 impl Live2dScene {
@@ -276,6 +279,7 @@ impl Live2dScene {
             profile: std::env::var_os("LIVE2D_PROFILE").map(|_| Profile::default()),
             expression_cursor: 0,
             issues,
+            repeating_issue: None,
         };
 
         scene.play_next_motion();
@@ -379,13 +383,9 @@ impl Live2dScene {
         self.dirty = false;
 
         let cpu_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let upload_start = std::time::Instant::now();
-        self.upload(device, queue)?;
+        let upload = self.upload(device, queue)?;
 
-        Ok(GeometryCost {
-            cpu_ms,
-            upload_ms: upload_start.elapsed().as_secs_f64() * 1000.0,
-        })
+        Ok(GeometryCost { cpu_ms, upload })
     }
 
     /// Keeps the model fitted when the viewport aspect ratio changes.
@@ -662,6 +662,21 @@ impl Live2dScene {
         self.play_expression(index);
     }
 
+    /// Queues an error at most once per distinct message.
+    ///
+    /// The upload path can fail on every frame of a model that keeps changing
+    /// shape; pushing that into `issues` each time would bury everything else.
+    fn report_once(&mut self, error: Error) {
+        let message = error.to_string();
+
+        if self.repeating_issue.as_deref() == Some(message.as_str()) {
+            return;
+        }
+
+        self.repeating_issue = Some(message);
+        self.issues.push(error);
+    }
+
     /// Drains the non-fatal problems collected since the last call.
     ///
     /// A broken sidecar file, an out-of-range index or an unreadable animation
@@ -672,27 +687,49 @@ impl Live2dScene {
         std::mem::take(&mut self.issues)
     }
 
-    fn upload(&mut self, device: &Device, queue: &Queue) -> Result<()> {
-        let needs_reclip = {
+    fn upload(&mut self, device: &Device, queue: &Queue) -> Result<UploadCost> {
+        let mesh_start = std::time::Instant::now();
+
+        let mut rejected = None;
+
+        let (needs_reclip, drawables) = {
             let meshes = self.model.meshes();
 
             match self.gpu.mesh_buffers.update_drawables(queue, meshes) {
-                Ok(update) => update.bounds_changed() || update.visibility_changed(),
-                // A model whose drawable count changed (expression switching
-                // art meshes) needs a full rebuild.
-                Err(_) => {
+                Ok(update) => (
+                    update.bounds_changed()
+                        || update.visibility_changed()
+                        || update.structure_changed(),
+                    update.uploaded_drawables(),
+                ),
+                // A drawable changed shape in a way the buffers cannot absorb, so
+                // the whole set is rebuilt. That is correct but expensive, and a
+                // model doing it every frame looks exactly like a slow one.
+                Err(error) => {
                     self.gpu.mesh_buffers = WgpuMeshBuffers::from_drawables(device, meshes)
                         .ok_or(Error::MeshBuffers)?;
-                    true
+                    rejected = Some(Error::from(error));
+                    (true, meshes.len())
                 }
             }
         };
+
+        if let Some(error) = rejected {
+            self.report_once(error);
+        }
+
+        let mesh_ms = mesh_start.elapsed().as_secs_f64() * 1000.0;
+        let clip_start = std::time::Instant::now();
 
         if needs_reclip {
             self.rebuild_clipping(device, queue)?;
         }
 
-        Ok(())
+        Ok(UploadCost {
+            mesh_ms,
+            clip_ms: clip_start.elapsed().as_secs_f64() * 1000.0,
+            drawables,
+        })
     }
 
     fn rebuild_clipping(&mut self, device: &Device, queue: &Queue) -> Result<()> {
@@ -752,7 +789,15 @@ impl Stepper {
 #[derive(Debug, Clone, Copy, Default)]
 struct GeometryCost {
     cpu_ms: f64,
-    upload_ms: f64,
+    upload: UploadCost,
+}
+
+/// Where the upload time went: vertex/index buffers, or clipping resources.
+#[derive(Debug, Clone, Copy, Default)]
+struct UploadCost {
+    mesh_ms: f64,
+    clip_ms: f64,
+    drawables: usize,
 }
 
 /// Per-call cost and frame-interval statistics, printed once every
@@ -766,7 +811,9 @@ struct Profile {
     frames: u32,
     steps: u32,
     cpu_ms: f64,
-    upload_ms: f64,
+    mesh_ms: f64,
+    clip_ms: f64,
+    drawables: usize,
     delta_ms: f64,
     delta_min: Duration,
     delta_max: Duration,
@@ -790,7 +837,9 @@ impl Profile {
 
         if let Some(cost) = cost {
             self.cpu_ms += cost.cpu_ms;
-            self.upload_ms += cost.upload_ms;
+            self.mesh_ms += cost.upload.mesh_ms;
+            self.clip_ms += cost.upload.clip_ms;
+            self.drawables += cost.upload.drawables;
         }
 
         self.delta_ms += delta.as_secs_f64() * 1000.0;
@@ -809,11 +858,14 @@ impl Profile {
 
         let count = f64::from(self.frames);
         let line = format!(
-            "live2d profile: {} frames {:.2} steps, rebuild {:.2} ms, upload {:.2} ms, delta {:.2}..{:.1} ms (mean {:.2}, {} zero, {} under 1 ms)",
+            "live2d profile: {} frames {:.2} steps, rebuild {:.2} ms, upload {:.2} ms (mesh {:.2} over {:.0} drawables, clip {:.2}), delta {:.2}..{:.1} ms (mean {:.2}, {} zero, {} under 1 ms)",
             self.frames,
             f64::from(self.steps) / count,
             self.cpu_ms / count,
-            self.upload_ms / count,
+            (self.mesh_ms + self.clip_ms) / count,
+            self.mesh_ms / count,
+            self.drawables as f64 / count,
+            self.clip_ms / count,
             self.delta_min.as_secs_f64() * 1000.0,
             self.delta_max.as_secs_f64() * 1000.0,
             self.delta_ms / count,
@@ -833,7 +885,9 @@ impl Default for Profile {
             frames: 0,
             steps: 0,
             cpu_ms: 0.0,
-            upload_ms: 0.0,
+            mesh_ms: 0.0,
+            clip_ms: 0.0,
+            drawables: 0,
             delta_ms: 0.0,
             delta_min: Duration::MAX,
             delta_max: Duration::ZERO,

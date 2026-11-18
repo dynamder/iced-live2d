@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use mocari::assets::AssetLoadError;
 use mocari::expression::ExpressionLoadError;
 use mocari::motion::MotionLoadError;
-use mocari::render::wgpu::{WgpuClippingLayoutError, WgpuRenderError, WgpuTextureError};
+use mocari::render::wgpu::{
+    WgpuClippingLayoutError, WgpuMeshUpdateError, WgpuRenderError, WgpuTextureError,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -59,6 +61,12 @@ pub enum Error {
 
     #[error("failed to rebuild Live2D meshes")]
     MeshUpdate,
+
+    /// A drawable changed shape in a way the GPU buffers cannot absorb, so the
+    /// whole set was rebuilt. Recorded once per distinct reason: a model that
+    /// does this every frame is otherwise indistinguishable from a slow one.
+    #[error("Live2D geometry changed shape, rebuilding every buffer: {0}")]
+    MeshTopology(#[from] WgpuMeshUpdateError),
 
     #[error("failed to create a clipping layout: {0}")]
     ClippingLayout(#[from] WgpuClippingLayoutError),
