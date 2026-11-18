@@ -116,6 +116,7 @@ pub struct Live2dScene {
     fit_aspect: f32,
     motion_cursor: usize,
     gaze_inputs: GazeInputs,
+    physics_enabled: bool,
     profile: bool,
     profile_frames: u32,
     profile_cpu: f64,
@@ -222,7 +223,11 @@ impl Live2dScene {
         let mut expression_paths = expression_paths(&model, model_dir.as_deref());
 
         // Everything below only needs the GPU copies.
-        drop(loaded);
+        if std::env::var_os("LIVE2D_KEEP_ASSETS").is_some() {
+            std::mem::forget(loaded);
+        } else {
+            drop(loaded);
+        }
 
         // Plenty of exported models (VTuber rigs in particular) ship their
         // motion and expression files next to the model without listing them in
@@ -261,6 +266,7 @@ impl Live2dScene {
             fit_aspect: 1.0,
             motion_cursor: 0,
             gaze_inputs,
+            physics_enabled: true,
             profile: std::env::var_os("LIVE2D_PROFILE").is_some(),
             profile_frames: 0,
             profile_cpu: 0.0,
@@ -305,7 +311,9 @@ impl Live2dScene {
             // Overrides (gaze, user sliders) win over motion and expression.
             runtime.apply_parameter_overrides();
 
-            runtime.apply_physics(delta);
+            if self.physics_enabled {
+                runtime.apply_physics(delta);
+            }
             runtime.apply_pose(delta);
 
             if runtime.update_meshes().is_none() {
@@ -525,6 +533,18 @@ impl Live2dScene {
             self.motion_cursor = index.wrapping_add(1);
             self.dirty = true;
         }
+    }
+
+    /// Enables or disables physics evaluation (diagnostics / still frames).
+    pub fn set_physics_enabled(&mut self, enabled: bool) {
+        self.physics_enabled = enabled;
+        self.dirty = true;
+    }
+
+    /// Stops the current motion so the model shows its rest pose.
+    pub fn stop_motion(&mut self) {
+        self.player = None;
+        self.dirty = true;
     }
 
     /// Drops the expressions currently applied.

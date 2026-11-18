@@ -65,6 +65,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env_usize("LIVE2D_CLEAR_EXPR").is_some() {
         scene.clear_expressions();
     }
+    if env_usize("LIVE2D_NO_MOTION").is_some() {
+        scene.stop_motion();
+    }
+    if env_usize("LIVE2D_NO_PHYSICS").is_some() {
+        scene.set_physics_enabled(false);
+    }
     if let Ok(gaze) = std::env::var("LIVE2D_GAZE") {
         let parts: Vec<f32> = gaze
             .split(',')
