@@ -125,6 +125,10 @@ pub struct Live2dScene {
     view_fill: f32,
     fit_aspect: f32,
     motion_cursor: usize,
+    /// Index of the motion being played, if any.
+    current_motion: Option<usize>,
+    /// Motions that ended and have not been reported yet.
+    finished_motions: Vec<usize>,
     /// Where a LookAt target writes, resolved by [`crate::rig`] under
     /// `look_at_mode`.
     rig: Rig,
@@ -278,6 +282,8 @@ impl Live2dScene {
             view_fill: options.view_fill,
             fit_aspect: 1.0,
             motion_cursor: 0,
+            current_motion: None,
+            finished_motions: Vec::new(),
             rig,
             look_at_mode: options.look_at_mode,
             facts,
@@ -369,6 +375,10 @@ impl Live2dScene {
         runtime.apply_pose(seconds);
 
         if finished_motion {
+            if let Some(index) = self.current_motion.take() {
+                self.finished_motions.push(index);
+            }
+
             self.player = None;
             self.play_next_motion();
         }
@@ -612,6 +622,7 @@ impl Live2dScene {
         match load_motion(&path) {
             Ok(motion) => {
                 self.player = Some(MotionPlayer::new(motion));
+                self.current_motion = Some(index);
                 self.dirty = true;
             }
             Err(source) => self.issues.push(Error::Motion { path, source }),
@@ -644,6 +655,10 @@ impl Live2dScene {
 
     /// Enables or disables physics evaluation (diagnostics / still frames).
     pub fn set_physics_enabled(&mut self, enabled: bool) {
+        if self.physics_enabled == enabled {
+            return;
+        }
+
         self.physics_enabled = enabled;
         self.dirty = true;
     }
@@ -651,7 +666,17 @@ impl Live2dScene {
     /// Stops the current motion so the model shows its rest pose.
     pub fn stop_motion(&mut self) {
         self.player = None;
+        self.current_motion = None;
         self.dirty = true;
+    }
+
+    /// Motions that reached their end since the last call, in the order they
+    /// finished.
+    ///
+    /// A finished motion is replaced by the next one in the same step, so this is
+    /// the only way to observe the transition.
+    pub fn take_finished_motions(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.finished_motions)
     }
 
     /// Drops the expressions currently applied.
