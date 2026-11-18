@@ -82,10 +82,49 @@ everything.
 
 Use `--release`. A debug build runs at ~5 fps because the per-frame CPU mesh work
 for hundreds of drawables is unoptimised, which also makes animation look like
-slow motion (each frame's delta is clamped to 0.1 s).
+slow motion (the scene drops time it cannot catch up on).
 
 **Controls:** `R` next motion clip · `E` next expression · move the mouse over
 the window to make the model follow it.
+
+## Frame pacing
+
+`Live2dScene::advance` takes whatever interval the host measured and spends it in
+fixed 1/60 s steps, keeping the rest for the next call. The pose is therefore a
+function of elapsed time alone, not of how the host sliced it.
+
+A host can hand the scene a **zero-length** interval, and a desktop window does:
+iced delivers roughly 2–10% of its `window::frames()` messages with an instant
+that equals the previous one, so `advance` gets `delta == 0` several times per
+second. Treating such a frame as a real one is what used to make parts flicker —
+`advance` reset every parameter to its default and then `apply_physics(0.0)`
+returned before writing the physics outputs, so for one frame the hair, skirt and
+accessories snapped to their rest pose and back. Only the parts the cursor does
+not drive and physics does are affected, which is why it looked like isolated
+components blinking. Under `--model 大肥鱼` the same bug is invisible in practice:
+that rig takes ~28 ms per frame, so iced almost never produces the duplicate
+instant for it.
+
+`LIVE2D_PROFILE=1` prints the diagnosis once per 60 frames:
+
+```
+live2d profile: 60 frames 1.00 steps, rebuild 0.23 ms, upload 0.51 ms, delta 16.67..16.7 ms (mean 16.67, 0 zero, 0 under 1 ms)
+```
+
+`steps` above 1 means the host presents slower than 60 Hz and the scene is
+catching up; `zero` counts the zero-length intervals, which now cost nothing.
+
+## Framing
+
+The model is framed by the **canvas** rectangle in the `.moc3` header, the same
+box Cubism Editor and the Viewer use, not by the bounding box of the artwork. A
+model whose art leaves spare room in its canvas therefore looks smaller and
+off-centre in every host, ours included — `Rice` has a 1.5:1 landscape canvas
+with the art filling 66% x 85% of it and sitting 6% right and 6% below the canvas
+centre, so in a square window it occupies 61% x 53% of the width and height
+where `Haru` occupies 40% x 83%. `cargo run --release -p live2d-render --example
+inspect -- <model>` prints those numbers under `== framing ==`, so a framing
+complaint can be answered with data instead of a guess.
 
 ## Capturing a frame without a window
 
@@ -105,7 +144,7 @@ cargo run --release -p live2d-render --example offscreen -- \
 | `LIVE2D_MOTION` / `LIVE2D_EXPR` | motion / expression index to apply before the capture |
 | `LIVE2D_GAZE` | `x,y` in `-1.0..=1.0`, applied as the cursor position |
 | `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`, `LIVE2D_RECLIP` | flags — active when the variable is present, whatever its value |
-| `LIVE2D_PROFILE` | flag — prints per-frame CPU and upload cost |
+| `LIVE2D_PROFILE` | flag — prints per-frame step count, mesh rebuild and upload cost, and frame-interval statistics |
 
 `sweep` and `jolt` take their own knobs, documented in each file's header:
 
@@ -144,7 +183,7 @@ $ cargo run -p live2d-render --example rig -- "…/大肥鱼.model3.json"
 | Example | Answers |
 |---|---|
 | `dump` | what is in the `.moc3`: drawables, mask sets, canvas, motion groups |
-| `inspect` | what is in the *files*: physics settings, motion curves, expression targets |
+| `inspect` | what is in the *files*: physics settings, motion curves, expression targets, and how the art sits inside the canvas |
 | `probe <model> <x> <y>` | which drawables cover a model-space point, in paint order |
 | `switch <model> <Param> <v0> <v1>` | which drawables a parameter flips, and their metadata |
 | `sweep` | what physics does along a horizontal gaze sweep, at 60 fps |
@@ -190,7 +229,7 @@ crates/live2d-render/          engine-agnostic: depends on wgpu + mocari only
 app/                           the iced shell
   src/main.rs                  application, subscription, keyboard
   src/live2d.rs                Program + Primitive + Pipeline
-patches/                       the two mocari fixes, as patch files
+patches/                       the three mocari fixes, as patch files
 scripts/vendor-mocari.ps1      rebuilds .refs/mocari from the registry + patches
 scripts/shot.ps1               DPI-aware window screenshot (dev tool)
 scripts/shot-window.ps1        screenshot any window by title prefix (dev tool)

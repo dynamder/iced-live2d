@@ -31,9 +31,18 @@ use crate::rig::{self, ModelFacts, Rig, Slot, TrackingMode};
 const MASK_TARGET_SIZE: u32 = 1024;
 
 const DEFAULT_VIEW_FILL: f32 = 1.85;
-/// Longest animation step applied in one frame, so a stalled window does not
+/// Animation step the scene advances in, regardless of the host's frame rate.
+///
+/// 60 Hz is what Live2D models are authored against: motion curves and physics
+/// are sampled on it, and two hosts with the same elapsed time must agree on the
+/// resulting pose.
+const STEP: Duration = Duration::from_micros(16_667);
+/// Longest interval one `advance` call may count, so a stalled window does not
 /// teleport the motion timeline.
-const MAX_STEP_SECONDS: f32 = 0.1;
+const MAX_CALL: Duration = Duration::from_millis(100);
+/// Time the scene may bank and spend on steps, i.e. how far it may fall behind
+/// before it starts dropping time instead of catching up.
+const MAX_CARRY: Duration = STEP.saturating_mul(4);
 const IDLE_GROUP: &str = "Idle";
 /// Group name given to motions discovered by scanning the model directory when
 /// `model3.json` declares none.
@@ -103,8 +112,9 @@ pub struct Live2dScene {
     player: Option<MotionPlayer>,
     expressions: ExpressionManager,
     /// Set when something outside the animation timeline changed (gaze, model
-    /// swap) so the next frame rebuilds meshes even if no motion is playing.
+    /// swap) so the next step rebuilds meshes even if no motion is playing.
     dirty: bool,
+    stepper: Stepper,
     gpu: GpuState,
     bounds: ModelBounds,
     view_fill: f32,
@@ -113,10 +123,7 @@ pub struct Live2dScene {
     /// Where the cursor writes, resolved once at load time by [`crate::rig`].
     rig: Rig,
     physics_enabled: bool,
-    profile: bool,
-    profile_frames: u32,
-    profile_cpu: f64,
-    profile_upload: f64,
+    profile: Option<Profile>,
     expression_cursor: usize,
     issues: Vec<Error>,
 }
@@ -247,6 +254,7 @@ impl Live2dScene {
             player: None,
             expressions: ExpressionManager::new(),
             dirty: true,
+            stepper: Stepper::new(),
             gpu: GpuState {
                 mesh_buffers,
                 textures,
@@ -260,10 +268,7 @@ impl Live2dScene {
             motion_cursor: 0,
             rig,
             physics_enabled: true,
-            profile: std::env::var_os("LIVE2D_PROFILE").is_some(),
-            profile_frames: 0,
-            profile_cpu: 0.0,
-            profile_upload: 0.0,
+            profile: std::env::var_os("LIVE2D_PROFILE").map(|_| Profile::default()),
             expression_cursor: 0,
             issues,
         };
@@ -273,79 +278,109 @@ impl Live2dScene {
     }
 
     /// Advances the animation by `delta` and uploads any changed geometry.
+    ///
+    /// The host may pass whatever interval it measured; the scene consumes it in
+    /// fixed [`STEP`] slices and keeps the remainder for the next call, so the
+    /// pose depends on how much time passed, not on how the host happened to
+    /// slice it. Two consequences worth knowing:
+    ///
+    /// - A zero-length `delta` is a no-op. It must be: a frame that does not
+    ///   advance time would otherwise re-evaluate the model with `delta = 0`,
+    ///   which resets every parameter and then skips the physics write, dropping
+    ///   the physics-driven parts into their default pose for exactly one frame.
+    ///   That reads as a flicker at whatever rate the host produces such frames.
+    /// - Time beyond [`MAX_CARRY`] is dropped rather than replayed, so a stalled
+    ///   window does not freeze the next few frames while it catches up.
     pub fn advance(&mut self, device: &Device, queue: &Queue, delta: Duration) -> Result<()> {
-        let delta = delta.as_secs_f32().clamp(0.0, MAX_STEP_SECONDS);
+        let steps = self.stepper.consume(delta);
 
-        let animating = self.player.is_some()
+        let animating = self.dirty
+            || self.player.is_some()
             || self.expressions.active_expression_count() > 0
             || self.model.physics().is_some();
 
-        if !self.dirty && !animating {
+        if !animating {
             return Ok(());
         }
 
-        let mut finished_motion = false;
-        let cpu_start = std::time::Instant::now();
+        let started = std::time::Instant::now();
 
-        {
-            let runtime = &mut self.model;
-
-            runtime.reset_parameters();
-            runtime.reset_part_opacities();
-
-            if let Some(player) = self.player.as_mut() {
-                player.tick(delta);
-                player.apply(runtime);
-                finished_motion = player.is_finished();
-            }
-
-            self.expressions.tick(delta);
-            self.expressions.apply(runtime);
-
-            // Overrides (gaze, user sliders) win over motion and expression.
-            runtime.apply_parameter_overrides();
-
-            if self.physics_enabled {
-                runtime.apply_physics(delta);
-            }
-            runtime.apply_pose(delta);
-
-            if runtime.update_meshes().is_none() {
-                return Err(Error::MeshUpdate);
-            }
+        for _ in 0..steps {
+            self.simulate();
         }
 
-        let cpu_elapsed = cpu_start.elapsed().as_secs_f64() * 1000.0;
+        // Deforming the mesh is a pure function of the final parameter state, so
+        // a call that owes several steps still only deforms once.
+        let cost = (steps > 0)
+            .then(|| self.rebuild_geometry(device, queue, started))
+            .transpose()?;
+
+        if let Some(profile) = self.profile.as_mut()
+            && let Some(line) = profile.record(delta, steps, cost)
+        {
+            println!("{line}");
+        }
+
+        Ok(())
+    }
+
+    /// One fixed-length animation step: replay motion, expression, overrides,
+    /// physics and pose, leaving the parameters where the last step of this frame
+    /// renders them.
+    fn simulate(&mut self) {
+        let seconds = STEP.as_secs_f32();
+        let mut finished_motion = false;
+
+        let runtime = &mut self.model;
+
+        runtime.reset_parameters();
+        runtime.reset_part_opacities();
+
+        if let Some(player) = self.player.as_mut() {
+            player.tick(seconds);
+            player.apply(runtime);
+            finished_motion = player.is_finished();
+        }
+
+        self.expressions.tick(seconds);
+        self.expressions.apply(runtime);
+
+        // Overrides (gaze, user sliders) win over motion and expression.
+        runtime.apply_parameter_overrides();
+
+        if self.physics_enabled {
+            runtime.apply_physics(seconds);
+        }
+        runtime.apply_pose(seconds);
 
         if finished_motion {
             self.player = None;
             self.play_next_motion();
         }
+    }
+
+    /// Deforms every drawable from the current parameters and pushes the result
+    /// to the GPU.
+    fn rebuild_geometry(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        started: std::time::Instant,
+    ) -> Result<GeometryCost> {
+        if self.model.update_meshes().is_none() {
+            return Err(Error::MeshUpdate);
+        }
 
         self.dirty = false;
 
+        let cpu_ms = started.elapsed().as_secs_f64() * 1000.0;
         let upload_start = std::time::Instant::now();
         self.upload(device, queue)?;
-        let upload_elapsed = upload_start.elapsed().as_secs_f64() * 1000.0;
 
-        if self.profile {
-            self.profile_frames += 1;
-            self.profile_cpu += cpu_elapsed;
-            self.profile_upload += upload_elapsed;
-
-            if self.profile_frames >= 30 {
-                println!(
-                    "live2d profile: runtime {:.2} ms, upload {:.2} ms per frame",
-                    self.profile_cpu / 30.0,
-                    self.profile_upload / 30.0,
-                );
-                self.profile_frames = 0;
-                self.profile_cpu = 0.0;
-                self.profile_upload = 0.0;
-            }
-        }
-
-        Ok(())
+        Ok(GeometryCost {
+            cpu_ms,
+            upload_ms: upload_start.elapsed().as_secs_f64() * 1000.0,
+        })
     }
 
     /// Keeps the model fitted when the viewport aspect ratio changes.
@@ -676,6 +711,133 @@ impl Live2dScene {
     }
 }
 
+/// Fixed-timestep accumulator between the host's frame pacing and the scene.
+///
+/// Hosts hand the scene whatever interval they measured, which on a live window
+/// is neither constant nor never zero. Consuming it in whole [`STEP`]s keeps the
+/// pose a function of elapsed time alone: the same input sequence yields the same
+/// pose no matter how the frames were sliced.
+#[derive(Debug, Clone)]
+struct Stepper {
+    carry: Duration,
+}
+
+impl Stepper {
+    /// Starts one step in debt so the first `advance` renders the loaded model
+    /// instead of waiting a frame for time to accumulate.
+    fn new() -> Self {
+        Self { carry: STEP }
+    }
+
+    /// Takes `delta`, returns how many steps are due now.
+    ///
+    /// Time beyond [`MAX_CARRY`] is dropped rather than banked: a window that
+    /// stalled for a second must not make the model sprint to catch up.
+    fn consume(&mut self, delta: Duration) -> u32 {
+        self.carry = (self.carry + delta.clamp(Duration::ZERO, MAX_CALL)).min(MAX_CARRY);
+
+        let steps = (self.carry.as_nanos() / STEP.as_nanos()) as u32;
+        self.carry -= STEP.saturating_mul(steps);
+
+        steps
+    }
+}
+
+/// CPU and upload cost of one geometry rebuild, in milliseconds.
+#[derive(Debug, Clone, Copy, Default)]
+struct GeometryCost {
+    cpu_ms: f64,
+    upload_ms: f64,
+}
+
+/// Per-call cost and frame-interval statistics, printed once every
+/// [`Profile::REPORT_EVERY`] calls when `LIVE2D_PROFILE` is set.
+///
+/// `steps` is the number of animation steps those calls ran, so `steps / frames`
+/// well above 1 means the host presents slower than the scene steps and is
+/// paying for catch-up work. Cost is reported per frame (per `advance` call),
+/// which is what a frame budget cares about.
+struct Profile {
+    frames: u32,
+    steps: u32,
+    cpu_ms: f64,
+    upload_ms: f64,
+    delta_ms: f64,
+    delta_min: Duration,
+    delta_max: Duration,
+    zero_frames: u32,
+    short_frames: u32,
+}
+
+impl Profile {
+    const REPORT_EVERY: u32 = 60;
+    /// At or below this interval a frame advances the scene by almost nothing.
+    const SHORT_FRAME: Duration = Duration::from_millis(1);
+
+    fn record(
+        &mut self,
+        delta: Duration,
+        steps: u32,
+        cost: Option<GeometryCost>,
+    ) -> Option<String> {
+        self.frames += 1;
+        self.steps += steps;
+
+        if let Some(cost) = cost {
+            self.cpu_ms += cost.cpu_ms;
+            self.upload_ms += cost.upload_ms;
+        }
+
+        self.delta_ms += delta.as_secs_f64() * 1000.0;
+        self.delta_min = self.delta_min.min(delta);
+        self.delta_max = self.delta_max.max(delta);
+
+        if delta.is_zero() {
+            self.zero_frames += 1;
+        } else if delta <= Self::SHORT_FRAME {
+            self.short_frames += 1;
+        }
+
+        if self.frames < Self::REPORT_EVERY {
+            return None;
+        }
+
+        let count = f64::from(self.frames);
+        let line = format!(
+            "live2d profile: {} frames {:.2} steps, rebuild {:.2} ms, upload {:.2} ms, delta {:.2}..{:.1} ms (mean {:.2}, {} zero, {} under 1 ms)",
+            self.frames,
+            f64::from(self.steps) / count,
+            self.cpu_ms / count,
+            self.upload_ms / count,
+            self.delta_min.as_secs_f64() * 1000.0,
+            self.delta_max.as_secs_f64() * 1000.0,
+            self.delta_ms / count,
+            self.zero_frames,
+            self.short_frames,
+        );
+
+        *self = Self::default();
+
+        Some(line)
+    }
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self {
+            frames: 0,
+            steps: 0,
+            cpu_ms: 0.0,
+            upload_ms: 0.0,
+            delta_ms: 0.0,
+            delta_min: Duration::MAX,
+            delta_max: Duration::ZERO,
+            zero_frames: 0,
+            short_frames: 0,
+        }
+    }
+}
+
 /// Integer box-filter factor derived from a `0..1` texture scale.
 fn downscale_factor(scale: f32) -> u32 {
     if !scale.is_finite() || scale >= 0.999 {
@@ -905,4 +1067,74 @@ fn is_idle_clip(path: &Path) -> bool {
 fn set_tracking_input(runtime: &mut ModelRuntime, id: &str, offset: f32) {
     let amount = (offset.clamp(-1.0, 1.0) + 1.0) * 0.5;
     runtime.set_parameter_override_normalized(id, amount);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Most steps a `Stepper` can hand out across `calls` identical `delta`s.
+    fn steps_over(deltas: &[Duration]) -> u32 {
+        let mut stepper = Stepper::new();
+        deltas.iter().map(|delta| stepper.consume(*delta)).sum()
+    }
+
+    #[test]
+    fn the_first_call_steps_the_loaded_model() {
+        assert_eq!(steps_over(&[Duration::ZERO]), 1);
+    }
+
+    #[test]
+    fn zero_length_frames_never_step() {
+        let mut stepper = Stepper::new();
+        stepper.consume(Duration::ZERO);
+
+        for _ in 0..10 {
+            assert_eq!(stepper.consume(Duration::ZERO), 0);
+        }
+    }
+
+    #[test]
+    fn one_frame_interval_is_one_step() {
+        let mut stepper = Stepper::new();
+        stepper.consume(Duration::ZERO);
+
+        assert_eq!(stepper.consume(STEP), 1);
+        assert_eq!(stepper.consume(STEP), 1);
+    }
+
+    #[test]
+    fn leftover_time_carries_over() {
+        let half = STEP / 2;
+        let mut stepper = Stepper::new();
+        stepper.consume(Duration::ZERO);
+
+        assert_eq!(stepper.consume(half), 0);
+        assert_eq!(stepper.consume(half), 1);
+    }
+
+    #[test]
+    fn a_slow_host_runs_several_steps_per_call() {
+        assert_eq!(steps_over(&[Duration::ZERO, STEP * 2]), 3);
+    }
+
+    #[test]
+    fn steps_follow_elapsed_time_not_frame_count() {
+        let quarter = STEP / 4;
+        let chunked = steps_over(&[quarter; 8]);
+        let whole = steps_over(&[quarter * 8]);
+
+        assert_eq!(chunked, whole);
+        assert_eq!(whole, 3);
+    }
+
+    #[test]
+    fn a_stall_does_not_bank_time() {
+        let mut stepper = Stepper::new();
+        stepper.consume(Duration::ZERO);
+
+        assert_eq!(stepper.consume(Duration::from_secs(10)), 4);
+        assert_eq!(stepper.consume(Duration::ZERO), 0);
+        assert_eq!(stepper.consume(Duration::ZERO), 0);
+    }
 }

@@ -308,16 +308,17 @@ Cubism 的贴图是 4096–8192px，桌面宠物只画几百像素，等于 4–
 4. **性能（实测数字）**：715 个 drawable、5 张 4096² 级别贴图、1024² mask RT、640² 逻辑窗口（1.5 倍缩放 → 960² 渲染）。
    - **release ≈ 48–50 fps**；
    - **debug ≈ 5 fps** —— 每帧 delta 超过 0.1s 限幅，动画变成慢放。**别用 debug 构建判断性能，也别用 debug 构建看动画是否正常**（这一条花了我半轮排查）。
-   - **CPU 是瓶颈，不是 GPU**：实测 `advance()` 里"推进 + 重建 mesh + 上传顶点"每帧 **14–18 ms**（715 个 drawable 每帧 `queue.write_buffer` 一次），而 render 提交几乎不占时间。要上 60 fps 以上必须优化这一步（合并上传 / 跳过未变化的 drawable / 降低更新频率）。
+   - **CPU 是瓶颈，不是 GPU**：实测 `advance()` 里"推进 + 重建 mesh + 上传顶点"每帧 **rebuild 3.6 ms + upload 18 ms**（715 个 drawable 每帧 `queue.write_buffer` 一次），而 render 提交几乎不占时间。**上传占了 28 ms 帧时间里的 2/3**，要上 60 fps 以上必须优化这一步（合并上传 / 跳过未变化的 drawable / 降低更新频率）。对比：Haru 这类几十个 drawable 的模型是同一步 **0.2 ms + 0.5 ms**。
 5. **内存：贴图是绝对大头，而且很容易泄漏一份**（实测 1 565 MB → 462 MB）：
    - 这 5 张贴图是 4096×8192、4096×8192、2048×2048、**8192×8192**、4096×4096，未压缩共 **592 MB**；
    - `load_model_runtime` 返回的 `RuntimeModel` 里**同时持有解码后的 RGBA**，如果把它留在场景结构里，就是 CPU 592 MB + GPU 592 MB ≈ **1.5 GB**；
    - 修法：`loaded.runtime().clone()` 之后 `drop(loaded)`（mocari 官方示例就是这么做的），再给一个 `texture_scale`（0.5 → 148 MB GPU），总占用降到 **462 MB**。
 6. **别用 cargo 重放的警告判断源码状态**：`cargo build` 会对"未重新编译"的依赖**重放上次的编译警告**。我改坏过一个 vendored 依赖、又改回来，但产物没重编，于是画面异常却看不到任何警告（反而看到旧的）。**怀疑构建不一致时：`cargo clean -p <crate> --release` 再编，确认警告一起消失。**
-7. **HiDPI / resize**：`bounds` 是逻辑像素、`viewport` 是物理像素。窗口跨显示器拖动时 `scale_factor` 会变，变换要在 `prepare` 里重算，别缓存成常量。spike 里用 `fit_aspect` 做脏检查。
-8. **透明窗口**：`Level::AlwaysOnTop` + `transparent: true` + `decorations: false` + 根样式 alpha=0，缺一不可；`alpha_mode` 要 `PreMultiplied`。**跨平台表现不一致，三平台各测一次**。
-9. **逐像素点击穿透**：iced 只提供整窗 `enable_mouse_passthrough`。要"只有角色可点"，拿 `window::raw_id()` / `HasWindowHandle` 自己处理：Windows 钩 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，macOS 改 `ignoresMouseEvents`，Linux 走 X11 shape / Wayland input region。
-10. **mocari 的 API 抖动**：5 个月 18 个版本，0.4.x 内部都不兼容。**锁死精确版本 + 本地 patch**，别用 `^`。
+7. **不能相信宿主给的帧间隔（已踩）**：iced 的 `window::frames()` 每秒会有 2–10% 的消息带着**和上一条相同的 `Instant`**，于是 `advance(0)` 拿到零长度 delta。当零长度被当成正常帧处理时，模型每帧先 `reset_parameters()` 再 `apply_physics(0.0)`，而 mocari 的 physics 在 `delta <= 0` 时**直接返回、不写输出参数**，结果就是物理驱动的部件（头发、裙摆、配件）恢复到默认姿势一帧再弹回来——肉眼看到的就是"部分组件频闪"。大肥鱼看不出来只是因为它每帧 ~28 ms，iced 基本不会给它重复 instant。修法：`Live2dScene` 内部做**固定 1/60 s 步进累加器**（`Stepper`），零长度帧自然变成 no-op，同一段时长切成什么样都会得到同一姿势（这也是后面像素回归测试的前提）。
+8. **HiDPI / resize**：`bounds` 是逻辑像素、`viewport` 是物理像素。窗口跨显示器拖动时 `scale_factor` 会变，变换要在 `prepare` 里重算，别缓存成常量。spike 里用 `fit_aspect` 做脏检查。
+9. **透明窗口**：`Level::AlwaysOnTop` + `transparent: true` + `decorations: false` + 根样式 alpha=0，缺一不可；`alpha_mode` 要 `PreMultiplied`。**跨平台表现不一致，三平台各测一次**。
+10. **逐像素点击穿透**：iced 只提供整窗 `enable_mouse_passthrough`。要"只有角色可点"，拿 `window::raw_id()` / `HasWindowHandle` 自己处理：Windows 钩 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，macOS 改 `ignoresMouseEvents`，Linux 走 X11 shape / Wayland input region。
+11. **mocari 的 API 抖动**：5 个月 18 个版本，0.4.x 内部都不兼容。**锁死精确版本 + 本地 patch**，别用 `^`。
 
 ---
 
