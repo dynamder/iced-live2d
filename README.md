@@ -109,6 +109,10 @@ and the physics outputs per frame, and flags any frame-to-frame jump. Prefix it
 with `SWEEP_DIRECT=<ParamId>` to write that parameter directly instead of driving
 the gaze.
 
+`inspect` takes `LIVE2D_PARAMS=<substring>[,<substring>...]` to dump the matching
+parameters with their ranges and current values, which is how you confirm a
+parameter exists at all before blaming the renderer.
+
 ## Memory
 
 The rig's five atlases are 4096x8192, 4096x8192, 2048x2048, **8192x8192** and
