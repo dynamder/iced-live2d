@@ -1,0 +1,12 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "iced 0.15-dev shell hosting the Live2D render layer"
+
+[dependencies]
+# iced is pinned to an exact master commit on purpose: 0.15 is unpublished and
+# `wgpu = "30"` only matches mocari on master. See docs/rust-iced-live2d-plan.md.
+iced = { git = "https://github.com/iced-rs/iced", rev = "e5c350f271a8046f875c6662d452fde9e462d486" }
+live2d-render = { path = "../crates/live2d-render" }

@@ -1,0 +1,8 @@
+/target
+/.cargo-home
+/.refs
+/.tmp-*
+
+# Model assets are copyrighted by the artist and Live2D Inc.; never commit them.
+/DeepSeek-fish-live2d
+*.moc3

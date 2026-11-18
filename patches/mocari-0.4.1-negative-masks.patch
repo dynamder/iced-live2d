@@ -1,0 +1,43 @@
+# mocari 0.4.1 cannot open models whose drawables carry a negative mask index
+#
+# Some exporters write a -1 sentinel in a drawable's mask list to mean 'this
+# drawable is not masked by anything'. ModelRuntime keeps that value verbatim,
+# ClippingPlan puts it in a mask key, and
+# WgpuClippingLayoutError::InvalidMaskDrawableIndex { drawable_index: -1 }
+# aborts resource creation, so Live2dScene::load fails with:
+#
+#   failed to create a clipping layout: invalid mask drawable index -1
+#
+# The model used while building this spike (DeepSeek / 大肥鱼) has exactly one
+# drawable with masks == [-1]; the other 714 are fine. Filtering negative
+# entries out treats that drawable as unmasked, which is the only sensible
+# reading of the sentinel.
+#
+# Apply with:
+#   cargo fetch                                   # put mocari 0.4.1 in the registry
+#   powershell -File scripts/vendor-mocari.ps1    # does the copy + this patch
+#
+# Worth reporting upstream: the fix belongs in DrawableInfo::from_mesh, not in
+# every consumer.
+
+--- a/src/render/common/clipping.rs
++++ b/src/render/common/clipping.rs
+@@ -23,7 +23,17 @@ pub struct DrawableInfo {
+ impl DrawableInfo {
+     /// Creates render metadata from a runtime drawable mesh.
+     pub fn from_mesh(mesh: &Moc3DrawableMesh) -> Self {
+-        let masks = Arc::<[i32]>::from(mesh.masks());
++        // Some exporters emit a sentinel negative mask index (typically -1)
++        // for drawables that are not masked by anything. Cubism treats those
++        // as unmasked; keeping them would make every downstream mask lookup
++        // index out of bounds. See patches/mocari-0.4.1-negative-masks.patch.
++        let masks: Vec<i32> = mesh
++            .masks()
++            .iter()
++            .copied()
++            .filter(|mask| *mask >= 0)
++            .collect();
++        let masks = Arc::<[i32]>::from(masks);
+         let mask_key = sorted_mask_key(&masks);
+ 
+         Self {
