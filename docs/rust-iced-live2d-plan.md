@@ -117,6 +117,46 @@ mocari 自己也有 `preferred_surface_format()`，逻辑就是"优先选非 sRG
 
 ---
 
+## 二·五、物理：mocari 实现了什么，以及那个最容易踩的坑
+
+**mocari 的物理是 Cubism `CubismPhysics` 的忠实移植**（读 `src/core/physics.rs` 确认）：
+
+- 从 `.model3.json` 的 `Physics` 字段自动加载（`load_model_runtime` 内部 `set_physics`）；
+- `apply_physics(dt)` 按 `PhysicsSetting` 逐条求值：输入按 min/default/max 归一化、`Reflect`、逐顶点的 `Mobility/Delay/Acceleration`、固定步长（用文件里的 `Fps`，通常 30Hz）子步进、输入插值（`input_weight`）、输出插值（`alpha`）、按 `Weight/100` 与现有值混合、`dt <= 0` 直接返回、累计时间超过 `MAXIMUM_DELTA_TIME` 归零；
+- 重力/风力可调（`PhysicsOptions`，默认 `gravity = (0, -1)`）。
+
+这个模型实测：**131 组 setting / 299 输入 / 292 输出**，头发、眼睑、眉毛、腮、衣饰、缎带全挂在上面。
+
+### 坑 1（必踩）：物理的输出参数不能写，要写输入参数
+
+VTuber 导出的绑定通常是这样分层的：
+
+| 参数 | 角色 | 范围 |
+|---|---|---|
+| `AngleX/Y/Z`、`PositionX/Y/Z`、`LeanInput`、`Movement1..3` | **追踪输入**（app 写这里） | ±30 |
+| `ParamAngleX/Y/Z`、`ParamBodyAngleX/Y/Z`、大量 `Hair*` | **物理输出**（物理写这里） | ±30 |
+
+`update_output_parameter` 在 `weight >= 1.0` 时是**直接替换**：
+
+```rust
+*parameter_value = if weight >= 1.0 { value } else { lerp(old, value, weight) };
+```
+
+所以：如果你把 `ParamAngleX` 当输入写，同一帧稍后的 `apply_physics` 会用 `AngleX`(=0) 推出的结果把它覆盖掉 —— **表现就是"鼠标动了，只有头发在摆，头和眼睛不动"**。正确做法是写 `AngleX/Y/Z`、`PositionX/Y/Z`、`LeanInput`，让物理把运动传导到 `ParamAngle*` 和上半身。
+
+代码里已经按"有 `AngleX` 就写追踪输入，否则退回 `ParamAngle*`"自动选择（`GazeInputs`）。
+
+### 坑 2：这个绑定缺 `ParamBreath`，呼吸类物理整体是死的
+
+`大肥鱼.physics3.json` 里 `ParamBreath` 被引用 **30 次**（作为输入，例如 `PositionY + ParamBreath(reflect) + LeanInput -> ParamBodyAngleY`），但 **`.moc3` 里根本没有 `ParamBreath` 这个参数**。
+
+- mocari 对未注册的参数输入会跳过（`parameter_index` 为 `None`），不报错；
+- 官方 SDK 里 `ParamBreath` 不是模型自带的，而是由 **`CubismBreath`** 组件（app 层）按正弦写进去的 —— mocari **没有**实现 `CubismBreath`。
+
+结论：**没有呼吸是绑定导出缺参数 + app 没补 `CubismBreath` 双重原因**，官方 Viewer 打开也不会呼吸。同理 `CubismEyeBlink` 也没有，`ParamEyeLOpen/ROpen` 存在但没人驱动，所以模型不会眨眼。这两个组件都是 20–40 行的活，属于"必须自己写"的清单。
+
+---
+
 ## 三、iced 0.15-dev 实测细节（0.14 文档里查不到的部分）
 
 1. **trait 搬家了**：`Pipeline` / `Primitive` / `Storage` 现在定义在 `iced_wgpu::primitive`，通过 `iced::widget::shader::{Pipeline, Primitive, Storage, Viewport}` 再导出。`Primitive` 的 `type Pipeline: Pipeline + MaybeSend + MaybeSync`，`Pipeline: Any + MaybeSend + MaybeSync`——**所以模型数据必须 `Send + Sync`**（mocari 的 `RuntimeModel` 满足）。
@@ -134,13 +174,19 @@ mocari 自己也有 `preferred_surface_format()`，逻辑就是"优先选非 sRG
 1. **模型数据里的脏值（已踩，必须打补丁）**：本模型有 1 个 drawable 的 mask 列表是 `[-1]`（导出器用它当"无遮罩"哨兵）。mocari 直接 `usize::try_from(-1)` → 报 `invalid mask drawable index -1`，整个模型加载失败。修法：在 `DrawableInfo::from_mesh` 里过滤负值。**见 `patches/mocari-0.4.1-negative-masks.patch`**，`scripts/vendor-mocari.ps1` 会重建 `.refs/mocari`。
 2. **取景坐标系搞错（已踩）**：用"所有 drawable 的包围盒"去居中会**明显偏掉**——模型有 715 个 drawable，其中大量是隐藏的替换件（钢盆、脱鞋、替换手、替换体型），包围盒被它们拉歪。正确做法是用 `.moc3` 的 **canvas info**（`runtime.canvas()`：`pixels_per_unit` / `origin` / `width` / `height`），这才是美术设定的画面。注意 `reverse_y_coordinate` 为真时要退回包围盒。
 3. **`model3.json` 不声明动作（已踩）**：这个 VTuber 模型的动作/表情文件都在 `Animation/`、`Exp3/` 子目录里，`FileReferences` 里**一个都没注册**。`Live2dScene::load` 会在 `model3.json` 为空时扫描模型目录（深度 2）兜底，并把 `IDLE*` 排到最前面。
-4. **性能（实测数字）**：715 个 drawable、5 张 4096² 贴图、1024² mask RT、640² 逻辑窗口（1.5 倍缩放 → 960² 渲染）。
-   - **release ≈ 48–50 fps**（够用）；
+4. **性能（实测数字）**：715 个 drawable、5 张 4096² 级别贴图、1024² mask RT、640² 逻辑窗口（1.5 倍缩放 → 960² 渲染）。
+   - **release ≈ 48–50 fps**；
    - **debug ≈ 5 fps** —— 每帧 delta 超过 0.1s 限幅，动画变成慢放。**别用 debug 构建判断性能，也别用 debug 构建看动画是否正常**（这一条花了我半轮排查）。
-5. **HiDPI / resize**：`bounds` 是逻辑像素、`viewport` 是物理像素。窗口跨显示器拖动时 `scale_factor` 会变，变换要在 `prepare` 里重算，别缓存成常量。spike 里用 `fit_aspect` 做脏检查。
-6. **透明窗口**：`Level::AlwaysOnTop` + `transparent: true` + `decorations: false` + 根样式 alpha=0，缺一不可；`alpha_mode` 要 `PreMultiplied`。**跨平台表现不一致，三平台各测一次**。
-7. **逐像素点击穿透**：iced 只提供整窗 `enable_mouse_passthrough`。要"只有角色可点"，拿 `window::raw_id()` / `HasWindowHandle` 自己处理：Windows 钩 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，macOS 改 `ignoresMouseEvents`，Linux 走 X11 shape / Wayland input region。
-8. **mocari 的 API 抖动**：5 个月 18 个版本，0.4.x 内部都不兼容。**锁死精确版本 + 本地 patch**，别用 `^`。
+   - **CPU 是瓶颈，不是 GPU**：实测 `advance()` 里"推进 + 重建 mesh + 上传顶点"每帧 **14–18 ms**（715 个 drawable 每帧 `queue.write_buffer` 一次），而 render 提交几乎不占时间。要上 60 fps 以上必须优化这一步（合并上传 / 跳过未变化的 drawable / 降低更新频率）。
+5. **内存：贴图是绝对大头，而且很容易泄漏一份**（实测 1 565 MB → 462 MB）：
+   - 这 5 张贴图是 4096×8192、4096×8192、2048×2048、**8192×8192**、4096×4096，未压缩共 **592 MB**；
+   - `load_model_runtime` 返回的 `RuntimeModel` 里**同时持有解码后的 RGBA**，如果把它留在场景结构里，就是 CPU 592 MB + GPU 592 MB ≈ **1.5 GB**；
+   - 修法：`loaded.runtime().clone()` 之后 `drop(loaded)`（mocari 官方示例就是这么做的），再给一个 `texture_scale`（0.5 → 148 MB GPU），总占用降到 **462 MB**。
+6. **别用 cargo 重放的警告判断源码状态**：`cargo build` 会对"未重新编译"的依赖**重放上次的编译警告**。我改坏过一个 vendored 依赖、又改回来，但产物没重编，于是画面异常却看不到任何警告（反而看到旧的）。**怀疑构建不一致时：`cargo clean -p <crate> --release` 再编，确认警告一起消失。**
+7. **HiDPI / resize**：`bounds` 是逻辑像素、`viewport` 是物理像素。窗口跨显示器拖动时 `scale_factor` 会变，变换要在 `prepare` 里重算，别缓存成常量。spike 里用 `fit_aspect` 做脏检查。
+8. **透明窗口**：`Level::AlwaysOnTop` + `transparent: true` + `decorations: false` + 根样式 alpha=0，缺一不可；`alpha_mode` 要 `PreMultiplied`。**跨平台表现不一致，三平台各测一次**。
+9. **逐像素点击穿透**：iced 只提供整窗 `enable_mouse_passthrough`。要"只有角色可点"，拿 `window::raw_id()` / `HasWindowHandle` 自己处理：Windows 钩 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，macOS 改 `ignoresMouseEvents`，Linux 走 X11 shape / Wayland input region。
+10. **mocari 的 API 抖动**：5 个月 18 个版本，0.4.x 内部都不兼容。**锁死精确版本 + 本地 patch**，别用 `^`。
 
 ---
 
