@@ -276,6 +276,8 @@ this is not a project problem.
 
 - [`docs/rust-iced-live2d-plan.md`](docs/rust-iced-live2d-plan.md) — verified
   architecture, iced 0.15-dev API notes, pitfalls, calibrated effort estimate
+- [`docs/test-models.md`](docs/test-models.md) — the model corpus, where each
+  model's terms of use live, and what each rig exercises
 - [`docs/mocari-chained-physics.md`](docs/mocari-chained-physics.md) — confirmed
   mocari defect: physics outputs never reached the parameter cache, so the chained
   half of the rig stood still

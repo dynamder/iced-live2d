@@ -12,7 +12,7 @@
 //! mouse bindings exactly, which is what a pixel comparison against the Viewer
 //! needs.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -163,7 +163,7 @@ impl Rig {
 /// What the resolver is allowed to look at, so it stays testable without a model.
 #[derive(Debug, Clone, Default)]
 pub struct ModelFacts {
-    parameters: BTreeSet<String>,
+    parameters: BTreeMap<String, String>,
     physics_outputs: BTreeSet<String>,
 }
 
@@ -173,18 +173,43 @@ impl ModelFacts {
         physics_outputs: impl IntoIterator<Item = String>,
     ) -> Self {
         Self {
-            parameters: parameters.into_iter().collect(),
-            physics_outputs: physics_outputs.into_iter().collect(),
+            parameters: parameters
+                .into_iter()
+                .map(|parameter| (normalize(&parameter), parameter))
+                .collect(),
+            physics_outputs: physics_outputs
+                .into_iter()
+                .map(|name| normalize(&name))
+                .collect(),
         }
     }
 
-    pub fn has(&self, parameter: &str) -> bool {
-        self.parameters.contains(parameter)
+    /// The model's own spelling of a conventional parameter name, if it has one.
+    ///
+    /// Matching ignores case and underscores: older rigs use `PARAM_ANGLE_X`
+    /// where newer ones use `ParamAngleX`, and both mean the same slot.
+    pub fn find(&self, conventional: &str) -> Option<&str> {
+        self.parameters
+            .get(&normalize(conventional))
+            .map(String::as_str)
+    }
+
+    pub fn has(&self, conventional: &str) -> bool {
+        self.find(conventional).is_some()
     }
 
     fn is_physics_output(&self, parameter: &str) -> bool {
-        self.physics_outputs.contains(parameter)
+        self.physics_outputs.contains(&normalize(parameter))
     }
+}
+
+/// Case and underscore insensitive key for a parameter name.
+fn normalize(parameter: &str) -> String {
+    parameter
+        .chars()
+        .filter(|character| *character != '_')
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// Resolves the tracking table for `facts` under `mode`.
@@ -201,7 +226,7 @@ pub fn resolve(mode: TrackingMode, facts: &ModelFacts) -> Rig {
                 (Slot::HeadPitch, "ParamAngleY"),
                 (Slot::BodyYaw, "ParamBodyAngleX"),
             ] {
-                if facts.has(parameter) {
+                if let Some(parameter) = facts.find(parameter) {
                     rig.push(slot, parameter, Route::Direct, Source::ViewerDefault);
                 }
             }
@@ -226,9 +251,14 @@ pub fn resolve(mode: TrackingMode, facts: &ModelFacts) -> Rig {
         }
     }
 
+    let eye_source = match mode {
+        TrackingMode::Adapted => Source::Convention,
+        TrackingMode::ViewerDefault => Source::ViewerDefault,
+    };
+
     for (slot, parameter) in [(Slot::EyeX, "ParamEyeBallX"), (Slot::EyeY, "ParamEyeBallY")] {
-        if facts.has(parameter) {
-            rig.push(slot, parameter, Route::Direct, Source::Convention);
+        if let Some(parameter) = facts.find(parameter) {
+            rig.push(slot, parameter, Route::Direct, eye_source);
         }
     }
 
@@ -240,15 +270,18 @@ pub fn resolve(mode: TrackingMode, facts: &ModelFacts) -> Rig {
 /// The interesting case is `ParamAngleX` being a physics output: writing it is
 /// useless, and `AngleX` is the parameter the rig actually wants.
 fn resolve_adapted(rig: &mut Rig, facts: &ModelFacts, slot: Slot, input: &str, conventional: &str) {
-    let conventional_is_output = facts.has(conventional) && facts.is_physics_output(conventional);
+    let conventional = facts.find(conventional);
+    let input = facts.find(input);
 
-    if conventional_is_output {
-        if facts.has(input) {
-            rig.push(slot, input, Route::ThroughPhysics, Source::PhysicsInput);
+    if let Some(conventional) = conventional {
+        if facts.is_physics_output(conventional) {
+            if let Some(input) = input {
+                rig.push(slot, input, Route::ThroughPhysics, Source::PhysicsInput);
+            }
+        } else {
+            rig.push(slot, conventional, Route::Direct, Source::Convention);
         }
-    } else if facts.has(conventional) {
-        rig.push(slot, conventional, Route::Direct, Source::Convention);
-    } else if facts.has(input) {
+    } else if let Some(input) = input {
         rig.push(slot, input, Route::Direct, Source::Convention);
     }
 }
@@ -353,6 +386,25 @@ mod tests {
 
         assert_eq!(rig.binding(Slot::HeadYaw).unwrap().parameter, "AngleX");
         assert_eq!(rig.binding(Slot::HeadYaw).unwrap().route, Route::Direct);
+    }
+
+    #[test]
+    fn uppercase_underscore_ids_are_recognised() {
+        // Wanko: an older rig with SHOUTING_IDS and no eye-ball parameters.
+        let rig = resolve(
+            TrackingMode::Adapted,
+            &facts(&["PARAM_ANGLE_X", "PARAM_BODY_ANGLE_X"], &[]),
+        );
+
+        assert_eq!(
+            rig.binding(Slot::HeadYaw).unwrap().parameter,
+            "PARAM_ANGLE_X"
+        );
+        assert_eq!(
+            rig.binding(Slot::BodyYaw).unwrap().parameter,
+            "PARAM_BODY_ANGLE_X"
+        );
+        assert!(rig.binding(Slot::EyeX).is_none());
     }
 
     #[test]
