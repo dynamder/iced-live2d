@@ -6,7 +6,6 @@
 //! GPU state, which keeps it cheap to rebuild every frame.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use iced::mouse;
@@ -89,41 +88,26 @@ fn gaze_from_cursor(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]
     ])
 }
 
+/// Persistent GPU state, created by iced once and reused by every primitive.
+///
+/// The model is loaded lazily in [`shader::Primitive::prepare`], the only place
+/// that has both the device and the model path.
 pub struct Live2dPipeline {
     format: wgpu::TextureFormat,
     scene: Option<Live2dScene>,
     failure: Option<String>,
     last_frame: Option<Instant>,
     last_command_seq: u64,
-    // TEMP diagnostics
-    prepares: u64,
-    renders: AtomicU64,
-    distinct_now: u64,
-    last_now: Option<Instant>,
-    report_start: Instant,
-    profile: bool,
-    advance_nanos: u128,
 }
 
 impl shader::Pipeline for Live2dPipeline {
     fn new(_device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        // The model is loaded lazily in `prepare`, the only place that has both
-        // the device and the model path.
-        println!("live2d: iced render target format is {format:?}");
-
         Self {
             format,
             scene: None,
             failure: None,
             last_frame: None,
             last_command_seq: 0,
-            prepares: 0,
-            renders: AtomicU64::new(0),
-            distinct_now: 0,
-            last_now: None,
-            report_start: Instant::now(),
-            profile: std::env::var_os("LIVE2D_PROFILE").is_some(),
-            advance_nanos: 0,
         }
     }
 }
@@ -139,42 +123,16 @@ impl shader::Primitive for Live2dPrimitive {
         bounds: &Rectangle,
         _viewport: &shader::Viewport,
     ) {
-        pipeline.prepares += 1;
-
-        if pipeline.last_now != Some(self.now) {
-            pipeline.distinct_now += 1;
-            pipeline.last_now = Some(self.now);
-        }
-
-        let report_elapsed = Instant::now().saturating_duration_since(pipeline.report_start);
-        if pipeline.profile && report_elapsed >= std::time::Duration::from_secs(1) {
-            println!(
-                "live2d diag: prepares={} renders={} distinct_now={} in {:.2}s",
-                pipeline.prepares,
-                pipeline.renders.load(Ordering::Relaxed),
-                pipeline.distinct_now,
-                report_elapsed.as_secs_f32(),
-            );
-            println!(
-                "live2d diag: advance averaged {:.2} ms/frame",
-                pipeline.advance_nanos as f64 / 1e6 / (pipeline.prepares.max(1) as f64),
-            );
-            pipeline.advance_nanos = 0;
-            pipeline.prepares = 0;
-            pipeline.renders.store(0, Ordering::Relaxed);
-            pipeline.distinct_now = 0;
-            pipeline.report_start = Instant::now();
-        }
-
         if pipeline.scene.is_none() && pipeline.failure.is_none() {
             match Live2dScene::load(device, queue, &self.model_path, pipeline.format) {
                 Ok(scene) => {
                     println!(
-                        "live2d: loaded {} ({} motions in {} groups, {} expressions)",
+                        "live2d: loaded {} ({} motions in {} groups, {} expressions, target {:?})",
                         self.model_path.display(),
                         scene.motion_count(),
                         scene.motion_groups().count(),
                         scene.expression_count(),
+                        pipeline.format,
                     );
                     pipeline.scene = Some(scene);
                 }
@@ -216,12 +174,7 @@ impl shader::Primitive for Live2dPrimitive {
             }
         }
 
-        let advance_start = pipeline.profile.then(Instant::now);
         let advance_result = scene.advance(device, queue, delta);
-
-        if let Some(start) = advance_start {
-            pipeline.advance_nanos += start.elapsed().as_nanos();
-        }
 
         if let Err(error) = advance_result {
             eprintln!("live2d: advance failed: {error}");
@@ -245,8 +198,6 @@ impl shader::Primitive for Live2dPrimitive {
             width: clip_bounds.width,
             height: clip_bounds.height,
         };
-
-        pipeline.renders.fetch_add(1, Ordering::Relaxed);
 
         if let Err(error) = scene.encode(encoder, target, clip) {
             eprintln!("live2d: encode failed: {error}");
