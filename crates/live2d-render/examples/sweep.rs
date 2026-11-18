@@ -20,8 +20,6 @@
 //! - `SWEEP_MOTION=1` keep the idle motion playing, which is the app's normal
 //!   state; by default the sweep stops it to isolate physics
 
-use std::time::Duration;
-
 use live2d_render::wgpu;
 use live2d_render::{Live2dScene, SceneOptions};
 
@@ -88,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let physics settle at the left end before the first recorded frame.
     for _ in 0..settle {
         drive(&mut scene, &direct, low);
-        scene.advance(&device, &queue, Duration::from_millis(16))?;
+        scene.advance(&device, &queue, live2d_render::STEP)?;
     }
 
     report_issues(&mut scene);
@@ -110,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let x = low + (high - low) * t;
 
         drive(&mut scene, &direct, x);
-        scene.advance(&device, &queue, Duration::from_millis(16))?;
+        scene.advance(&device, &queue, live2d_render::STEP)?;
 
         let values: Vec<f32> = watched
             .iter()

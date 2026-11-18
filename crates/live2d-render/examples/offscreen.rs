@@ -10,8 +10,6 @@
 //! A capture must be reproducible from the command line alone, so every piece of
 //! state is set through the `LIVE2D_*` knobs documented in `README.md`.
 
-use std::time::Duration;
-
 use live2d_render::wgpu;
 use live2d_render::{ClipRect, Live2dScene, SceneOptions};
 
@@ -38,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|value| value.parse())
         .transpose()?
         .unwrap_or(30);
-    let frame_time = Duration::from_millis(16);
+    let frame_time = live2d_render::STEP;
 
     // Validated before the GPU opens, so a typo fails in a millisecond instead of
     // after uploading 592 MB of textures.

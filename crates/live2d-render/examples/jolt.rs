@@ -17,8 +17,6 @@
 //! - `JOLT_SIZE=<px>` capture size, default `640` — match the app's physical size
 //! - `LIVE2D_NO_PHYSICS` — flag, disables physics evaluation
 
-use std::time::Duration;
-
 use live2d_render::wgpu;
 use live2d_render::{ClipRect, Live2dScene, SceneOptions};
 
@@ -72,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for _ in 0..settle {
         scene.set_gaze([low, 0.0]);
-        scene.advance(&device, &queue, Duration::from_millis(16))?;
+        scene.advance(&device, &queue, live2d_render::STEP)?;
     }
 
     report_issues(&mut scene);
@@ -85,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let x = low + (high - low) * t;
 
         scene.set_gaze([x, 0.0]);
-        scene.advance(&device, &queue, Duration::from_millis(16))?;
+        scene.advance(&device, &queue, live2d_render::STEP)?;
 
         let rgba = capture(&device, &queue, &mut scene, &target, size)?;
 

@@ -36,7 +36,12 @@ const DEFAULT_VIEW_FILL: f32 = 1.85;
 /// 60 Hz is what Live2D models are authored against: motion curves and physics
 /// are sampled on it, and two hosts with the same elapsed time must agree on the
 /// resulting pose.
-const STEP: Duration = Duration::from_micros(16_667);
+///
+/// A host that wants exactly one step per frame should pass this as the interval
+/// to [`Live2dScene::advance`]. Passing a rounded interval instead (16 ms, say)
+/// is fine but slowly drifts below real time, because the scene only spends whole
+/// steps.
+pub const STEP: Duration = Duration::from_micros(16_667);
 /// Longest interval one `advance` call may count, so a stalled window does not
 /// teleport the motion timeline.
 const MAX_CALL: Duration = Duration::from_millis(100);
