@@ -10,7 +10,9 @@ use live2d_render::mocari::assets::load_model_runtime;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let path = args.next().ok_or("usage: probe <model> <x> <y> [Param=value ...]")?;
+    let path = args
+        .next()
+        .ok_or("usage: probe <model> <x> <y> [Param=value ...]")?;
     let x: f32 = args.next().ok_or("missing x")?.parse()?;
     let y: f32 = args.next().ok_or("missing y")?.parse()?;
 
@@ -52,7 +54,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     stack.sort_unstable();
 
-    println!("{} drawable(s) cover this point, in paint order:", stack.len());
+    println!(
+        "{} drawable(s) cover this point, in paint order:",
+        stack.len()
+    );
 
     for (_, index) in stack {
         let mesh = &runtime.meshes()[index];

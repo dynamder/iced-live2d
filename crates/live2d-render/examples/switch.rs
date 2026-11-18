@@ -11,7 +11,9 @@ use live2d_render::mocari::moc3::Moc3DrawableMesh;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let path = args.next().ok_or("usage: switch <model> <ParamId> <v0> <v1>")?;
+    let path = args
+        .next()
+        .ok_or("usage: switch <model> <ParamId> <v0> <v1>")?;
     let parameter = args.next().ok_or("missing parameter id")?;
     let first: f32 = args.next().unwrap_or_else(|| "0".into()).parse()?;
     let second: f32 = args.next().unwrap_or_else(|| "1".into()).parse()?;
@@ -19,14 +21,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = load_model_runtime(&path)?;
     let runtime = model.runtime();
 
-    println!("parameter '{parameter}' exists: {}", runtime.parameter_value(&parameter).is_some());
+    println!(
+        "parameter '{parameter}' exists: {}",
+        runtime.parameter_value(&parameter).is_some()
+    );
     println!("drawables: {}", runtime.meshes().len());
 
     let low = sample(&path, &parameter, first)?;
     let high = sample(&path, &parameter, second)?;
 
-    println!("\nvisible drawables at {parameter} = {first}: {}", low.iter().filter(|d| d.visible).count());
-    println!("visible drawables at {parameter} = {second}: {}", high.iter().filter(|d| d.visible).count());
+    println!(
+        "\nvisible drawables at {parameter} = {first}: {}",
+        low.iter().filter(|d| d.visible).count()
+    );
+    println!(
+        "visible drawables at {parameter} = {second}: {}",
+        high.iter().filter(|d| d.visible).count()
+    );
 
     println!("\n== drawables that appear at {second} ==");
     for (index, entry) in high.iter().enumerate() {
@@ -80,7 +91,11 @@ impl Entry {
     }
 }
 
-fn sample(path: &str, parameter: &str, value: f32) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {
+fn sample(
+    path: &str,
+    parameter: &str,
+    value: f32,
+) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {
     let mut model = load_model_runtime(path)?;
     let runtime = model.runtime_mut();
 

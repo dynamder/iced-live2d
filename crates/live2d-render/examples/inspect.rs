@@ -10,9 +10,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use live2d_render::mocari::assets::load_model_runtime;
+use live2d_render::mocari::expression::load_expression;
 use live2d_render::mocari::json::{Physics3, PhysicsValueKind};
 use live2d_render::mocari::motion::load_motion;
-use live2d_render::mocari::expression::load_expression;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
@@ -47,9 +47,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut visible_sets: std::collections::BTreeSet<Vec<i32>> = std::collections::BTreeSet::new();
     for mesh in runtime.meshes() {
         let masks: Vec<i32> = mesh.masks().iter().copied().filter(|m| *m >= 0).collect();
-        if masks.is_empty() { continue; }
+        if masks.is_empty() {
+            continue;
+        }
         all_sets.insert(masks.clone());
-        if mesh.opacity() > 0.0 { visible_sets.insert(masks); }
+        if mesh.opacity() > 0.0 {
+            visible_sets.insert(masks);
+        }
     }
 
     println!("vertices: {vertices}, polygons: {polygons}");
@@ -72,11 +76,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("parameters: {}", runtime.parameter_ids().len());
     println!("parts: {}", runtime.part_ids().len());
     println!("physics loaded: {}", runtime.physics().is_some());
+    println!("physics options: {:?}", runtime.physics_options());
     println!(
-        "physics options: {:?}",
-        runtime.physics_options()
+        "pose: {}",
+        if runtime.model().pose().is_some() {
+            "yes"
+        } else {
+            "no"
+        }
     );
-    println!("pose: {}", if runtime.model().pose().is_some() { "yes" } else { "no" });
 
     if let (Some(dir), Some(file)) = (model_dir.as_deref(), runtime.model().physics()) {
         println!("\n== physics3 file: {file} ==");
@@ -126,10 +134,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n== parameters matching '{filter}' ==");
         for info in runtime.parameter_infos() {
             let id = info.id();
-            if filter
-                .split(',')
-                .any(|needle| id.to_ascii_lowercase().contains(&needle.trim().to_ascii_lowercase()))
-            {
+            if filter.split(',').any(|needle| {
+                id.to_ascii_lowercase()
+                    .contains(&needle.trim().to_ascii_lowercase())
+            }) {
                 println!(
                     "  {:<28} min={:<8.2} max={:<8.2} default={:<8.2} value={:.3}",
                     id,

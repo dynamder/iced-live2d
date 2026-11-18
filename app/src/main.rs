@@ -26,18 +26,14 @@ fn main() -> iced::Result {
         );
     }
 
-    iced::application(
-        move || App::new(model_path.clone()),
-        App::update,
-        App::view,
-    )
-    .title("Live2D · iced 0.15-dev + mocari")
-    .subscription(App::subscription)
-    .window(window::Settings {
-        size: Size::new(640.0, 640.0),
-        ..window::Settings::default()
-    })
-    .run()
+    iced::application(move || App::new(model_path.clone()), App::update, App::view)
+        .title("Live2D · iced 0.15-dev + mocari")
+        .subscription(App::subscription)
+        .window(window::Settings {
+            size: Size::new(640.0, 640.0),
+            ..window::Settings::default()
+        })
+        .run()
 }
 
 struct App {

@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use iced::mouse;
-use iced::widget::shader;
 use iced::wgpu;
+use iced::widget::shader;
 use iced::{Point, Rectangle};
 use live2d_render::{ClipRect, Live2dScene};
 
@@ -106,11 +106,7 @@ pub struct Live2dPipeline {
 }
 
 impl shader::Pipeline for Live2dPipeline {
-    fn new(
-        _device: &wgpu::Device,
-        _queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-    ) -> Self {
+    fn new(_device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         // The model is loaded lazily in `prepare`, the only place that has both
         // the device and the model path.
         println!("live2d: iced render target format is {format:?}");

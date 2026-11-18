@@ -5,9 +5,7 @@ use std::path::PathBuf;
 use mocari::assets::AssetLoadError;
 use mocari::expression::ExpressionLoadError;
 use mocari::motion::MotionLoadError;
-use mocari::render::wgpu::{
-    WgpuClippingLayoutError, WgpuRenderError, WgpuTextureError,
-};
+use mocari::render::wgpu::{WgpuClippingLayoutError, WgpuRenderError, WgpuTextureError};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

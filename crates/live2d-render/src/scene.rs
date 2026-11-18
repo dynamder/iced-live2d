@@ -136,7 +136,13 @@ impl Live2dScene {
         model_path: impl AsRef<Path>,
         color_format: TextureFormat,
     ) -> Result<Self> {
-        Self::load_with_options(device, queue, model_path, color_format, SceneOptions::default())
+        Self::load_with_options(
+            device,
+            queue,
+            model_path,
+            color_format,
+            SceneOptions::default(),
+        )
     }
 
     pub fn load_with_options(
@@ -167,18 +173,9 @@ impl Live2dScene {
             .iter()
             .map(|texture| {
                 let (width, height, rgba) = if factor > 1 {
-                    downscale_rgba(
-                        texture.width(),
-                        texture.height(),
-                        texture.rgba(),
-                        factor,
-                    )
+                    downscale_rgba(texture.width(), texture.height(), texture.rgba(), factor)
                 } else {
-                    (
-                        texture.width(),
-                        texture.height(),
-                        texture.rgba().to_vec(),
-                    )
+                    (texture.width(), texture.height(), texture.rgba().to_vec())
                 };
 
                 uploaded_bytes += rgba.len();
@@ -196,8 +193,8 @@ impl Live2dScene {
             options.texture_scale,
         );
 
-        let mesh_buffers = WgpuMeshBuffers::from_drawables(device, model.meshes())
-            .ok_or(Error::MeshBuffers)?;
+        let mesh_buffers =
+            WgpuMeshBuffers::from_drawables(device, model.meshes()).ok_or(Error::MeshBuffers)?;
 
         let clipping_resources = {
             let mut plan = WgpuClippingPlan::from_mesh_buffers(&mesh_buffers);
@@ -206,7 +203,8 @@ impl Live2dScene {
         };
 
         let mask_target = renderer.create_mask_render_target(device, options.mask_size.max(64))?;
-        let transform = renderer.create_transform(device, &bounds.fit_matrix(1.0, options.view_fill));
+        let transform =
+            renderer.create_transform(device, &bounds.fit_matrix(1.0, options.view_fill));
 
         // Rigs exported for VTuber software drive tracking through AngleX/Y/Z,
         // PositionX/Y/Z and LeanInput; physics then derives ParamAngle*,
@@ -751,7 +749,6 @@ fn downscale_rgba(width: u32, height: u32, rgba: &[u8], factor: u32) -> (u32, u3
 }
 
 fn motion_paths_by_group(
-
     runtime: &mocari::ModelRuntime,
     model_dir: Option<&Path>,
 ) -> BTreeMap<String, Vec<PathBuf>> {
@@ -775,10 +772,7 @@ fn motion_paths_by_group(
         .collect()
 }
 
-fn expression_paths(
-    runtime: &mocari::ModelRuntime,
-    model_dir: Option<&Path>,
-) -> Vec<PathBuf> {
+fn expression_paths(runtime: &mocari::ModelRuntime, model_dir: Option<&Path>) -> Vec<PathBuf> {
     let Some(model_dir) = model_dir else {
         return Vec::new();
     };

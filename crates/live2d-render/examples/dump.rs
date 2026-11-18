@@ -85,12 +85,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for vertex in mesh.vertices() {
             let [x, y] = vertex.position();
             visible_bounds = Some(match visible_bounds {
-                Some([min_x, min_y, max_x, max_y]) => [
-                    min_x.min(x),
-                    min_y.min(y),
-                    max_x.max(x),
-                    max_y.max(y),
-                ],
+                Some([min_x, min_y, max_x, max_y]) => {
+                    [min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y)]
+                }
                 None => [x, y, x, y],
             });
         }
