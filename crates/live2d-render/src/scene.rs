@@ -113,6 +113,8 @@ pub struct Live2dScene {
     fit_aspect: f32,
     motion_cursor: usize,
     gaze_inputs: GazeInputs,
+    /// Whether the rig exports the body-tracking inputs (`PositionX`/`PositionY`).
+    body_inputs: bool,
     physics_enabled: bool,
     profile: bool,
     profile_frames: u32,
@@ -240,6 +242,9 @@ impl Live2dScene {
             }
         }
 
+        let body_inputs = model.parameter_index("PositionX").is_some()
+            && model.parameter_index("PositionY").is_some();
+
         let mut scene = Self {
             renderer,
             model,
@@ -260,6 +265,7 @@ impl Live2dScene {
             fit_aspect: 1.0,
             motion_cursor: 0,
             gaze_inputs,
+            body_inputs,
             physics_enabled: true,
             profile: std::env::var_os("LIVE2D_PROFILE").is_some(),
             profile_frames: 0,
@@ -367,11 +373,13 @@ impl Live2dScene {
     /// Makes the model look towards a point given in normalized widget space
     /// (`-1.0..=1.0` on both axes, `-1` = left/top).
     ///
-    /// The writes below are exactly the Cubism Viewer's default mouse bindings:
-    /// `AngleX`, `AngleY`, `ParamBodyAngleX`, `ParamEyeBallX`, `ParamEyeBallY`.
-    /// Do not add inputs the reference renderer leaves unset (`AngleZ`,
-    /// `Position*`, `LeanInput`): physics amplifies them and the pose stops
-    /// matching the reference.
+    /// The parameter set follows the model's saved VTube Studio configuration,
+    /// which is what the rig was authored for: head rotation arrives on
+    /// `AngleX`/`AngleY`, body motion on `PositionX`/`PositionY`, and physics
+    /// derives `ParamAngle*` / `ParamBodyAngle*` from them. Writing
+    /// `ParamAngle*` instead is what the Cubism Viewer's generic default does;
+    /// on a physics rig those are outputs, so physics overwrites them and only
+    /// the eyes move.
     pub fn set_gaze(&mut self, gaze: [f32; 2]) {
         let x = gaze[0].clamp(-1.0, 1.0);
         let y = gaze[1].clamp(-1.0, 1.0);
@@ -382,7 +390,11 @@ impl Live2dScene {
             GazeInputs::Tracking => {
                 set_tracking_input(runtime, "AngleX", x);
                 set_tracking_input(runtime, "AngleY", y);
-                set_tracking_input(runtime, "ParamBodyAngleX", x);
+
+                if self.body_inputs {
+                    set_tracking_input(runtime, "PositionX", x);
+                    set_tracking_input(runtime, "PositionY", y);
+                }
             }
             GazeInputs::Model => {
                 set_tracking_input(runtime, "ParamAngleX", x);

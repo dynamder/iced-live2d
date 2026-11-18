@@ -230,11 +230,14 @@ not need changes.
   `Primitive::render`, because the mask pass has to be inserted between the
   passes iced controls.
 - **Textures need mipmaps** — see patch 2 above.
-- **The torso only follows the mouse with physics off.** `ParamBodyAngleX` is bound to
-  mouse X, but `PhysicsSetting4` also produces it from `PositionX`, which the official
-  bindings leave unset — physics wins and pins it to 0. Turning physics off makes the
-  whole upper body follow. Neither behaviour is a renderer bug; the rig expects
-  `PositionX` from body tracking.
+- **Mouse tracking follows the model's own VTube Studio setup, not the Cubism
+  Viewer's default.** `*.vtube.json` next to the model maps face rotation onto
+  `AngleX`/`AngleY` (head) *and* `PositionX`/`PositionY` (body), plus
+  `ParamEyeBallX`/`Y`; physics derives `ParamAngle*` and `ParamBodyAngle*`. The
+  Viewer's generic default binds `ParamAngleX`/`ParamBodyAngleX` instead — on a
+  physics rig those are *outputs*, so with physics on they get overwritten and only
+  the eyes move. Driving `PositionX` is what makes the torso and arms swing, and it
+  is why this renderer looks alive with physics on where the Viewer does not.
 
 ## Troubleshooting (this machine only)
 

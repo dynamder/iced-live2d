@@ -178,25 +178,38 @@ VTuber 导出的绑定通常是这样分层的：
 
 其余全部“未设置”。我们一度多写了 `AngleZ` / `PositionX/Y` / `LeanInput`（官方未绑），又漏了 `ParamBodyAngleX`，两边画面因此根本对不上——**多余的输入会被物理链放大成明显的姿态差异**，而本项目的验收手段就是和参考渲染器对比，所以不能“顺手加戏改进跟踪”。
 
-#### 为什么“身体不跟鼠标”：`ParamBodyAngleX` 是个物理输出参数
+#### 鼠标该绑哪些参数：看模型自带的 VTube Studio 配置
 
-官方默认绑定里 `ParamBodyAngleX`（胸腔 X）绑到鼠标 X，但它的**生产者**是
-`PhysicsSetting4: PositionX → ParamBodyAngleX`，而 `PositionX` 在官方绑定表里是“未设置”。
-物理输出权重 100 = 直接替换，所以**物理一开，鼠标写进去的胸腔角度就被覆盖成 0**。
+模型目录里的 `大肥鱼.vtube.json` 是艺术家/VUP 保存的 VTube Studio 配置，其中的
+`ParameterSettings` 直接写明了“追踪输入 → Live2D 参数”的映射：
 
-我们在 `examples/sweep.rs` / `examples/jolt.rs` 上开关物理各测了一遍，结构与官方 Viewer 的
-观感完全对应：
-
-| | 物理开 | 物理关 |
+| VTS 输入 | → Live2D 参数 | 用途 |
 |---|---|---|
-| `ParamAngleX`（头） | +13.8（物理由 `AngleX` 推出） | 0（没人写） |
-| `ParamBodyAngleX`（胸腔） | **0**（`Setting4` 用 `PositionX`=0 覆盖） | **+30**（鼠标写入存活） |
-| 画面变化位置 | y≈124（脸/头发） | y≈285（胸口，上方整体被带动） |
-| 每帧变化像素（±1 全程） | 中位 1 931，峰值/中位 1.3× | 中位 3 161，峰值/中位 1.0× |
+| `FaceAngleX` / `FaceAngleY` / `FaceAngleZ` | `AngleX` / `AngleY` / `AngleZ` | 头部 |
+| `FaceAngleX` / `FaceAngleY` / `FaceAngleZ` | `PositionX` / `PositionY` / `PositionZ` | 身体（“身体X/Y/Z”三行） |
+| `EyeRightX` / `EyeRightY` | `ParamEyeBallX` / `ParamEyeBallY` | 眼珠 |
+| （自动） | `ParamBreath` / `ParamEyeLOpen` / `ParamEyeROpen` | 呼吸、眨眼 |
 
-即：**物理开 = 只跟眼睛和头；物理关 = 腰以上整体跟着转**。两种都是这份工程文件的绑定方式决定的，
-渲染器只是照做；官方 Viewer 在相同开关下表现一致。要“身体跟着动”，得给 `PositionX` 喂值
-（身体追踪输入），而不是把鼠标绑到物理输出上。
+`ParamAngleX/Y/Z` 在整个 `vtube.json` 里**一次都没出现**——它们只是
+`PhysicsSetting1/2/3` 的输出，不是给外部写的。
+
+Cubism Viewer 的默认鼠标跟踪把 `ParamAngleX`/`ParamBodyAngleX` 绑到鼠标，那是个**通用默认**，
+不认这份工程的输入参数约定；这两个是物理输出，物理一开就被覆盖，于是 Viewer 里
+“物理开只跟眼睛、物理关才全身动”。三种写法实测对照：
+
+| 写入 | 物理开 | 物理关 |
+|---|---|---|
+| `ParamAngleX`（Viewer 默认） | 0（被 `Setting1` 覆盖） | +30 |
+| `AngleX`（艺术家约定） | 物理推出 `ParamAngleX` = +13.8 | 0（没人消费） |
+| `PositionX`（艺术家约定） | 物理推出 `ParamBodyAngleX`，躯干/手臂跟着转 | 直接生效 |
+
+所以“身体不动”既不是模型缺陷也不是渲染器缺陷：**是没喂 `PositionX`**。补上之后
+（`Live2dScene::set_gaze` 现在也写 `PositionX`/`PositionY`），物理开着画面下半部也会动：
+
+| | 只写 `AngleX`/`AngleY` | 加上 `PositionX`/`PositionY` |
+|---|---|---|
+| 每帧变化像素（±1 全程） | 中位 1 931 | 中位 9 554 |
+| 变化中心 y（480 px 画布） | ≈124（脸/头发） | ≈232（胸口，上身整体） |
 
 > **已确认并已打补丁**：mocari 0.4.1 的 `evaluate_setting` 把重新绑定后的缓存值当成计算结果写回，
 > 等于 `cache = blend(cache, cache)`，所以物理输出**永远进不了** `parameter_cache`；本模型 **113 处**

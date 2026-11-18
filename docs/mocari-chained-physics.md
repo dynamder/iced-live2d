@@ -94,10 +94,9 @@ UpdateOutputParameterValue(
 - `examples/jolt.rs`（逐帧比较渲染结果的像素差）在 ±1 全程、120 帧下，每帧变化像素数的
   **峰值只有中位数的 1.3 倍**，没有尖峰；
 - 同一批测量显示，注视只让**头部/头发**动，身体（画面下半部）在整个 ±1 扫动里位移恒为 0。
-
-身体不动这件事本身是模型侧的：`ParamBodyAngleX` 的生产者是
-`PhysicsSetting4: PositionX → ParamBodyAngleX`，而官方默认鼠标绑定**不含 `PositionX`**
-（它留给身体追踪输入）。官方 Viewer 在同样绑定下也会算出 0。
+  （这条后来查清了：不是缺陷，是当时没喂 `PositionX`。模型的 `*.vtube.json` 把
+  `FaceAngleX → PositionX` 映射为身体输入，补上之后躯干和手臂会跟着转；见
+  `rust-iced-live2d-plan.md` 的“鼠标该绑哪些参数”。）
 
 所以“鼠标过中线时身体顿一下”如果确实存在，它不在参数层面，也不在离线渲染层面；需要在
 **交互路径**上测（真实帧时间抖动、prepare 调用频率）。下一步是在 app 里加一条
