@@ -309,6 +309,8 @@ pub struct MotionId { pub index: usize }
 
 每一步都必须独立可验证、独立提交，验不过不进下一步。
 
+进度：Step 1 ✅ `4d22f71` · Step 2–4 未开始。
+
 ### Step 1 · `live2d-render` 术语对齐与两个新入口（不改行为）
 
 | 改动                                                                      | 位置                                                                                               |
@@ -321,6 +323,11 @@ pub struct MotionId { pub index: usize }
 验收：`cargo test` / `clippy` 干净；`offscreen` 8 个模型逐像素与改动前一致；`sweep`/`jolt` 输出数值不变；
 `app --model <任一>` 行为不变。
 提交：`refactor(render): call the look-at input by its Cubism name`
+
+实测：`cargo test` 20 通过、`clippy` 无告警；`offscreen` 9 个模型 PNG 的 sha256 与改动前逐字节相同；
+`sweep`（大肥鱼 / Hiyori × adapted / viewer）、`jolt`、`rig` 输出 sha256 不变；`app` 的加载日志与绑定表
+不变。三个 example 改为在加载后用 `set_look_at_mode` 切换模式，viewer 基线完全复现，即该运行时入口
+与加载期选项等价。`LIVE2D_FILL=1.85` 的 `offscreen` 与默认一致（`set_fill` 无漂移），1.0 / 2.0 改变取景。
 
 ### Step 2 · 组件 crate 骨架（不碰 GPU，可单测）
 
