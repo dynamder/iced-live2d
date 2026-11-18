@@ -25,7 +25,7 @@
 | macOS 原生（非 Catalyst） | 要么 OpenGL（已 deprecated），要么自写 Metal renderer | +3～6 周 |
 | Godot | `gd_cubism`（GDExtension，非官方） | 1～3 天 |
 | 自研引擎/特殊 GPU API | 自写 renderer | 3 个月量级 |
-| 想完全绕开 Live2D 许可 | 纯 Rust 重写运行时（Ayagami / Mocari） | 数月起，且动画/物理未完备 |
+| 想完全绕开 Live2D 许可 | 纯 Rust 运行时 `mocari` + 自己的胶水（Rust + iced 桌面端） | **实测约 2 天跑通**动作/表情/物理/遮罩/视线跟随，见 [`rust-iced-live2d-plan.md`](rust-iced-live2d-plan.md)；`ayagami` 仍缺 motion/expression/pose |
 
 ---
 
@@ -99,7 +99,7 @@ Framework 里每个图形 API 对应一个 `CubismRenderer_*`（如 `CubismRende
 | **2** | 桥接层：Flutter / RN / Godot / WebView 壳 | ★★☆☆☆～★★★☆☆ | 1～5 天 | 1～4 周（受插件能力限制） |
 | **3** | 自家 App 内嵌：自管 GL 上下文/线程/资源/包体（无官方样品可抄） | ★★★☆☆ | 1～2 周 | 4～8 周 |
 | **4** | macOS 原生 Metal、Android Vulkan、D3D12、WebGPU（自写 renderer） | ★★★★☆ | 2～4 周 | 2～3 个月，且长期维护 |
-| **5** | 绕开 Live2D 自研运行时（纯 Rust 重放 moc3） | ★★★★★ | 数周（只能画静态） | 未成熟 |
+| **5** | 绕开 Live2D 自研运行时（纯 Rust 重放 moc3） | ★★★★★ | 数周（只能画静态） | 已可用（见下） |
 
 **为什么"档 3"比想象中贵？** 官方样品是"一个窗口 + 一个模型 + 一个 GL 循环"的玩具结构；换成真实 App 后要面对：一个进程多个视图/多次进出后台、渲染线程与 UI 线程分离、模型资源随场景加载卸载、Core 的 `csmReviveMocInPlace` 需要**手动分配对齐内存**且失败时只回 NULL、模型文件版本必须 ≤ Core 支持版本（否则直接加载失败）。
 
@@ -176,7 +176,7 @@ Framework 里每个图形 API 对应一个 `CubismRenderer_*`（如 `CubismRende
 | **`flutter_live2d`** | **仅 Android / iOS** | 中（1.0.2，2026-05） | 透明背景、多视图、motion/expression/parameter、触摸跟踪、暂停 | **桌面不支持**；自带 Core（注意许可） |
 | **`expo-live2d-cubism`** | Android / iOS（Expo dev client） | 中（1.0.4，约 8 个月前） | 口型同步、motion/exp3、陀螺仪 | **不支持 Expo Go**，需手动注入 Core |
 | **Ayagami（Rust）** | wgpu 覆盖面 | 低-中 | 能解析 moc3 到 SDK5.0 特性、渲染质量高 | **motion/expression/physics 仍在 TODO** |
-| **Mocari（Rust）** | wgpu 可选后端 | 低 | moc3 读取、渲染、motion、expression、hit area | 实验项目 |
+| **Mocari（Rust）** | wgpu 可选后端 | 低 | moc3 读取、渲染、motion、expression、physics、pose、遮罩（含反转遮罩） | **本仓库已实测可用**：Windows 桌面 + iced 0.15-dev + wgpu 30，131 组物理 setting 跑通，与官方 Viewer 逐项统计一致；需打 2 个补丁（负 mask 哨兵、mipmap）。详见 [`rust-iced-live2d-plan.md`](rust-iced-live2d-plan.md) |
 | **WebView + pixi-live2d-display** | 全平台壳 | 高（Web 侧） | 生态最全 | 性能/透明/输入代理都是新坑；适合 Tauri/Electron 壳 |
 
 来源：[flutter_live2d](https://pub.dev/packages/flutter_live2d)、[expo-live2d-cubism](https://www.npmjs.com/package/expo-live2d-cubism)、[gd_cubism](https://github.com/mizunagikb/gd_cubism)、[Ayagami](https://github.com/AyagamiDev/ayagami)、[Mocari](https://github.com/Eatgrapes/Mocari)

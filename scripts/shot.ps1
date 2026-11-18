@@ -8,7 +8,7 @@
 
 param(
     [string]$Process = "app",
-    [string]$Out = "D:\native-cubism\.tmp-shot.png"
+    [string]$Out = (Join-Path (Split-Path -Parent $PSScriptRoot) ".tmp-shot.png")
 )
 
 # Windows virtualizes GetWindowRect/CopyFromScreen for DPI-unaware processes,

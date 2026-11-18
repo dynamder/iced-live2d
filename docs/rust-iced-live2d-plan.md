@@ -3,7 +3,7 @@
 > 前提：开源项目、Rust、iced、桌面端（Win/macOS/Linux）
 > **状态：已按路线 B 做出可运行的 spike**（模型、动作、表情、物理、视线跟随全部实测通过）。
 > 实测环境：Windows 11 / RTX 5060 Laptop / Rust 1.97.1 / 显示缩放 150%
-> 实测基线：`iced` master `e5c350f`（`0.15.0-dev`）+ `wgpu 30.0.2` + `mocari 0.4.1`（打 1 个补丁）
+> 实测基线：`iced` master `e5c350f`（`0.15.0-dev`）+ `wgpu 30.0.2` + `mocari 0.4.1`（打 2 个补丁）
 
 ---
 
@@ -32,12 +32,12 @@ cargo run --release -p app -- "<你的模型>/xxx.model3.json"
 → 两条路，难度差一倍：
 
 - **路线 A（iced 0.14，wgpu 27）**：mocari 的 wgpu 后端用不了 → 关掉 `mocari/wgpu`，**自己写 600–900 行渲染器**。
-- **路线 B（iced master，wgpu 30）**：大版本对齐 → 复用 `WgpuLive2dRenderer`，只写 **约 300 行胶水**（实测：`app/src/live2d.rs` 200 行 + `crates/live2d-render` 450 行，后者还要自己写，但只是组织代码，不含渲染数学）。
+- **路线 B（iced master，wgpu 30）**：大版本对齐 → 复用 `WgpuLive2dRenderer`，**只写胶水加一个薄播放层**（实测：`app/src/live2d.rs` 217 行 iced 胶水 + `crates/live2d-render` 约 1 000 行播放/取景/诊断代码；渲染数学——遮罩、混合、物理——一行都没写）。
 
 **路线 B 的代价（实测，很小）**：
 
 1. MSRV 1.93 —— 一次 `rustup update` 的事；
-2. 升 rev 要处理 API 变动 —— 胶水只有 200 行，且 iced 自己的 git 依赖都是 rev 锁定的，你不主动升就完全稳定；
+2. 升 rev 要处理 API 变动 —— 胶水只有 200 多行，且 iced 自己的 git 依赖都是 rev 锁定的，你不主动升就完全稳定；
 3. crates.io 上**没有 0.15 的任何 alpha/beta/rc**（最新仍是 0.14.0，2025-12-07），所以现在只能钉 git rev；等 0.15 发布切回来，胶水基本不动。
 
 **结论：直接走 master + 钉 rev。** 已经在 `app/Cargo.toml` 里这么做了，同时 `Cargo.lock` 会锁死整棵树。
@@ -51,7 +51,7 @@ cargo run --release -p app -- "<你的模型>/xxx.model3.json"
 | 许可 | MIT，**零 Live2D 许可摩擦**，仓库干净 | Core 闭源，**仓库不能带二进制**，使用者需自己下载 SDK；发行时按 Live2D 协议走 |
 | 构建 | `cargo add mocari`，纯 Rust | 需 C++ 工具链 + CMake + 自写 FFI 桥（现成只有 Core 裸绑定，不含 Framework，motion/physics 还得自己做） |
 | 保真度 | **实测：遮罩/混合/物理/动作与官方 Viewer 观感一致**（见下图） | 官方级 |
-| 成熟度 | 单人项目，5 个月 18 个版本，**API 会变**，且已有 1 个必须打补丁的 bug | 稳定，但绑定层要自己维护 |
+| 成熟度 | 单人项目，5 个月 18 个版本，**API 会变**，且已有 2 个必须打补丁的 bug（负 mask 哨兵、无 mipmap） | 稳定，但绑定层要自己维护 |
 | 依赖风险 | 项目消失 = 你接盘 | Live2D 条款变化 / Core 版本升级 |
 
 ![离屏渲染结果](images/offscreen-frame.png)
@@ -127,26 +127,7 @@ mocari 自己也有 `preferred_surface_format()`，逻辑就是"优先选非 sRG
 
 这个模型实测：**131 组 setting / 299 输入 / 292 输出**，头发、眼睑、眉毛、腮、衣饰、缎带全挂在上面。
 
-### 坑 1（必踩）：物理的输出参数不能写，要写输入参数
-
-VTuber 导出的绑定通常是这样分层的：
-
-| 参数 | 角色 | 范围 |
-|---|---|---|
-| `AngleX/Y/Z`、`PositionX/Y/Z`、`LeanInput`、`Movement1..3` | **追踪输入**（app 写这里） | ±30 |
-| `ParamAngleX/Y/Z`、`ParamBodyAngleX/Y/Z`、大量 `Hair*` | **物理输出**（物理写这里） | ±30 |
-
-`update_output_parameter` 在 `weight >= 1.0` 时是**直接替换**：
-
-```rust
-*parameter_value = if weight >= 1.0 { value } else { lerp(old, value, weight) };
-```
-
-所以：如果你把 `ParamAngleX` 当输入写，同一帧稍后的 `apply_physics` 会用 `AngleX`(=0) 推出的结果把它覆盖掉 —— **表现就是"鼠标动了，只有头发在摆，头和眼睛不动"**。正确做法是写 `AngleX/Y/Z`、`PositionX/Y/Z`、`LeanInput`，让物理把运动传导到 `ParamAngle*` 和上半身。
-
-代码里已经按"有 `AngleX` 就写追踪输入，否则退回 `ParamAngle*`"自动选择（`GazeInputs`）。
-
-#### 坑 0（最坑的一个）：mocari 的 `*_normalized` 是 `0..=1`，不是 `-1..=1`
+### 坑 0（最坑的一个）：mocari 的 `*_normalized` 是 `0..=1`，不是 `-1..=1`
 
 ```rust
 fn raw_parameter_value_from_normalized_range(minimum: f32, maximum: f32, value: f32) -> f32 {
@@ -159,7 +140,7 @@ mocari 的文档写的就是“normalized `0.0..=1.0`”，但 Cubism 的追踪�
 
 表现：鼠标在角色中线**左侧**滑动时模型完全不动（`AngleX` 卡在 -30），一越过中线才开始跟随，看起来就是“过中线时身体顿一下”。而且**四角测试（±1）恰好两端都对**——`-1` 夹到 0 正好等于 `minimum`——所以这个 bug 很容易漏过目检。
 
-正确的写法：
+正确的写法（`scene.rs` 的 `set_tracking_input`，所有追踪写入都走它）：
 
 ```rust
 let amount = (offset.clamp(-1.0, 1.0) + 1.0) * 0.5;
@@ -167,9 +148,25 @@ runtime.set_parameter_override_normalized(id, amount);
 ```
 
 `examples/sweep.rs` 就是为这个写的：以 60 fps 把输入从 -1 扫到 +1，打印输入参数与物理输出。**修之前的输入列会在 -30 上停住 100 多帧，修之后是线性的**。任何“鼠标跟踪手感不对”的问题都先用它验一遍，比肉眼看快得多。
-#### 与官方 Viewer 的默认鼠标跟踪逐项对齐
 
-Cubism Viewer 的默认绑定（本模型）只有 5 条，其余全部“未设置”：
+### 坑 1（必踩）：物理的输出参数不能写，要写输入参数
+
+VTuber 导出的绑定通常是这样分层的：
+
+| 参数 | 角色 | 范围 |
+|---|---|---|
+| `AngleX/Y/Z`、`PositionX/Y/Z`、`LeanInput`、`Movement1..3` | **追踪输入**（app 只能写这里；本模型实际只写其中 5 条，见下表） | ±30 |
+| `ParamAngleX/Y/Z`、`ParamBodyAngleX/Y/Z`、大量 `Hair*` | **物理输出**（物理写这里） | ±30 |
+
+`update_output_parameter` 在 `weight >= 1.0` 时是**直接替换**：
+
+```rust
+*parameter_value = if weight >= 1.0 { value } else { lerp(old, value, weight) };
+```
+
+所以：如果你把 `ParamAngleX` 当输入写，同一帧稍后的 `apply_physics` 会用 `AngleX`(=0) 推出的结果把它覆盖掉 —— **表现就是“鼠标动了，只有头发在摆，头和眼睛不动”**。
+
+代码里按“有 `AngleX` 就写追踪输入，否则退回 `ParamAngle*`”自动选择（`GazeInputs`）。至于具体写哪几条——**照官方 Viewer 的默认绑定表写，一条也别多加**：
 
 | 参数 | 绑定 |
 |---|---|
@@ -179,7 +176,10 @@ Cubism Viewer 的默认绑定（本模型）只有 5 条，其余全部“未设
 | `ParamEyeBallX` | 鼠标 X |
 | `ParamEyeBallY` | 鼠标 Y |
 
-之前我们的实现多写了 `AngleZ` / `PositionX/Y` / `LeanInput`（官方未绑），又漏了 `ParamBodyAngleX`，所以两边画面根本对不上。**要对齐参考渲染器就照它的绑定表写，别自己加戏**——多余的输入会被物理链放大成明显的姿态差异。
+其余全部“未设置”。我们一度多写了 `AngleZ` / `PositionX/Y` / `LeanInput`（官方未绑），又漏了 `ParamBodyAngleX`，两边画面因此根本对不上——**多余的输入会被物理链放大成明显的姿态差异**，而本项目的验收手段就是和参考渲染器对比，所以不能“顺手加戏改进跟踪”。
+
+> **待定的一条**：物理自己产出的参数值似乎不会进入下游 setting 的输入缓存（`AngleX` 驱动到 ±27.75 时 `ParamAngleX` 也到了 ±27.75，但依赖它的 `FrontHairX1` 读数是 0）。证据、已排除项与确认步骤见 [`mocari-suspected-physics-chaining.md`](mocari-suspected-physics-chaining.md)。
+
 ### 坑 2：`ParamBreath` 存在，但没人驱动它
 
 （**更正**：本文早前版本说这个绑定“没有 `ParamBreath`”，那是我筛参数时输出被 `head` 截断导致的误判。实测 `ParamBreath` 存在，范围 0..1，默认 0。）
@@ -236,7 +236,7 @@ Cubism 的贴图是 4096–8192px，桌面宠物只画几百像素，等于 4–
 
 ## 四、真正会让你卡住的坑（按实测概率重排）
 
-1. **模型数据里的脏值（已踩，必须打补丁）**：本模型有 1 个 drawable 的 mask 列表是 `[-1]`（导出器用它当"无遮罩"哨兵）。mocari 直接 `usize::try_from(-1)` → 报 `invalid mask drawable index -1`，整个模型加载失败。修法：在 `DrawableInfo::from_mesh` 里过滤负值。**见 `patches/mocari-0.4.1-negative-masks.patch`**，`scripts/vendor-mocari.ps1` 会重建 `.refs/mocari`。
+1. **模型数据里的脏值（已踩，必须打补丁）**：本模型有 1 个 drawable 的 mask 列表是 `[-1]`（导出器用它当"无遮罩"哨兵）。mocari 直接 `usize::try_from(-1)` → 报 `invalid mask drawable index -1`，整个模型加载失败。修法：在 `DrawableInfo::from_mesh` 里过滤负值。**见 `patches/mocari-0.4.1-negative-masks.patch`**；另一个必打的补丁是 mipmap（见坑 3）。`scripts/vendor-mocari.ps1` 会把 `patches/` 下所有补丁按文件名顺序加到 `.refs/mocari`。
 2. **取景坐标系搞错（已踩）**：用"所有 drawable 的包围盒"去居中会**明显偏掉**——模型有 715 个 drawable，其中大量是隐藏的替换件（钢盆、脱鞋、替换手、替换体型），包围盒被它们拉歪。正确做法是用 `.moc3` 的 **canvas info**（`runtime.canvas()`：`pixels_per_unit` / `origin` / `width` / `height`），这才是美术设定的画面。注意 `reverse_y_coordinate` 为真时要退回包围盒。
 3. **`model3.json` 不声明动作（已踩）**：这个 VTuber 模型的动作/表情文件都在 `Animation/`、`Exp3/` 子目录里，`FileReferences` 里**一个都没注册**。`Live2dScene::load` 会在 `model3.json` 为空时扫描模型目录（深度 2）兜底，并把 `IDLE*` 排到最前面。
 4. **性能（实测数字）**：715 个 drawable、5 张 4096² 级别贴图、1024² mask RT、640² 逻辑窗口（1.5 倍缩放 → 960² 渲染）。
@@ -247,7 +247,7 @@ Cubism 的贴图是 4096–8192px，桌面宠物只画几百像素，等于 4–
    - 这 5 张贴图是 4096×8192、4096×8192、2048×2048、**8192×8192**、4096×4096，未压缩共 **592 MB**；
    - `load_model_runtime` 返回的 `RuntimeModel` 里**同时持有解码后的 RGBA**，如果把它留在场景结构里，就是 CPU 592 MB + GPU 592 MB ≈ **1.5 GB**；
    - 修法：`loaded.runtime().clone()` 之后 `drop(loaded)`（mocari 官方示例就是这么做的），再给一个 `texture_scale`（0.5 → 148 MB GPU），总占用降到 **462 MB**。
-7. **别用 cargo 重放的警告判断源码状态**：`cargo build` 会对"未重新编译"的依赖**重放上次的编译警告**。我改坏过一个 vendored 依赖、又改回来，但产物没重编，于是画面异常却看不到任何警告（反而看到旧的）。**怀疑构建不一致时：`cargo clean -p <crate> --release` 再编，确认警告一起消失。**
+6. **别用 cargo 重放的警告判断源码状态**：`cargo build` 会对"未重新编译"的依赖**重放上次的编译警告**。我改坏过一个 vendored 依赖、又改回来，但产物没重编，于是画面异常却看不到任何警告（反而看到旧的）。**怀疑构建不一致时：`cargo clean -p <crate> --release` 再编，确认警告一起消失。**
 7. **HiDPI / resize**：`bounds` 是逻辑像素、`viewport` 是物理像素。窗口跨显示器拖动时 `scale_factor` 会变，变换要在 `prepare` 里重算，别缓存成常量。spike 里用 `fit_aspect` 做脏检查。
 8. **透明窗口**：`Level::AlwaysOnTop` + `transparent: true` + `decorations: false` + 根样式 alpha=0，缺一不可；`alpha_mode` 要 `PreMultiplied`。**跨平台表现不一致，三平台各测一次**。
 9. **逐像素点击穿透**：iced 只提供整窗 `enable_mouse_passthrough`。要"只有角色可点"，拿 `window::raw_id()` / `HasWindowHandle` 自己处理：Windows 钩 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，macOS 改 `ignoresMouseEvents`，Linux 走 X11 shape / Wayland input region。
@@ -289,23 +289,31 @@ Cubism 的贴图是 4096–8192px，桌面宠物只画几百像素，等于 4–
 crates/live2d-render/          只依赖 wgpu + mocari，不依赖 iced（升级只改这一层）
   src/bounds.rs                canvas info → 取景矩阵
   src/scene.rs                 Live2dScene：加载、逐帧推进、两个 pass 的编码
-  src/error.rs                 错误分类
+  src/error.rs                 错误分类（含"不致命但必须让用户看见"的问题队列）
   examples/dump.rs             模型结构体检（drawable 数、mask 集合、canvas、动作表）
+  examples/inspect.rs          文件内容体检（物理 setting、动作曲线、表情目标）
+  examples/probe.rs            某点由哪些 drawable 覆盖（按绘制顺序）
+  examples/switch.rs           某参数会翻转哪些 drawable
+  examples/sweep.rs            60 fps 扫视线，打印物理输入/输出（查跟踪 bug）
   examples/offscreen.rs        无窗口渲染一帧成 PNG（CI 像素测试的雏形）
+  examples/shared/mod.rs       上面两个需要 GPU 的例子的公共引导
 app/                           iced 0.15-dev 外壳
   src/main.rs                  application / subscription / 键盘
-  src/live2d.rs                Program + Primitive + Pipeline（约 200 行）
-.refs/mocari                   mocari 0.4.1 + 负 mask 索引修复（Cargo.toml 里 [patch.crates-io] 指过来）
-patches/                       上面那个修复的 patch 文件
+  src/live2d.rs                Program + Primitive + Pipeline
+.refs/mocari                   mocari 0.4.1 + 两个补丁（Cargo.toml 里 [patch.crates-io] 指过来）
+patches/                       负 mask 索引 + mipmap 两个修复的 patch 文件
 scripts/vendor-mocari.ps1      一键重建 .refs/mocari
 scripts/shot.ps1               截图（DPI 感知，否则只截到左上角）
+scripts/shot-window.ps1        按标题前缀截任意窗口（用来截官方 Viewer 做对比）
 ```
 
-**内置操作**：`R` 下一段动作，`E` 下一个表情，鼠标移动 → 头部/眼球跟随（`ParamAngleX/Y/Z`、`ParamEyeBallX/Y`、`ParamBodyAngleX` 的 override）。
+**内置操作**：`R` 下一段动作，`E` 下一个表情，鼠标移动 → 头部/眼球跟随。写入的是官方 Viewer 默认的那 5 条绑定（`AngleX`、`AngleY`、`ParamBodyAngleX`、`ParamEyeBallX`、`ParamEyeBallY`），`ParamAngle*` 由物理推出。
 
 视线跟随实测（左 vs 右）：
 
 ![视线跟随](images/gaze-compare.png)
+
+同一姿势下与官方 Viewer 的逐像素对照见仓库根目录 `README.md` 的「Fidelity」一节。
 
 ---
 

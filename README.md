@@ -26,16 +26,26 @@ Cubism Core binary, no C++ toolchain, no engine.
 | Headless offscreen render to PNG | ✅ `examples/offscreen.rs` |
 | Frame rate (release, 715 drawables) | ✅ ~50 fps, CPU-bound |
 | Desktop-pet shell (transparent / on-top / click-through / tray) | ❌ not started |
-| Breathing / eye blink (`CubismBreath` / `CubismEyeBlink` equivalents) | ❌ not started |
-| Blink / breath / lip-sync | ❌ not started |
+| Breathing / eye blink / lip-sync | ❌ not started |
 
 | iced window | offscreen render |
 |---|---|
 | ![window](docs/images/iced-window.png) | ![offscreen](docs/images/offscreen-frame.png) |
 
-Gaze tracking, cursor left vs right — head, eyes, shoulders and hair all move because the
-driver writes the rig's *tracking inputs* (`AngleX/Y/Z`, `Position*`, `LeanInput`) and lets physics
-derive `ParamAngle*`:
+## Fidelity against the official viewer
+
+Same model, same rest pose: the official Cubism Viewer 5.3 on the left, this
+renderer at `texture_scale = 1.0` on the right. Colours, mask edges, blend modes
+and draw order match; only the physics phase differs, because the two were
+captured at different moments.
+
+![official viewer vs this renderer](docs/images/fidelity-vs-official.png)
+
+Gaze tracking, cursor left vs right — head, eyes, shoulders and hair all move
+because the driver writes the rig's *tracking inputs* and lets physics derive
+`ParamAngle*`. It writes exactly the official viewer's five default bindings
+(`AngleX`, `AngleY`, `ParamBodyAngleX`, `ParamEyeBallX`, `ParamEyeBallY`) and
+nothing else; see `Live2dScene::set_gaze`.
 
 ![gaze](docs/images/gaze-compare.png)
 
@@ -49,7 +59,7 @@ derive `ParamAngle*`:
 ## Quick start
 
 ```bash
-# one-time: vendor the patched mocari (see "The one patch" below)
+# one-time: vendor the patched mocari (see "The two patches" below)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vendor-mocari.ps1
 
 # run with any model
@@ -62,6 +72,42 @@ slow motion (each frame's delta is clamped to 0.1 s).
 
 **Controls:** `R` next motion clip · `E` next expression · move the mouse over
 the window to make the model follow it.
+
+## Capturing a frame without a window
+
+`examples/offscreen.rs` renders into a texture and writes a PNG. Every piece of
+state is an environment variable, so a capture is reproducible from the command
+line alone:
+
+```bash
+cargo run --release -p live2d-render --example offscreen -- \
+  "path/to/model/xxx.model3.json" frame.png 900 30
+```
+
+| Variable | Meaning |
+|---|---|
+| `LIVE2D_TEXTURE_SCALE` | upload resolution multiplier, default `1.0` |
+| `LIVE2D_MASK` | mask render-target edge in pixels, default `1024` |
+| `LIVE2D_MOTION` / `LIVE2D_EXPR` | motion / expression index to apply before the capture |
+| `LIVE2D_GAZE` | `x,y` in `-1.0..=1.0`, applied as the cursor position |
+| `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`, `LIVE2D_RECLIP` | flags — active when the variable is present, whatever its value |
+| `LIVE2D_PROFILE` | flag — prints per-frame CPU and upload cost |
+
+## Other examples
+
+| Example | Answers |
+|---|---|
+| `dump` | what is in the `.moc3`: drawables, mask sets, canvas, motion groups |
+| `inspect` | what is in the *files*: physics settings, motion curves, expression targets |
+| `probe <model> <x> <y>` | which drawables cover a model-space point, in paint order |
+| `switch <model> <Param> <v0> <v1>` | which drawables a parameter flips, and their metadata |
+| `sweep` | what physics does along a horizontal gaze sweep, at 60 fps |
+| `offscreen` | one frame to a PNG, no window |
+
+`sweep` is the fastest way to check a tracking bug: it prints the input parameter
+and the physics outputs per frame, and flags any frame-to-frame jump. Prefix it
+with `SWEEP_DIRECT=<ParamId>` to write that parameter directly instead of driving
+the gaze.
 
 ## Memory
 
@@ -87,38 +133,48 @@ crates/live2d-render/          engine-agnostic: depends on wgpu + mocari only
   src/bounds.rs                canvas info -> view-fit matrix
   src/scene.rs                 Live2dScene: load, advance, encode mask+model passes
   src/error.rs                 error taxonomy
-  examples/dump.rs             model anatomy dump (drawables, masks, canvas, motions)
-  examples/offscreen.rs        render one frame without a window -> PNG
-
+  examples/*.rs                the diagnostics listed above
+  examples/shared/mod.rs       headless GPU bootstrap shared by the examples
 app/                           the iced shell
   src/main.rs                  application, subscription, keyboard
-  src/live2d.rs                Program + Primitive + Pipeline (~200 lines)
-
-patches/                       the mocari fix, as a patch file
-scripts/vendor-mocari.ps1      rebuilds .refs/mocari from the registry + patch
+  src/live2d.rs                Program + Primitive + Pipeline
+patches/                       the two mocari fixes, as patch files
+scripts/vendor-mocari.ps1      rebuilds .refs/mocari from the registry + patches
 scripts/shot.ps1               DPI-aware window screenshot (dev tool)
-docs/                          the feasibility write-up and the plan
+scripts/shot-window.ps1        screenshot any window by title prefix (dev tool)
+docs/                          feasibility write-up, plan, defect records
 ```
 
 The split matters: keeping `live2d-render` free of iced means a `wgpu`/`iced`
 upgrade touches one layer, and the renderer stays testable headlessly.
 
-## The one patch
+## The two patches
 
-`mocari 0.4.1` cannot open this model: one of its 715 drawables carries
-`masks == [-1]`, a sentinel some exporters write for "not masked", and mocari
-feeds it straight into a `usize` conversion:
+Both live in `patches/` and are applied to a vendored copy at `.refs/mocari`
+(wired up through `[patch.crates-io]` in `Cargo.toml`); `scripts/vendor-mocari.ps1`
+rebuilds that copy from the cargo registry.
+
+**1. Negative mask sentinel.** `mocari 0.4.1` cannot open this model: one of its
+715 drawables carries `masks == [-1]`, a sentinel some exporters write for "not
+masked", and mocari feeds it straight into a `usize` conversion:
 
 ```
 failed to create a clipping layout: invalid mask drawable index -1
 ```
 
 Filtering negative mask entries treats that drawable as unmasked, which is the
-only sensible reading. The fix lives in
-[`patches/mocari-0.4.1-negative-masks.patch`](patches/mocari-0.4.1-negative-masks.patch)
-and is applied to a vendored copy at `.refs/mocari` (wired up through
-`[patch.crates-io]` in `Cargo.toml`). This belongs upstream — it should not be
-every consumer's problem.
+only sensible reading. The official viewer reports 181 clipped drawables against
+our 182 raw entries, which confirms the semantics.
+See [`patches/mocari-0.4.1-negative-masks.patch`](patches/mocari-0.4.1-negative-masks.patch).
+
+**2. Missing mip chain.** mocari uploads every texture with `mip_level_count: 1`,
+so a rig authored at 4096–8192 px and drawn a few hundred pixels tall minifies
+4–8x with a single bilinear tap: line art breaks into dotted speckles. The
+official viewer enables mipmaps by default. The patch builds the chain on upload
+and sets `mipmap_filter = Linear`; it costs +33% VRAM and ~0.5 s of startup.
+See [`patches/mocari-0.4.1-mipmaps.patch`](patches/mocari-0.4.1-mipmaps.patch).
+
+Both belong upstream — they should not be every consumer's problem.
 
 ## Why the git dependency on iced
 
@@ -126,11 +182,16 @@ every consumer's problem.
 (`0.14.0` is still on `wgpu 27`). Pinning master also pins the whole `wgpu`
 major, so `WgpuLive2dRenderer` links straight into `Pipeline`. It is pinned by
 `rev`, and iced pins its own git dependencies by `rev` too, so builds are
-reproducible. When 0.15 ships, switch to the crates.io version — the ~200 lines
-of glue should not need changes.
+reproducible. When 0.15 ships, switch to the crates.io version — the glue should
+not need changes.
 
 ## Things worth knowing before extending this
 
+- **mocari's `*_normalized` setters take `0.0..=1.0`, not `-1.0..=1.0`.** They
+  clamp silently, so a Cubism-style offset pins every negative value to the
+  parameter minimum: the model freezes until the cursor crosses its centre line
+  and then snaps into motion. `set_tracking_input` in `scene.rs` converts once;
+  go through it rather than calling mocari directly.
 - **Framing must come from the `.moc3` canvas**, not from a bounding box of all
   drawables. This model has 715 drawables including hidden spares (props, spare
   hands, alternate body types); bounding-box centring visibly offsets the
@@ -141,15 +202,12 @@ of glue should not need changes.
 - **Colour space:** the `format` handed to `Pipeline::new` was `Bgra8Unorm`
   (non-sRGB), which matches mocari's gamma-space blending. If a platform gives
   you `*UnormSrgb`, you must render into your own `Rgba8Unorm` target and do
-  gamma→linear when compositing, or the model washes out.
+  gamma→linear when compositing, or the model washes out. The startup line
+  prints the format it got.
 - **`Primitive::draw` must return `false`** and the work must happen in
   `Primitive::render`, because the mask pass has to be inserted between the
   passes iced controls.
-- **Textures need mipmaps.** mocari uploads with `mip_level_count = 1`, so a
-  rig authored at 4096-8192 px and drawn a few hundred pixels tall minifies 4-8x
-  with a single bilinear tap. The result is fine line art breaking into dotted
-  speckles. The official Cubism Viewer enables mipmaps by default; our second
-  local patch builds the chain on upload (see `patches/`).
+- **Textures need mipmaps** — see patch 2 above.
 
 ## Troubleshooting (this machine only)
 
@@ -163,6 +221,8 @@ this is not a project problem.
 
 - [`docs/rust-iced-live2d-plan.md`](docs/rust-iced-live2d-plan.md) — verified
   architecture, iced 0.15-dev API notes, pitfalls, calibrated effort estimate
+- [`docs/mocari-suspected-physics-chaining.md`](docs/mocari-suspected-physics-chaining.md)
+  — open suspicion: physics outputs may not reach downstream settings
 - [`docs/live2d-native-feasibility.md`](docs/live2d-native-feasibility.md) —
   broader survey of Live2D on native platforms (platform matrix, licensing,
   difficulty ladder)

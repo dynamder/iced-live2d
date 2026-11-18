@@ -5,15 +5,15 @@ members = ["crates/live2d-render", "app"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.93"
 publish = false
 
 [workspace.dependencies]
 wgpu = "30"
 mocari = "0.4.1"
 
-# mocari 0.4.1 rejects drawables whose mask list contains a negative sentinel
-# index (this model has exactly one). The local copy is upstream 0.4.1 plus the
-# three-line filter in patches/mocari-0.4.1-negative-masks.patch.
-# Obtain it with: ./scripts/vendor-mocari.ps1
+# mocari 0.4.1 cannot draw this rig unpatched. `.refs/mocari` is upstream 0.4.1
+# plus every `patches/mocari-0.4.1-*.patch`; ./scripts/vendor-mocari.ps1 rebuilds
+# it from the cargo registry.
 [patch.crates-io]
 mocari = { path = ".refs/mocari" }

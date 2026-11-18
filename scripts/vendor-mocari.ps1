@@ -1,13 +1,14 @@
-# Rebuilds .refs/mocari: upstream mocari 0.4.1 plus our local fix.
+# Rebuilds .refs/mocari: upstream mocari 0.4.1 plus every patches/mocari-<version>-*.patch.
 #
 # The workspace `[patch.crates-io]` in Cargo.toml points at .refs/mocari, so a
 # fresh checkout has to run this once before `cargo build` can resolve mocari.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vendor-mocari.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vendor-mocari.ps1 [-Version 0.4.1] [-Force]
 #
-# Why a vendored crate instead of a fork on a git remote: the fix is three lines
-# and the project should not grow a hard dependency on somebody's fork. See
-# patches/mocari-0.4.1-negative-masks.patch for the reasoning.
+# Why a vendored crate instead of a fork on a git remote: the fixes are small and
+# the project should not grow a hard dependency on somebody's fork. The patches
+# are applied in file-name order, so their names must stay sortable.
+# See README.md "The two patches" for what each one fixes.
 
 param(
     [string]$Version = "0.4.1",
