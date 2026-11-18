@@ -10,7 +10,7 @@ mod scene;
 
 pub use bounds::ModelBounds;
 pub use error::{Error, Result};
-pub use scene::{ClipRect, Live2dScene, MASK_TARGET_SIZE, SceneOptions};
+pub use scene::{ClipRect, Live2dScene, SceneOptions};
 
 pub use mocari;
 pub use wgpu;

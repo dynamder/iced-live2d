@@ -125,7 +125,7 @@ impl shader::Primitive for Live2dPrimitive {
     ) {
         if pipeline.scene.is_none() && pipeline.failure.is_none() {
             match Live2dScene::load(device, queue, &self.model_path, pipeline.format) {
-                Ok(scene) => {
+                Ok(mut scene) => {
                     println!(
                         "live2d: loaded {} ({} motions in {} groups, {} expressions, target {:?})",
                         self.model_path.display(),
@@ -134,6 +134,7 @@ impl shader::Primitive for Live2dPrimitive {
                         scene.expression_count(),
                         pipeline.format,
                     );
+                    report_issues(&mut scene);
                     pipeline.scene = Some(scene);
                 }
                 Err(error) => {
@@ -179,6 +180,8 @@ impl shader::Primitive for Live2dPrimitive {
         if let Err(error) = advance_result {
             eprintln!("live2d: advance failed: {error}");
         }
+
+        report_issues(scene);
     }
 
     fn render(
@@ -202,5 +205,13 @@ impl shader::Primitive for Live2dPrimitive {
         if let Err(error) = scene.encode(encoder, target, clip) {
             eprintln!("live2d: encode failed: {error}");
         }
+    }
+}
+
+/// Prints the problems the scene decided not to abort on (broken sidecars,
+/// unreadable animation directories).
+fn report_issues(scene: &mut Live2dScene) {
+    for issue in scene.take_issues() {
+        eprintln!("live2d: {issue}");
     }
 }

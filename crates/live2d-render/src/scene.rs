@@ -21,12 +21,12 @@ use wgpu::{CommandEncoder, Device, Queue, TextureFormat, TextureView};
 use crate::bounds::ModelBounds;
 use crate::error::{Error, Result};
 
-/// Size of the single shared mask render target.
+/// Default size of the single shared mask render target.
 ///
 /// Cubism models draw every clipped drawable into this off-screen buffer before
 /// the visible pass. Bigger costs VRAM but keeps mask edges crisp on 4096px
 /// textures.
-pub const MASK_TARGET_SIZE: u32 = 1024;
+const MASK_TARGET_SIZE: u32 = 1024;
 
 const DEFAULT_VIEW_FILL: f32 = 1.85;
 /// Longest animation step applied in one frame, so a stalled window does not
@@ -64,12 +64,13 @@ impl Default for SceneOptions {
     }
 }
 
-/// How the gaze driver feeds the model.
+/// Which input set the gaze driver writes, decided once at load time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GazeInputs {
-    /// VTuber-style rig: write AngleX/Y/Z, Position* and LeanInput.
+    /// Rig exporting VTuber tracking inputs: write `AngleX`/`AngleY` and let
+    /// physics derive `ParamAngle*`.
     Tracking,
-    /// Classic rig: write ParamAngle* directly.
+    /// Classic rig without tracking inputs: write `ParamAngle*` directly.
     Model,
 }
 
@@ -85,10 +86,6 @@ pub struct ClipRect {
 impl ClipRect {
     pub fn is_empty(&self) -> bool {
         self.width == 0 || self.height == 0
-    }
-
-    pub fn aspect(&self) -> f32 {
-        self.width as f32 / self.height.max(1) as f32
     }
 }
 
@@ -122,6 +119,7 @@ pub struct Live2dScene {
     profile_cpu: f64,
     profile_upload: f64,
     expression_cursor: usize,
+    issues: Vec<Error>,
 }
 
 impl Live2dScene {
@@ -226,10 +224,12 @@ impl Live2dScene {
         // Plenty of exported models (VTuber rigs in particular) ship their
         // motion and expression files next to the model without listing them in
         // `model3.json`. Fall back to scanning the model directory.
+        let mut issues = Vec::new();
+
         if let Some(model_dir) = model_dir.as_deref()
             && (motion_groups.is_empty() || expression_paths.is_empty())
         {
-            let scanned = scan_sidecars(model_dir);
+            let scanned = scan_sidecars(model_dir, &mut issues);
 
             if motion_groups.is_empty() && !scanned.motions.is_empty() {
                 motion_groups.insert(SCANNED_GROUP.to_owned(), scanned.motions);
@@ -266,6 +266,7 @@ impl Live2dScene {
             profile_cpu: 0.0,
             profile_upload: 0.0,
             expression_cursor: 0,
+            issues,
         };
 
         scene.play_next_motion();
@@ -365,24 +366,18 @@ impl Live2dScene {
 
     /// Makes the model look towards a point given in normalized widget space
     /// (`-1.0..=1.0` on both axes, `-1` = left/top).
+    ///
+    /// The writes below are exactly the Cubism Viewer's default mouse bindings:
+    /// `AngleX`, `AngleY`, `ParamBodyAngleX`, `ParamEyeBallX`, `ParamEyeBallY`.
+    /// Do not add inputs the reference renderer leaves unset (`AngleZ`,
+    /// `Position*`, `LeanInput`): physics amplifies them and the pose stops
+    /// matching the reference.
     pub fn set_gaze(&mut self, gaze: [f32; 2]) {
         let x = gaze[0].clamp(-1.0, 1.0);
         let y = gaze[1].clamp(-1.0, 1.0);
 
         let runtime = &mut self.model;
 
-        // Mirrors the Cubism Viewer's default mouse-tracking bindings for this
-        // rig exactly:
-        //
-        //   AngleX          <- mouse X
-        //   AngleY          <- mouse Y
-        //   ParamBodyAngleX <- mouse X
-        //   ParamEyeBallX   <- mouse X
-        //   ParamEyeBallY   <- mouse Y
-        //
-        // and nothing else. Adding extra inputs (AngleZ, PositionX/Y, LeanInput)
-        // makes our output diverge from the reference renderer, so resist the
-        // urge to improve the tracking here.
         match self.gaze_inputs {
             GazeInputs::Tracking => {
                 set_tracking_input(runtime, "AngleX", x);
@@ -509,27 +504,26 @@ impl Live2dScene {
             .unwrap_or(&[])
     }
 
-    /// File names of the motions in playback order.
-    pub fn motion_labels(&self) -> Vec<String> {
-        self.preferred_motions()
-            .iter()
-            .filter_map(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            })
-            .collect()
-    }
-
     /// Starts a specific motion from the playback list.
     pub fn play_motion(&mut self, index: usize) {
-        let Some(path) = self.preferred_motions().get(index).cloned() else {
+        let (count, path) = {
+            let candidates = self.preferred_motions();
+            (candidates.len(), candidates.get(index).cloned())
+        };
+
+        let Some(path) = path else {
+            self.issues.push(Error::MotionIndex { index, count });
             return;
         };
 
-        if let Ok(motion) = load_motion(&path) {
-            self.player = Some(MotionPlayer::new(motion));
-            self.motion_cursor = index.wrapping_add(1);
-            self.dirty = true;
+        self.motion_cursor = index.wrapping_add(1);
+
+        match load_motion(&path) {
+            Ok(motion) => {
+                self.player = Some(MotionPlayer::new(motion));
+                self.dirty = true;
+            }
+            Err(source) => self.issues.push(Error::Motion { path, source }),
         }
     }
 
@@ -576,66 +570,56 @@ impl Live2dScene {
     /// Starts the next motion, preferring the model's idle group and falling
     /// back to cycling every motion in the model.
     pub fn play_next_motion(&mut self) {
-        let candidates = self
-            .motion_groups
-            .get(IDLE_GROUP)
-            .or_else(|| self.motion_groups.values().next());
+        let count = self.preferred_motions().len();
 
-        let Some(candidates) = candidates else {
-            return;
-        };
-
-        if candidates.is_empty() {
+        if count == 0 {
             return;
         }
 
-        let index = self.motion_cursor % candidates.len();
-        self.motion_cursor = self.motion_cursor.wrapping_add(1);
-
-        let path = candidates[index].clone();
-        match load_motion(&path) {
-            Ok(motion) => {
-                self.player = Some(MotionPlayer::new(motion));
-                self.dirty = true;
-            }
-            Err(_) => {
-                // A broken motion must not kill playback of the whole model.
-                self.player = None;
-            }
-        }
+        let index = self.motion_cursor % count;
+        self.play_motion(index);
     }
 
     /// Plays the expression at `index`, if the model has one.
     pub fn play_expression(&mut self, index: usize) {
+        let count = self.expression_paths.len();
+
         let Some(path) = self.expression_paths.get(index).cloned() else {
+            self.issues.push(Error::ExpressionIndex { index, count });
             return;
         };
 
-        if let Ok(expression) = load_expression(&path) {
-            self.expressions.play(expression);
-            self.dirty = true;
+        self.expression_cursor = index.wrapping_add(1);
+
+        match load_expression(&path) {
+            Ok(expression) => {
+                self.expressions.play(expression);
+                self.dirty = true;
+            }
+            Err(source) => self.issues.push(Error::Expression { path, source }),
         }
     }
 
     /// Plays the next expression in model order, wrapping around.
     pub fn play_next_expression(&mut self) {
-        if self.expression_paths.is_empty() {
+        let count = self.expression_paths.len();
+
+        if count == 0 {
             return;
         }
 
-        let index = self.expression_cursor % self.expression_paths.len();
-        self.expression_cursor = self.expression_cursor.wrapping_add(1);
+        let index = self.expression_cursor % count;
         self.play_expression(index);
     }
 
-    pub fn expression_names(&self) -> Vec<String> {
-        self.expression_paths
-            .iter()
-            .filter_map(|path| {
-                path.file_stem()
-                    .map(|stem| stem.to_string_lossy().into_owned())
-            })
-            .collect()
+    /// Drains the non-fatal problems collected since the last call.
+    ///
+    /// A broken sidecar file, an out-of-range index or an unreadable animation
+    /// directory never aborts playback, so they queue up here instead of being
+    /// dropped. Drain and print them: silence is otherwise indistinguishable
+    /// from "this model has no motions".
+    pub fn take_issues(&mut self) -> Vec<Error> {
+        std::mem::take(&mut self.issues)
     }
 
     fn upload(&mut self, device: &Device, queue: &Queue) -> Result<()> {
@@ -791,10 +775,13 @@ struct ScannedSidecars {
 }
 
 /// Walks the model directory looking for `.motion3.json` / `.exp3.json` files.
-fn scan_sidecars(dir: &Path) -> ScannedSidecars {
+///
+/// Unreadable directories are pushed into `issues` rather than skipped: a scan
+/// that silently finds nothing looks exactly like a model with no animations.
+fn scan_sidecars(dir: &Path, issues: &mut Vec<Error>) -> ScannedSidecars {
     let mut motions = Vec::new();
     let mut expressions = Vec::new();
-    collect_sidecars(dir, 0, &mut motions, &mut expressions);
+    collect_sidecars(dir, 0, &mut motions, &mut expressions, issues);
 
     motions.sort();
     // Stable sort keyed on "not an idle clip", so an `IDLE.motion3.json` style
@@ -813,20 +800,28 @@ fn collect_sidecars(
     depth: usize,
     motions: &mut Vec<PathBuf>,
     expressions: &mut Vec<PathBuf>,
+    issues: &mut Vec<Error>,
 ) {
     if depth > MAX_SCAN_DEPTH {
         return;
     }
 
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(source) => {
+            issues.push(Error::Scan {
+                path: dir.to_path_buf(),
+                source,
+            });
+            return;
+        }
     };
 
     for entry in entries.flatten() {
         let path = entry.path();
 
         if path.is_dir() {
-            collect_sidecars(&path, depth + 1, motions, expressions);
+            collect_sidecars(&path, depth + 1, motions, expressions, issues);
             continue;
         }
 

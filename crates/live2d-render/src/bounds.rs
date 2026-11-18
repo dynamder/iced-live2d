@@ -26,7 +26,13 @@ impl ModelBounds {
         let width = canvas.width() / pixels_per_unit;
         let height = canvas.height() / pixels_per_unit;
 
-        if !(pixels_per_unit > 0.0) || !(width > 0.0) || !(height > 0.0) {
+        if !pixels_per_unit.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || pixels_per_unit <= 0.0
+            || width <= 0.0
+            || height <= 0.0
+        {
             return None;
         }
 

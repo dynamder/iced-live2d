@@ -31,6 +31,19 @@ pub enum Error {
     #[error("model has no drawable geometry")]
     NoDrawables,
 
+    #[error("motion #{index} is out of range, the model exposes {count}")]
+    MotionIndex { index: usize, count: usize },
+
+    #[error("expression #{index} is out of range, the model exposes {count}")]
+    ExpressionIndex { index: usize, count: usize },
+
+    #[error("failed to scan {path}: {source}")]
+    Scan {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("failed to allocate Live2D mesh buffers")]
     MeshBuffers,
 
