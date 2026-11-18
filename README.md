@@ -230,6 +230,11 @@ not need changes.
   `Primitive::render`, because the mask pass has to be inserted between the
   passes iced controls.
 - **Textures need mipmaps** — see patch 2 above.
+- **The torso only follows the mouse with physics off.** `ParamBodyAngleX` is bound to
+  mouse X, but `PhysicsSetting4` also produces it from `PositionX`, which the official
+  bindings leave unset — physics wins and pins it to 0. Turning physics off makes the
+  whole upper body follow. Neither behaviour is a renderer bug; the rig expects
+  `PositionX` from body tracking.
 
 ## Troubleshooting (this machine only)
 

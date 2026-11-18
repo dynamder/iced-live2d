@@ -178,6 +178,26 @@ VTuber 导出的绑定通常是这样分层的：
 
 其余全部“未设置”。我们一度多写了 `AngleZ` / `PositionX/Y` / `LeanInput`（官方未绑），又漏了 `ParamBodyAngleX`，两边画面因此根本对不上——**多余的输入会被物理链放大成明显的姿态差异**，而本项目的验收手段就是和参考渲染器对比，所以不能“顺手加戏改进跟踪”。
 
+#### 为什么“身体不跟鼠标”：`ParamBodyAngleX` 是个物理输出参数
+
+官方默认绑定里 `ParamBodyAngleX`（胸腔 X）绑到鼠标 X，但它的**生产者**是
+`PhysicsSetting4: PositionX → ParamBodyAngleX`，而 `PositionX` 在官方绑定表里是“未设置”。
+物理输出权重 100 = 直接替换，所以**物理一开，鼠标写进去的胸腔角度就被覆盖成 0**。
+
+我们在 `examples/sweep.rs` / `examples/jolt.rs` 上开关物理各测了一遍，结构与官方 Viewer 的
+观感完全对应：
+
+| | 物理开 | 物理关 |
+|---|---|---|
+| `ParamAngleX`（头） | +13.8（物理由 `AngleX` 推出） | 0（没人写） |
+| `ParamBodyAngleX`（胸腔） | **0**（`Setting4` 用 `PositionX`=0 覆盖） | **+30**（鼠标写入存活） |
+| 画面变化位置 | y≈124（脸/头发） | y≈285（胸口，上方整体被带动） |
+| 每帧变化像素（±1 全程） | 中位 1 931，峰值/中位 1.3× | 中位 3 161，峰值/中位 1.0× |
+
+即：**物理开 = 只跟眼睛和头；物理关 = 腰以上整体跟着转**。两种都是这份工程文件的绑定方式决定的，
+渲染器只是照做；官方 Viewer 在相同开关下表现一致。要“身体跟着动”，得给 `PositionX` 喂值
+（身体追踪输入），而不是把鼠标绑到物理输出上。
+
 > **已确认并已打补丁**：mocari 0.4.1 的 `evaluate_setting` 把重新绑定后的缓存值当成计算结果写回，
 > 等于 `cache = blend(cache, cache)`，所以物理输出**永远进不了** `parameter_cache`；本模型 **113 处**
 > 跨 setting 读取因此全部失效（`AngleX → ParamAngleX → 前发/后发`、`ParamBodyAngleX → 十余处`、
