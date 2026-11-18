@@ -232,6 +232,12 @@ at half resolution by default:
 
 Pass `SceneOptions { texture_scale: 1.0, ..Default::default() }` for full quality.
 
+Hosting the same model in a Chromium webview running the official Cubism Web SDK
+costs **3.2× the memory of this app**: 1 252 MB private working set against
+388 MB for the rig, 309 MB against 118 MB for the small sample model, with a
+blank webview already sitting at 193 MB. Method, the full table, and the two SDK
+traps found on the way: [`docs/web-sdk-benchmark.md`](docs/web-sdk-benchmark.md).
+
 ## Layout
 
 ```
@@ -433,6 +439,9 @@ this is not a project problem.
 - [`docs/mocari-chained-physics.md`](docs/mocari-chained-physics.md) — confirmed
   mocari defect: physics outputs never reached the parameter cache, so the chained
   half of the rig stood still
+- [`docs/web-sdk-benchmark.md`](docs/web-sdk-benchmark.md) — native iced vs a
+  Chromium webview running the Cubism Web SDK: memory, the clip-mask quota trap,
+  and why the webview looked softer
 - [`docs/live2d-native-feasibility.md`](docs/live2d-native-feasibility.md) —
   broader survey of Live2D on native platforms (platform matrix, licensing,
   difficulty ladder)
