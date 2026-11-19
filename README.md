@@ -70,7 +70,7 @@ The crate pins iced master, so the host has to add the same pin:
 ```toml
 [dependencies]
 iced = { git = "https://github.com/iced-rs/iced", rev = "e5c350f271a8046f875c6662d452fde9e462d486", features = ["advanced"] }
-iced-live2d = { path = "crates/iced-live2d" }
+iced-live2d = { git = "https://github.com/dynamder/iced-live2d" }
 ```
 
 A complete host is an asset, a model, and a `view`:

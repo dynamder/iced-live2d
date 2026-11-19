@@ -9,6 +9,7 @@ edition = "2024"
 rust-version = "1.93"
 publish = false
 license = "MIT"
+repository = "https://github.com/dynamder/iced-live2d"
 
 [workspace.dependencies]
 wgpu = "30"

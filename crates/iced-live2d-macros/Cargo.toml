@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "The Vocabulary derive behind iced-live2d's optional `macros` feature"
 
 [lib]
