@@ -11,8 +11,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use live2d_render::{AssetId, AssetOptions, LookAtMode, ModelOptions};
 
 use crate::event::Problem;
+use crate::interaction::Pointer;
 use crate::interface::{Interface, InterfaceSpec, Vocabulary};
 use crate::pipeline::PrimitiveCommand;
+use iced::Point;
 
 /// How many commands may wait for the render layer before the oldest are dropped.
 const MAX_QUEUED_COMMANDS: usize = 64;
@@ -162,11 +164,18 @@ impl<I: Interface> Command<I> {
 }
 
 /// One pointer input, queued by the widget and consumed by the render layer.
+///
+/// Positions are window pixels captured when the event happens, so a press that is
+/// followed by a fast move is still hit-tested where it landed. Mouse movement is
+/// not queued: it is ambient state the render layer reads each frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PointerInput {
-    Pressed,
-    Released,
-    Scrolled(f32),
+    Pressed { pointer: Pointer, at: Point },
+    Released { pointer: Pointer, at: Point },
+    Moved { pointer: Pointer, at: Point },
+    Scrolled { lines: [f32; 2], at: Point },
+    Cancelled { pointer: Pointer },
+    CancelAll,
 }
 
 impl<I: Interface> Live2dModel<I> {

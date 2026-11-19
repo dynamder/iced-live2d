@@ -17,6 +17,7 @@
 #![warn(missing_docs)]
 
 mod event;
+mod interaction;
 mod interface;
 mod model;
 mod pipeline;
@@ -25,7 +26,10 @@ mod widget;
 pub mod look_at;
 pub mod raw;
 
-pub use event::{Live2dEvent, LoadFailure, PointerEvent, Problem};
+pub use event::{Live2dEvent, LoadFailure, Problem};
+pub use interaction::{
+    Cancelled, Dragging, Hovering, Moving, Pointer, PointerEvent, Pointing, Sample, Scrolling,
+};
 pub use interface::{Interface, InterfaceSpec, KeyId, MissingNames, Vocabulary, VocabularySpec};
 pub use look_at::LookAtSource;
 pub use model::{Live2dAsset, Live2dId, Live2dModel, Parameters, Parts};

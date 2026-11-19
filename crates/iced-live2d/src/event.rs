@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use live2d_render::{Error, ModelInfo};
 
+use crate::interaction::PointerEvent;
 use crate::interface::{Interface, MissingNames};
 use crate::model::Live2dId;
 
@@ -65,12 +66,7 @@ pub enum Live2dEvent<I: Interface> {
         clip: usize,
     },
     /// The pointer did something on the widget.
-    Pointer {
-        /// Which model.
-        model: Live2dId,
-        /// What the pointer did.
-        event: PointerEvent<I>,
-    },
+    Pointer(PointerEvent<I::HitArea>),
 }
 
 impl<I: Interface> Live2dEvent<I> {
@@ -81,103 +77,8 @@ impl<I: Interface> Live2dEvent<I> {
             | Live2dEvent::ModelFailedToLoad { model, .. }
             | Live2dEvent::ModelReportedProblem { model, .. }
             | Live2dEvent::MotionStarted { model, .. }
-            | Live2dEvent::MotionFinishedPlaying { model, .. }
-            | Live2dEvent::Pointer { model, .. } => *model,
-        }
-    }
-}
-
-/// A pointer interaction, in the terms a Live2D model speaks.
-///
-/// Coordinates are in **model space**, the space hit areas are tested in, so they
-/// compare against [`ModelInfo::bounds`] directly.
-pub enum PointerEvent<I: Interface> {
-    /// A button went down inside the widget.
-    Pressed {
-        /// The hit area under the cursor, if one was hit.
-        area: Option<I::HitArea>,
-        /// Where it happened, in model space.
-        at: [f32; 2],
-    },
-    /// A button went up inside the widget.
-    Released {
-        /// The hit area under the cursor, if one was hit.
-        area: Option<I::HitArea>,
-        /// Where it happened, in model space.
-        at: [f32; 2],
-    },
-    /// The cursor moved onto a hit area.
-    Entered {
-        /// The area the cursor is now over.
-        area: I::HitArea,
-    },
-    /// The cursor left the hit area it was over.
-    Exited {
-        /// The area the cursor left.
-        area: I::HitArea,
-    },
-    /// The cursor moved while a button was down. What that does — move the window,
-    /// turn the head — is the host's decision.
-    Dragged {
-        /// Movement since the previous frame, in model plane units.
-        delta: [f32; 2],
-    },
-    /// The wheel turned inside the widget. The widget converts pixel deltas to
-    /// lines; zooming or scrolling is the host's decision.
-    Scrolled {
-        /// Vertical lines scrolled; positive is away from the user.
-        lines: f32,
-    },
-}
-
-impl<I: Interface> Clone for PointerEvent<I> {
-    fn clone(&self) -> Self {
-        match self {
-            PointerEvent::Pressed { area, at } => PointerEvent::Pressed {
-                area: area.clone(),
-                at: *at,
-            },
-            PointerEvent::Released { area, at } => PointerEvent::Released {
-                area: area.clone(),
-                at: *at,
-            },
-            PointerEvent::Entered { area } => PointerEvent::Entered { area: area.clone() },
-            PointerEvent::Exited { area } => PointerEvent::Exited { area: area.clone() },
-            PointerEvent::Dragged { delta } => PointerEvent::Dragged { delta: *delta },
-            PointerEvent::Scrolled { lines } => PointerEvent::Scrolled { lines: *lines },
-        }
-    }
-}
-
-impl<I: Interface> fmt::Debug for PointerEvent<I> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PointerEvent::Pressed { area, at } => formatter
-                .debug_struct("Pressed")
-                .field("area", area)
-                .field("at", at)
-                .finish(),
-            PointerEvent::Released { area, at } => formatter
-                .debug_struct("Released")
-                .field("area", area)
-                .field("at", at)
-                .finish(),
-            PointerEvent::Entered { area } => formatter
-                .debug_struct("Entered")
-                .field("area", area)
-                .finish(),
-            PointerEvent::Exited { area } => formatter
-                .debug_struct("Exited")
-                .field("area", area)
-                .finish(),
-            PointerEvent::Dragged { delta } => formatter
-                .debug_struct("Dragged")
-                .field("delta", delta)
-                .finish(),
-            PointerEvent::Scrolled { lines } => formatter
-                .debug_struct("Scrolled")
-                .field("lines", lines)
-                .finish(),
+            | Live2dEvent::MotionFinishedPlaying { model, .. } => *model,
+            Live2dEvent::Pointer(event) => event.model(),
         }
     }
 }
@@ -219,10 +120,7 @@ impl<I: Interface> Clone for Live2dEvent<I> {
                     clip: *clip,
                 }
             }
-            Live2dEvent::Pointer { model, event } => Live2dEvent::Pointer {
-                model: *model,
-                event: event.clone(),
-            },
+            Live2dEvent::Pointer(event) => Live2dEvent::Pointer(event.clone()),
         }
     }
 }
@@ -265,11 +163,7 @@ impl<I: Interface> fmt::Debug for Live2dEvent<I> {
                 .field("group", group)
                 .field("clip", clip)
                 .finish(),
-            Live2dEvent::Pointer { model, event } => formatter
-                .debug_struct("Pointer")
-                .field("model", model)
-                .field("event", event)
-                .finish(),
+            Live2dEvent::Pointer(event) => formatter.debug_tuple("Pointer").field(event).finish(),
         }
     }
 }
@@ -369,6 +263,7 @@ impl fmt::Display for Problem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interaction::{Moving, Sample};
     use crate::interface::{KeyId, Vocabulary};
     use crate::raw::{Raw, RawMotion};
 
@@ -386,10 +281,14 @@ mod tests {
         let model = Live2dId::unique();
         let asset = live2d_render::AssetId::unique();
 
-        let pointer = Live2dEvent::<Raw>::Pointer {
+        let pointer = Live2dEvent::<Raw>::Pointer(PointerEvent::Moved(Moving {
             model,
-            event: PointerEvent::Dragged { delta: [1.0, 2.0] },
-        };
+            at: Sample {
+                pixels: iced::Point::ORIGIN,
+                clip: [0.0, 0.0],
+                model: [0.0, 0.0],
+            },
+        }));
         let started = Live2dEvent::<Raw>::MotionStarted {
             model,
             group: motion(asset),

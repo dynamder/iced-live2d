@@ -1,7 +1,7 @@
 //! Where a LookAt target comes from each frame.
 
-use iced::Rectangle;
 use iced::mouse;
+use iced::{Point, Rectangle};
 
 /// Maps a cursor position and the widget's bounds to a LookAt target.
 ///
@@ -14,15 +14,27 @@ pub type LookAtSource = fn(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[
 
 /// The cursor in `-1.0..=1.0` on both axes (`+y` up), or `None` outside `bounds`.
 pub fn position(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]> {
-    let position = cursor.position_in(bounds)?;
+    cursor.position_in(bounds)?;
 
+    clip(cursor, bounds)
+}
+
+/// Where a window position falls in the widget, `-1.0..=1.0` on both axes.
+///
+/// Unlike [`position`] this does not care whether the point is inside, which is
+/// what a drag that leaves the widget needs.
+pub(crate) fn clip(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]> {
+    clip_at(cursor.position()?, bounds)
+}
+
+pub(crate) fn clip_at(position: Point, bounds: Rectangle) -> Option<[f32; 2]> {
     if bounds.width <= 0.0 || bounds.height <= 0.0 {
         return None;
     }
 
     Some([
-        (position.x / bounds.width) * 2.0 - 1.0,
-        1.0 - (position.y / bounds.height) * 2.0,
+        ((position.x - bounds.x) / bounds.width) * 2.0 - 1.0,
+        1.0 - ((position.y - bounds.y) / bounds.height) * 2.0,
     ])
 }
 

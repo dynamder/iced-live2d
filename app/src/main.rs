@@ -195,7 +195,7 @@ impl App {
                     self.model.play_motion(group.clone(), (*clip + 1) % clips);
                 }
             }
-            Live2dEvent::Pointer { event, .. } => println!("live2d: {event:?}"),
+            Live2dEvent::Pointer(event) => println!("live2d: {event:?}"),
         }
     }
 

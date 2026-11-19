@@ -212,7 +212,7 @@ impl App {
 
                 format!("model {label} finished {} #{}", group.name(), clip)
             }
-            Live2dEvent::Pointer { event, .. } => format!("model {label} {event:?}"),
+            Live2dEvent::Pointer(event) => format!("model {label} {event:?}"),
         };
 
         println!("{status}");

@@ -12,16 +12,18 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Sender;
-use iced::Rectangle;
 use iced::wgpu;
 use iced::widget::shader;
+use iced::{Point, Rectangle};
 use live2d_render::{
     Asset, AssetId, AssetOptions, ClipRect, Error, LookAtMode, Model, ModelGpu, ModelInfo,
     ModelOptions, Prepared, View, WgpuLive2dRenderer,
 };
 
 use crate::event::{LoadFailure, Problem};
+use crate::interaction::{Pointer, Sample};
 use crate::interface::{InterfaceSpec, KeyId, Mapping};
+use crate::look_at;
 use crate::model::{Live2dId, PointerInput, Presence};
 
 /// Source of view identities, one per widget slot in the UI tree.
@@ -40,12 +42,39 @@ impl ViewId {
 /// A pointer interaction, as the widget saw it.
 #[derive(Debug, Clone)]
 pub(crate) enum PointerEventKind {
-    Pressed { area: Option<KeyId>, at: [f32; 2] },
-    Released { area: Option<KeyId>, at: [f32; 2] },
-    Entered { area: KeyId },
-    Exited { area: KeyId },
-    Dragged { delta: [f32; 2] },
-    Scrolled { lines: f32 },
+    Pressed {
+        pointer: Pointer,
+        area: Option<KeyId>,
+        at: Sample,
+    },
+    Released {
+        pointer: Pointer,
+        area: Option<KeyId>,
+        at: Sample,
+    },
+    Cancelled {
+        pointer: Pointer,
+    },
+    Moved {
+        at: Sample,
+    },
+    Entered {
+        area: KeyId,
+        at: Sample,
+    },
+    Exited {
+        area: KeyId,
+        at: Sample,
+    },
+    Dragged {
+        pointer: Pointer,
+        origin: Sample,
+        at: Sample,
+    },
+    Scrolled {
+        lines: [f32; 2],
+        at: Sample,
+    },
 }
 
 /// Something the pipeline tells the widgets that draw a model. Non-generic: the
@@ -111,8 +140,11 @@ pub(crate) struct FrameInputs {
     pub(crate) look_at_mode: LookAtMode,
     pub(crate) physics_enabled: bool,
     pub(crate) paused: bool,
-    /// Where the cursor is, in clip space (`-1.0..=1.0`, `+y` up).
-    pub(crate) cursor: Option<[f32; 2]>,
+    /// Where the cursor is, in window pixels, when it is over the widget.
+    pub(crate) cursor: Option<Point>,
+    /// Where the pointer is, in window pixels, inside the widget or not: a drag
+    /// that leaves the widget keeps reporting.
+    pub(crate) position: Option<Point>,
     pub(crate) pointer: Vec<PointerInput>,
     /// Whether this widget asked for the per-frame cost line.
     pub(crate) profile: bool,
@@ -225,9 +257,12 @@ impl Live2dPipeline {
             let slot = views.entry(primitive.view).or_insert_with(|| ViewSlot {
                 view: View::new(renderer, device, model_bounds, aspect, primitive.fill),
                 presence: Arc::downgrade(&primitive.view_presence),
+                listener: None,
+                interaction: Interaction::default(),
             });
 
             slot.presence = Arc::downgrade(&primitive.view_presence);
+            slot.listener = primitive.events.clone();
             slot.view.set_aspect(queue, aspect);
             slot.view.set_fill(queue, primitive.fill);
         }
@@ -236,12 +271,15 @@ impl Live2dPipeline {
             register(slot, primitive.events.as_ref());
         }
 
-        let (Some(asset), Some(view)) = (assets.get(&primitive.asset), views.get(&primitive.view))
-        else {
+        let Some(asset) = assets.get(&primitive.asset) else {
             return;
         };
 
         let AssetState::Ready(asset) = &asset.state else {
+            return;
+        };
+
+        let Some(view) = views.get_mut(&primitive.view) else {
             return;
         };
 
@@ -257,7 +295,15 @@ impl Live2dPipeline {
             return;
         };
 
-        let cost = reconcile(primitive, asset.info(), &view.view, ready, listeners, &gpu);
+        let cost = reconcile(
+            primitive,
+            asset.info(),
+            bounds,
+            view,
+            ready,
+            listeners,
+            &gpu,
+        );
 
         if primitive.inputs.profile
             && let Some(line) = profile.get_or_insert_with(Profile::default).record(cost)
@@ -397,6 +443,32 @@ impl AssetState {
 struct ViewSlot {
     view: View,
     presence: Weak<Presence>,
+    /// The widget this framing belongs to, if it wants events at all. Pointer
+    /// events go here only: they happen in this view's space.
+    listener: Option<Sender<PipelineEvent>>,
+    interaction: Interaction,
+}
+
+/// Everything a pointer does here, per view: two widgets on one model never see
+/// each other's presses or hover.
+#[derive(Default)]
+struct Interaction {
+    /// The hit area under the cursor, as a model index.
+    hover: Option<usize>,
+    /// Every pointer currently held down, at most a handful.
+    down: Vec<Down>,
+    /// The last position reported as a `Moved`, in window pixels: inside only, so
+    /// a cursor that never enters the widget reports nothing.
+    moved: Option<Point>,
+}
+
+struct Down {
+    pointer: Pointer,
+    origin: Point,
+    /// Where the pointer is now, from the frame cursor or from a touch move.
+    current: Point,
+    /// What was last reported as a drag.
+    reported: Point,
 }
 
 struct ModelSlot {
@@ -421,12 +493,6 @@ struct Ready {
     /// Last problem reported from the update path, so a repeating failure is not
     /// reported sixty times a second.
     last_problem: Option<String>,
-    /// The hit area under the cursor, as a model index.
-    hover: Option<usize>,
-    /// Whether a button is held down over the widget.
-    down: bool,
-    /// Where the cursor was, in model space, the last time a drag was reported.
-    drag: Option<[f32; 2]>,
     parameters: Vec<(usize, f32)>,
     parts: Vec<(usize, f32)>,
 }
@@ -606,9 +672,6 @@ fn new_ready(
             mapping,
             last: None,
             last_problem: None,
-            hover: None,
-            down: false,
-            drag: None,
             parameters: Vec::new(),
             parts: Vec::new(),
         })),
@@ -660,7 +723,8 @@ fn broadcast(listeners: &mut Vec<Sender<PipelineEvent>>, event: PipelineEvent) {
 fn reconcile(
     primitive: &Live2dPrimitive,
     info: &ModelInfo,
-    view: &View,
+    bounds: &Rectangle,
+    view: &mut ViewSlot,
     ready: &mut Ready,
     listeners: &mut Vec<Sender<PipelineEvent>>,
     gpu: &Gpu<'_>,
@@ -755,9 +819,9 @@ fn reconcile(
                 report(&mut ready.last_problem, listeners, Error::MeshUpdate);
             }
         }
-
-        pointer(primitive, info, view, ready, listeners);
     }
+
+    pointer(primitive, info, bounds, view, ready);
 
     for started in ready.model.take_started() {
         match motion_key(primitive.asset, info, &ready.mapping, started.group) {
@@ -794,95 +858,216 @@ fn reconcile(
     cost
 }
 
-/// Turns the cursor into hit tests and pointer events.
+/// Turns this frame's pointer state into hit tests and pointer events.
+///
+/// Runs for this view only, so two widgets on one model never see each other's
+/// presses or hover. It also runs while the model is paused: nothing steps, but
+/// the pose on screen is still hit-testable.
+///
+/// Positions are window pixels throughout, so the events do not move when the
+/// widget's own rectangle does.
 fn pointer(
     primitive: &Live2dPrimitive,
     info: &ModelInfo,
-    view: &View,
+    bounds: &Rectangle,
+    view: &mut ViewSlot,
     ready: &mut Ready,
-    listeners: &mut Vec<Sender<PipelineEvent>>,
 ) {
-    let point = primitive.inputs.cursor.map(|cursor| view.to_model(cursor));
-    let hit = point.and_then(|point| ready.model.hit_area(point));
+    let ViewSlot {
+        view,
+        listener,
+        interaction,
+        ..
+    } = view;
 
-    if hit != ready.hover {
-        if let Some(previous) = ready.hover
-            && let Some(area) = area_key(primitive.asset, info, &ready.mapping, previous)
+    let listener = listener.as_ref();
+
+    let sample = |point: Point| {
+        let clip = look_at::clip_at(point, *bounds);
+
+        clip.map(|clip| Sample {
+            pixels: Point::new(point.x - bounds.x, point.y - bounds.y),
+            clip,
+            model: view.to_model(clip),
+        })
+    };
+
+    if let Some(position) = primitive.inputs.cursor
+        && interaction.moved != Some(position)
+    {
+        interaction.moved = Some(position);
+
+        if let Some(at) = sample(position) {
+            send(
+                listener,
+                PipelineEvent::Pointer(PointerEventKind::Moved { at }),
+            );
+        }
+    }
+
+    let hover = primitive.inputs.cursor.and_then(|position| {
+        let clip = look_at::clip_at(position, *bounds)?;
+
+        ready.model.hit_area(view.to_model(clip))
+    });
+
+    if hover != interaction.hover {
+        let at = interaction
+            .moved
+            .or(primitive.inputs.cursor)
+            .and_then(sample);
+
+        if let Some(previous) = interaction.hover
+            && let (Some(area), Some(at)) = (
+                area_key(primitive.asset, info, &ready.mapping, previous),
+                at,
+            )
         {
-            broadcast(
-                listeners,
-                PipelineEvent::Pointer(PointerEventKind::Exited { area }),
+            send(
+                listener,
+                PipelineEvent::Pointer(PointerEventKind::Exited { area, at }),
             );
         }
 
-        if let Some(next) = hit
-            && let Some(area) = area_key(primitive.asset, info, &ready.mapping, next)
+        if let Some(next) = hover
+            && let (Some(area), Some(at)) =
+                (area_key(primitive.asset, info, &ready.mapping, next), at)
         {
-            broadcast(
-                listeners,
-                PipelineEvent::Pointer(PointerEventKind::Entered { area }),
+            send(
+                listener,
+                PipelineEvent::Pointer(PointerEventKind::Entered { area, at }),
             );
         }
 
-        ready.hover = hit;
+        interaction.hover = hover;
     }
 
     for input in &primitive.inputs.pointer {
         match *input {
-            PointerInput::Pressed => {
-                let Some(at) = point else {
+            PointerInput::Pressed { pointer, at } => {
+                let Some(pressed) = sample(at) else {
                     continue;
                 };
 
-                ready.down = true;
-                ready.drag = Some(at);
+                let area = ready.model.hit_area(pressed.model);
 
-                broadcast(
-                    listeners,
+                interaction.down.retain(|down| down.pointer != pointer);
+                interaction.down.push(Down {
+                    pointer,
+                    origin: at,
+                    current: at,
+                    reported: at,
+                });
+
+                send(
+                    listener,
                     PipelineEvent::Pointer(PointerEventKind::Pressed {
-                        area: hit
+                        pointer,
+                        area: area
                             .and_then(|area| area_key(primitive.asset, info, &ready.mapping, area)),
-                        at,
+                        at: pressed,
                     }),
                 );
             }
-            PointerInput::Released => {
-                ready.down = false;
-                ready.drag = None;
-
-                let Some(at) = point else {
+            PointerInput::Released { pointer, at } => {
+                let Some(released) = sample(at) else {
                     continue;
                 };
 
-                broadcast(
-                    listeners,
+                let Some(index) = interaction
+                    .down
+                    .iter()
+                    .position(|down| down.pointer == pointer)
+                else {
+                    continue;
+                };
+
+                interaction.down.remove(index);
+
+                let area = ready.model.hit_area(released.model);
+
+                send(
+                    listener,
                     PipelineEvent::Pointer(PointerEventKind::Released {
-                        area: hit
+                        pointer,
+                        area: area
                             .and_then(|area| area_key(primitive.asset, info, &ready.mapping, area)),
-                        at,
+                        at: released,
                     }),
                 );
             }
-            PointerInput::Scrolled(lines) => broadcast(
-                listeners,
-                PipelineEvent::Pointer(PointerEventKind::Scrolled { lines }),
-            ),
+            PointerInput::Moved { pointer, at } => {
+                if let Some(down) = interaction
+                    .down
+                    .iter_mut()
+                    .find(|down| down.pointer == pointer)
+                {
+                    down.current = at;
+                }
+            }
+            PointerInput::Scrolled { lines, at } => {
+                if let Some(at) = sample(at) {
+                    send(
+                        listener,
+                        PipelineEvent::Pointer(PointerEventKind::Scrolled { lines, at }),
+                    );
+                }
+            }
+            PointerInput::Cancelled { pointer } => {
+                interaction.down.retain(|down| down.pointer != pointer);
+
+                send(
+                    listener,
+                    PipelineEvent::Pointer(PointerEventKind::Cancelled { pointer }),
+                );
+            }
+            PointerInput::CancelAll => {
+                for down in interaction.down.drain(..) {
+                    send(
+                        listener,
+                        PipelineEvent::Pointer(PointerEventKind::Cancelled {
+                            pointer: down.pointer,
+                        }),
+                    );
+                }
+            }
         }
     }
 
-    if let (true, Some(point)) = (ready.down, point) {
-        if let Some(previous) = ready.drag
-            && previous != point
-        {
-            broadcast(
-                listeners,
-                PipelineEvent::Pointer(PointerEventKind::Dragged {
-                    delta: [point[0] - previous[0], point[1] - previous[1]],
-                }),
-            );
+    if let Some(position) = primitive.inputs.position {
+        for down in &mut interaction.down {
+            if matches!(down.pointer, Pointer::Mouse(_)) {
+                down.current = position;
+            }
+        }
+    }
+
+    for down in &mut interaction.down {
+        if down.current == down.reported {
+            continue;
         }
 
-        ready.drag = Some(point);
+        down.reported = down.current;
+
+        let (Some(origin), Some(at)) = (sample(down.origin), sample(down.current)) else {
+            continue;
+        };
+
+        send(
+            listener,
+            PipelineEvent::Pointer(PointerEventKind::Dragged {
+                pointer: down.pointer,
+                origin,
+                at,
+            }),
+        );
+    }
+}
+
+/// Hands one event to this view's widget, if it listens.
+fn send(listener: Option<&Sender<PipelineEvent>>, event: PipelineEvent) {
+    if let Some(listener) = listener {
+        let _ = listener.send(event);
     }
 }
 

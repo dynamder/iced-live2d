@@ -11,10 +11,13 @@ use iced::advanced::layout;
 use iced::advanced::widget::tree;
 use iced::advanced::{Layout, Widget, renderer};
 use iced::widget::shader;
-use iced::{Length, Rectangle, mouse, window};
+use iced::{Length, Rectangle, mouse, touch, window};
 use live2d_render::STEP;
 
-use crate::event::{Live2dEvent, PointerEvent, Problem};
+use crate::event::{Live2dEvent, Problem};
+use crate::interaction::{
+    Cancelled, Dragging, Hovering, Moving, Pointer, PointerEvent, Pointing, Scrolling,
+};
 use crate::interface::{Interface, KeyId, Vocabulary};
 use crate::look_at::LookAtSource;
 use crate::model::{Command, Live2dModel, PointerInput, Presence};
@@ -122,46 +125,90 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
 
     /// Queues the input a pointer event carries.
     ///
-    /// A release counts wherever it happens, or dragging out of the widget and
-    /// letting go leaves the drag open forever.
+    /// Positions are captured here, not in `prepare`: iced delivers the event now
+    /// and the render layer runs later, so a press that is followed by a fast move
+    /// must remember where it landed. A release is queued wherever it happens,
+    /// inside the widget or not.
     fn queue_input(
         &self,
         state: &mut Live2dState,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
-    ) {
+    ) -> bool {
         let model = self.model.inner();
 
         match event {
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                state.pressed = false;
-                model.push_pointer(PointerInput::Released);
-            }
-            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-                if cursor.is_over(bounds) =>
-            {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(button)) if cursor.is_over(bounds) => {
                 state.pressed = true;
-                model.push_pointer(PointerInput::Pressed);
+
+                if let Some(at) = cursor.position() {
+                    model.push_pointer(PointerInput::Pressed {
+                        pointer: Pointer::Mouse(*button),
+                        at,
+                    });
+                }
+            }
+            iced::Event::Mouse(mouse::Event::ButtonReleased(button)) => {
+                state.pressed = false;
+
+                if let Some(at) = cursor.position() {
+                    model.push_pointer(PointerInput::Released {
+                        pointer: Pointer::Mouse(*button),
+                        at,
+                    });
+                }
             }
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
                 let lines = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => *y,
-                    mouse::ScrollDelta::Pixels { y, .. } => *y / PIXELS_PER_LINE,
+                    mouse::ScrollDelta::Lines { x, y } => [*x, *y],
+                    mouse::ScrollDelta::Pixels { x, y } => {
+                        [*x / PIXELS_PER_LINE, *y / PIXELS_PER_LINE]
+                    }
                 };
 
-                model.push_pointer(PointerInput::Scrolled(lines));
+                if let Some(at) = cursor.position() {
+                    model.push_pointer(PointerInput::Scrolled { lines, at });
+                }
             }
-            _ => {}
+            iced::Event::Touch(touch::Event::FingerPressed { id, position }) => {
+                model.push_pointer(PointerInput::Pressed {
+                    pointer: Pointer::Touch(*id),
+                    at: *position,
+                });
+            }
+            iced::Event::Touch(touch::Event::FingerMoved { id, position }) => {
+                model.push_pointer(PointerInput::Moved {
+                    pointer: Pointer::Touch(*id),
+                    at: *position,
+                });
+            }
+            iced::Event::Touch(touch::Event::FingerLifted { id, position }) => {
+                model.push_pointer(PointerInput::Released {
+                    pointer: Pointer::Touch(*id),
+                    at: *position,
+                });
+            }
+            iced::Event::Touch(touch::Event::FingerLost { id, .. }) => {
+                model.push_pointer(PointerInput::Cancelled {
+                    pointer: Pointer::Touch(*id),
+                });
+            }
+            iced::Event::Window(window::Event::Unfocused) => {
+                state.pressed = false;
+                model.push_pointer(PointerInput::CancelAll);
+            }
+            _ => return false,
         }
+
+        true
     }
 
     /// Takes the next queued event, if the host listens for them.
     fn next_message(&self, state: &mut Live2dState) -> Option<Message> {
-        let on_event = self.on_event.as_ref()?;
-
         state.drain();
 
+        let on_event = self.on_event.as_ref()?;
         let event = state.pending.pop_front()?;
 
         let event = match self.convert(event) {
@@ -203,27 +250,51 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
                 group: key::<I::Motion>(group, "motion")?,
                 clip,
             },
-            PipelineEvent::Pointer(kind) => Live2dEvent::Pointer {
-                model,
-                event: match kind {
-                    PointerEventKind::Pressed { area, at } => PointerEvent::Pressed {
+            PipelineEvent::Pointer(kind) => Live2dEvent::Pointer(match kind {
+                PointerEventKind::Pressed { pointer, area, at } => {
+                    PointerEvent::Pressed(Pointing {
+                        model,
+                        pointer,
                         area: optional_key::<I::HitArea>(area, "hit area")?,
                         at,
-                    },
-                    PointerEventKind::Released { area, at } => PointerEvent::Released {
+                    })
+                }
+                PointerEventKind::Released { pointer, area, at } => {
+                    PointerEvent::Released(Pointing {
+                        model,
+                        pointer,
                         area: optional_key::<I::HitArea>(area, "hit area")?,
                         at,
-                    },
-                    PointerEventKind::Entered { area } => PointerEvent::Entered {
-                        area: key::<I::HitArea>(area, "hit area")?,
-                    },
-                    PointerEventKind::Exited { area } => PointerEvent::Exited {
-                        area: key::<I::HitArea>(area, "hit area")?,
-                    },
-                    PointerEventKind::Dragged { delta } => PointerEvent::Dragged { delta },
-                    PointerEventKind::Scrolled { lines } => PointerEvent::Scrolled { lines },
-                },
-            },
+                    })
+                }
+                PointerEventKind::Cancelled { pointer } => {
+                    PointerEvent::Cancelled(Cancelled { model, pointer })
+                }
+                PointerEventKind::Moved { at } => PointerEvent::Moved(Moving { model, at }),
+                PointerEventKind::Entered { area, at } => PointerEvent::Entered(Hovering {
+                    model,
+                    area: key::<I::HitArea>(area, "hit area")?,
+                    at,
+                }),
+                PointerEventKind::Exited { area, at } => PointerEvent::Exited(Hovering {
+                    model,
+                    area: key::<I::HitArea>(area, "hit area")?,
+                    at,
+                }),
+                PointerEventKind::Dragged {
+                    pointer,
+                    origin,
+                    at,
+                } => PointerEvent::Dragged(Dragging {
+                    model,
+                    pointer,
+                    origin,
+                    at,
+                }),
+                PointerEventKind::Scrolled { lines, at } => {
+                    PointerEvent::Scrolled(Scrolling { model, lines, at })
+                }
+            }),
         })
     }
 }
@@ -338,7 +409,7 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<Message>> {
-        self.queue_input(state, event, bounds, cursor);
+        let interacting = self.queue_input(state, event, bounds, cursor);
 
         let message = self.next_message(state);
         let draining = !state.pending.is_empty();
@@ -349,6 +420,9 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
             }
             // A burst of events must not wait for the model to animate.
             _ if draining => Some(iced::time::Instant::now()),
+            // Input needs a frame to be hit-tested even when the model is frozen;
+            // that frame steps nothing, it only renders what is already there.
+            _ if interacting => Some(iced::time::Instant::now()),
             _ => None,
         };
 
@@ -370,7 +444,6 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
     ) -> Live2dPrimitive {
         let model = self.model.inner();
 
-        let position = crate::look_at::position(cursor, bounds);
         let look_at = match self.look_at {
             Some(source) => Some(
                 source(cursor, bounds)
@@ -378,6 +451,12 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
                     .unwrap_or([0.0, 0.0]),
             ),
             None => model.target(),
+        };
+
+        let inside = if cursor.is_over(bounds) {
+            cursor.position()
+        } else {
+            None
         };
 
         let events = if self.on_event.is_some() {
@@ -408,7 +487,8 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
                 look_at_mode: model.look_at_mode(),
                 physics_enabled: model.physics_enabled(),
                 paused: model.paused(),
-                cursor: position,
+                cursor: inside,
+                position: cursor.position(),
                 pointer: model.drain_pointer(),
                 profile: self.profile,
             },
