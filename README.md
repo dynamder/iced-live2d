@@ -39,10 +39,17 @@ iced's `shader` primitive, which the tiny-skia backend does not have.
 | headless offscreen render to PNG | ✅ |
 | 60 fps on the 715-drawable reference rig | ✅ |
 
-Not there yet, deliberately: keyboard and focus, accessibility, pinch, pen pressure,
-view transforms (pan/zoom of the framing itself), inertia and physics drags, helpers
-for breathing/eye blink/lip-sync, and a desktop-pet shell (transparent, on-top,
-click-through).
+Not there yet: motion cross-fades and host parameter layering, asynchronous
+loading, idle frames, DPI-aware texture budgets, global opacity, non-rectangular
+clipping, view transforms (pan/zoom of the framing itself), playback control
+(seek, speed, fade-out), physics beyond a switch, loading a model from bytes, and
+a pause that is more than a total freeze. [docs/gaps.md](docs/gaps.md) tracks each
+of them with where it lives and what closing it costs.
+
+Deliberately out of scope: keyboard and focus, accessibility, pinch, pen pressure,
+inertia and physics drags, breathing/eye-blink/lip-sync helpers, a desktop-pet
+shell (transparent, on-top, click-through), motion priority policy, and the
+tiny-skia and wasm targets.
 
 ## Fidelity
 
