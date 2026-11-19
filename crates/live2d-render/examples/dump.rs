@@ -1,5 +1,4 @@
-//! Dumps structural facts about a `.model3.json` so we can tell what a model
-//! actually contains before blaming the renderer.
+//! Dumps structural facts about a `.model3.json`, before blaming the renderer.
 //!
 //! cargo run -p live2d-render --example dump -- <path/to/model.model3.json>
 

@@ -35,7 +35,7 @@ impl Target {
     }
 }
 
-/// Runs `encoder`, copies the target back and returns tightly packed RGBA rows.
+/// Runs `encoder`, reads the target back as tightly packed RGBA rows.
 pub fn read_back(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

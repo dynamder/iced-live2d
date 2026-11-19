@@ -1,14 +1,10 @@
-//! Renders one Live2D frame headlessly and writes it to a PNG.
-//!
-//! This bypasses the window compositor entirely, so it is the honest way to
-//! check framing, clipping and colour without a screen capture in the loop — and
-//! it is the base for the pixel-hash regression tests mentioned in
-//! `docs/rust-iced-live2d-plan.md`.
+//! Renders one Live2D frame headlessly and writes it to a PNG, bypassing the window
+//! compositor: the honest way to check framing, clipping and colour.
 //!
 //! cargo run -p live2d-render --example offscreen -- <model.model3.json> [out.png] [size] [steps]
 //!
-//! A capture must be reproducible from the command line alone, so every piece of
-//! state is set through the `LIVE2D_*` knobs documented in `README.md`.
+//! A capture must be reproducible from the command line alone, so all state comes
+//! from the `LIVE2D_*` knobs in `README.md`.
 
 use live2d_render::wgpu;
 use live2d_render::{AssetOptions, ClipRect, LookAtMode};
@@ -43,8 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(30);
     let frame_time = live2d_render::STEP;
 
-    // Validated before the GPU opens, so a typo fails in a millisecond instead of
-    // after uploading 592 MB of textures.
+    // Validate before the GPU opens: a typo then fails in a millisecond.
     let knobs = Knobs::from_env()?;
 
     let gpu::Gpu { device, queue } = gpu::open()?;
@@ -73,8 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     knobs.apply(&mut session);
 
-    // Let physics and the first motion settle a little so the frame is
-    // representative instead of the rest pose.
+    // Let physics and the motion settle, so the frame is not the rest pose.
     for _ in 0..steps {
         session.advance(&device, &queue, frame_time)?;
 

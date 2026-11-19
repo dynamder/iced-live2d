@@ -1,8 +1,5 @@
-//! Prints how a cursor LookAt target would be routed for a model, before you trust it.
-//!
-//! The routing is inferred from the model's physics wiring, so a new model can be
-//! inspected in a second — no GPU, no window — instead of by watching the render
-//! and guessing which convention the rig follows.
+//! Prints how a cursor LookAt target would be routed for a model, before you trust
+//! it. No GPU, no window.
 //!
 //! cargo run -p live2d-render --example rig -- <model.model3.json>
 
@@ -59,7 +56,7 @@ fn print_rig(rig: &Rig) {
     }
 }
 
-/// Same rule as `Live2dScene`: every `Output.Destination.Id` in `physics3.json`.
+/// Same rule as `Session`: every `Output.Destination.Id` in `physics3.json`.
 fn physics_outputs(
     runtime: &live2d_render::mocari::ModelRuntime,
     model_dir: Option<&Path>,

@@ -1,21 +1,15 @@
-//! A typed interface, declared by the host, driving one model.
+//! A typed interface, declared by the host, driving one model. The enums below are
+//! the whole interface: their names are what the model must declare, and a model
+//! lacking any of them is rejected at load with the missing names listed.
 //!
 //! ```text
 //! cargo run -p iced-live2d --features macros --example typed -- <model.model3.json>
 //! ```
 //!
-//! The enums below are the whole interface: their names are what the model must
-//! declare, and a model that lacks any of them is rejected at load time with the
-//! missing names listed — try it on a model with different conventions:
-//!
-//! ```text
-//! cargo run -p iced-live2d --features macros --example typed -- \
-//!     .refs/cubism-web-samples/Samples/Resources/Wanko/Wanko.model3.json
-//! ```
-//!
-//! Keys: `M` mouth open/closed, `C` cheeks on/off, `H` hide/show an arm, `T` play
-//! `TapBody`, `S` stop the motion, `R` restart `Idle`. Clicking the model's `Body`
-//! hit area plays `TapBody` too, and every pointer event is printed.
+//! Try it on a model with other conventions
+//! (`.refs/cubism-web-samples/Samples/Resources/Wanko/Wanko.model3.json`) to see
+//! the rejection. Keys: `M` mouth, `C` cheeks, `H` arm, `T` play `TapBody`,
+//! `S` stop, `R` restart `Idle`; clicking the `Body` hit area plays `TapBody`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,15 +53,12 @@ enum FaceMotion {
     TapBody,
 }
 
-/// This model declares no expressions, so the vocabulary has no variants: no key
-/// of this type can exist, which is exactly the capability the model has.
+/// Hiyori declares no expressions, so this vocabulary has no variants: no key can
+/// exist, which is exactly the capability the model has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Vocabulary)]
 enum FaceExpression {}
 
-/// The hit areas it reports.
-///
-/// Hiyori declares `Body` only. An interface that also named `Head` would fail on
-/// it, which is the point: an interface is a promise about the model.
+/// The hit areas it reports. Naming one Hiyori lacks would fail the load.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Vocabulary)]
 enum FaceHitArea {
     Body,
@@ -175,8 +166,7 @@ impl App {
             Live2dEvent::ModelLoaded { info } => {
                 self.info = Some(Arc::clone(info));
 
-                // The interface promised an `Idle` group; playing it is this
-                // example's policy, not the component's.
+                // Playing `Idle` is this example's policy, not the component's.
                 self.model.play_motion(FaceMotion::Idle, 0);
                 self.status = format!(
                     "loaded: {} parameters, {} parts, {} motion groups, {} expressions, {} hit areas",
@@ -262,10 +252,8 @@ impl App {
         self.status = format!("arm visible: {}", self.arm_visible);
     }
 
-    /// The model's own ceiling for a parameter.
-    ///
-    /// Values are raw, so a host that wants "as open as this rig goes" has to ask
-    /// the model instead of writing `1.0` — `ModelInfo` is where the range lives.
+    /// The model's own ceiling for a parameter. Values are raw, so "as open as this
+    /// rig goes" is a question for `ModelInfo`, not `1.0`.
     fn maximum(&self, key: FaceParameter) -> f32 {
         let Some(info) = self.info.as_ref() else {
             return 1.0;

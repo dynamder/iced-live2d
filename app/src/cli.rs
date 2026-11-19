@@ -1,16 +1,12 @@
-//! Command line for the demo app.
-//!
-//! `--model <name>` resolves a model by directory or file stem inside the
-//! directories listed in [`MODEL_ROOTS`], so switching between the sample corpus
-//! and the rig under development does not need a long path.
+//! Command line for the demo app: `--model <name>` resolves a model by directory or
+//! file stem inside [`MODEL_ROOTS`], so switching models needs no long path.
 
 use std::path::{Path, PathBuf};
 
 use iced_live2d::LookAtMode;
 
-/// Directories searched by `--model <name>` and `--list`, in order.
-///
-/// Missing directories are skipped, so a checkout without the corpus still works.
+/// Directories searched by `--model <name>` and `--list`, in order. Missing ones
+/// are skipped, so a checkout without the corpus still works.
 const MODEL_ROOTS: &[&str] = &[
     "models",
     ".refs/models",

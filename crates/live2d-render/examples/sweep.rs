@@ -1,24 +1,13 @@
 //! Sweeps the look-at target at 60 fps and reports what moves, frame by frame.
 //!
-//! Written to catch discontinuities: the cursor crossing the model's centre line
-//! is `AngleX` crossing its default value (0), which is where a wrong
-//! normalisation branch, a dead zone or a stepped motion curve shows up as a
-//! visible jolt. See `docs/mocari-suspected-physics-chaining.md`.
+//! It hunts discontinuities: the cursor crossing the model's centre line is
+//! `AngleX` crossing its default, where a wrong normalisation branch or a dead zone
+//! shows up as a visible jolt. See `docs/mocari-suspected-physics-chaining.md`.
 //!
 //! cargo run -p live2d-render --example sweep -- <model.model3.json> [frames]
 //!
-//! Knobs, all optional (the full list is in `README.md`):
-//!
-//! - `SWEEP_DIRECT=<ParamId>` write that parameter directly instead of driving
-//!   the look-at target, in `-1.0..=1.0` of its declared range
-//! - `SWEEP_RANGE=<lo>,<hi>` input range, default `-1,1`. `lo == hi` holds the
-//!   input still, which separates "jumps with position" from "jumps with time".
-//! - `SWEEP_ALL=1` watch every parameter instead of the six printed by default
-//! - `SWEEP_JUMP=<f32>` report per-frame changes above this, default `0.02`
-//! - `SWEEP_SETTLE=<frames>` frames to let physics settle before recording,
-//!   default `60`; raise it when a swinging part drowns the jolt you are hunting
-//! - `SWEEP_MOTION=1` keep the idle motion playing, which is the app's normal
-//!   state; by default the sweep stops it to isolate physics
+//! Knobs (`SWEEP_DIRECT`, `SWEEP_RANGE`, `SWEEP_ALL`, `SWEEP_JUMP`,
+//! `SWEEP_SETTLE`, `SWEEP_MOTION`) are listed in `README.md`.
 
 use live2d_render::wgpu;
 use live2d_render::{AssetOptions, ModelOptions};

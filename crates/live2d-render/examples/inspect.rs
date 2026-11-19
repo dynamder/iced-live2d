@@ -1,8 +1,6 @@
-//! Reports what the *data* actually contains: physics settings, which
-//! parameters each motion drives, and what each expression touches.
-//!
-//! This exists to separate "mocari is broken" from "this model's authoring is
-//! sparse", which look identical on screen.
+//! Reports what the *data* contains — physics settings, the parameters each motion
+//! drives, what each expression touches — which separates "the renderer is broken"
+//! from "this model is authored sparsely", two things that look alike on screen.
 //!
 //! cargo run -p live2d-render --example inspect -- <path/to/model.model3.json>
 
@@ -215,12 +213,9 @@ fn axis(kind: PhysicsValueKind) -> &'static str {
     }
 }
 
-/// Reports how the artwork sits inside the canvas the scene frames it by.
-///
-/// A model that looks small or off-centre in a viewer is usually not a viewer
-/// bug: Cubism frames the model by the canvas box in the `.moc3` header, and an
-/// artist who leaves spare room in that box gets exactly that framing everywhere.
-/// The numbers here say how much spare room a model carries.
+/// How the artwork sits inside the canvas the view frames it by: a model that looks
+/// small or off-centre is usually an artist leaving spare room in the `.moc3`
+/// canvas box, not a viewer bug.
 fn report_framing(runtime: &live2d_render::mocari::ModelRuntime) {
     let canvas = runtime.canvas();
     let Some(frame) = ModelBounds::from_canvas(&canvas) else {
@@ -264,9 +259,8 @@ fn report_framing(runtime: &live2d_render::mocari::ModelRuntime) {
         100.0 * offset_y / frame.height(),
     );
 
-    // The scene fits the canvas, not the art, so a canvas with spare room shrinks
-    // the model on screen. This is the footprint a square window shows.
-    // The framing the widget defaults to: 0.925 of the widget, i.e. 1.85 of NDC.
+    // The widget's default fill is 0.925, i.e. 1.85 of NDC; the scene fits the
+    // canvas, not the art, so a canvas with spare room shrinks the model.
     let view_fill = 1.85;
     let scale = (view_fill / frame.width()).min(view_fill / frame.height());
     let screen_width = 100.0 * art.width() * scale * 0.5;

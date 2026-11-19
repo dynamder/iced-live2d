@@ -162,12 +162,12 @@ cargo run --release -p live2d-render --example offscreen -- \
 | `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`, `LIVE2D_RECLIP` | flags — active when the variable is present, whatever its value |
 | `LIVE2D_PROFILE` | flag, read by the app — asks the widget for the per-frame step count, step/deform/upload cost and frame-interval statistics |
 
-`sweep` and `jolt` take their own knobs, documented in each file's header:
+`sweep` and `jolt` take their own knobs:
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `SWEEP_DIRECT`, `SWEEP_RANGE`, `SWEEP_ALL`, `SWEEP_JUMP`, `SWEEP_SETTLE` | `sweep` | drive one parameter instead of the look-at target, input range, watch every parameter, jump threshold, settle frames |
-| `JOLT_MOTION`, `JOLT_RANGE`, `JOLT_SIZE`, `JOLT_SETTLE` | `jolt` | keep the idle motion, input range, capture size, settle frames |
+| `SWEEP_DIRECT`, `SWEEP_RANGE`, `SWEEP_ALL`, `SWEEP_JUMP`, `SWEEP_SETTLE`, `SWEEP_MOTION` | `sweep` | drive one parameter instead of the look-at target, input range, watch every parameter, jump threshold, settle frames, keep the motion playing |
+| `JOLT_RANGE`, `JOLT_SIZE`, `JOLT_SETTLE`, `JOLT_MOTION`, `LIVE2D_NO_PHYSICS` | `jolt` | input range, capture size, settle frames, keep the motion playing, disable physics |
 
 `LIVE2D_TRACK` picks how the cursor reaches the model, for the app and every
 example:

@@ -1,22 +1,14 @@
-//! Two models in one window, driven through the `Raw` interface.
+//! Two models in one window, driven through the `Raw` interface: any model works
+//! without declaring an interface first, and keys are minted from the `ModelInfo`
+//! a `ModelLoaded` event carries.
 //!
 //! ```text
 //! cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second.model3.json>]
 //! ```
 //!
-//! Keys: `R` play a random clip of the next motion group, `E` next expression,
-//! `P` pause/resume, `1`/`2` drop that model. Clicks and hovers are printed too.
-//!
-//! Every event the component sends is printed and echoed in the status line, so a
-//! broken sidecar, an out-of-range motion or a failed load is visible instead of
-//! silent. Dropping a model releases its GPU state at the end of the next rendered
-//! frame — watch VRAM before and after pressing `1`.
-//!
-//! `LIVE2D_PROFILE=1` prints the render layer's per-frame cost breakdown.
-//!
-//! [`Raw`] is the escape hatch: the model's own entries are the vocabulary, so
-//! this example works on any model without declaring an interface first. Keys are
-//! minted from the `ModelInfo` a `ModelLoaded` event carries.
+//! Keys: `R` random clip of the next group, `E` next expression, `P` pause/resume,
+//! `1`/`2` drop that model — its GPU state goes one frame later. `LIVE2D_PROFILE=1`
+//! prints the per-frame cost.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,8 +44,8 @@ fn main() -> iced::Result {
 
 struct Slot {
     model: Live2dModel<Raw>,
-    /// Filled in when the load event arrives; the key bindings need it to know
-    /// what the model offers.
+    /// Filled in by the load event: the key bindings need it to know what the model
+    /// offers.
     info: Option<Arc<ModelInfo>>,
     next_group: usize,
     next_expression: usize,
@@ -194,8 +186,7 @@ impl App {
                 clip
             ),
             Live2dEvent::MotionFinishedPlaying { group, clip } => {
-                // The first clip of a looping idle never ends; a one-shot does,
-                // and the host picks the next one.
+                // A looping idle never ends; a one-shot does, and the host picks.
                 if let Some(slot) = self.slots.get_mut(index).and_then(Option::as_mut) {
                     slot.model.play_random_motion(group.clone());
                 }

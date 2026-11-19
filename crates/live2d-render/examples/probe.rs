@@ -1,8 +1,6 @@
-//! Lists the drawable stack covering a single model-space point.
-//!
-//! Use it when a region of the render looks wrong: it shows exactly which
-//! drawables are painted there, in paint order, with blend mode, opacity,
-//! texture and mask set.
+//! Lists the drawable stack covering one model-space point, in paint order, with
+//! blend mode, opacity, texture and mask set — for when a region of the render
+//! looks wrong.
 //!
 //! cargo run -p live2d-render --example probe -- <model> <x> <y> [ParamId=value ...]
 

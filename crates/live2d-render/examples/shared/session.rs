@@ -1,12 +1,7 @@
 //! The smallest correct driver of the render layer: one asset, one instance, one
-//! view.
+//! view, stepped `advance` → `deform` → `upload`.
 //!
-//! The examples that only care about what comes out of the renderer share this, so
-//! that the boilerplate lives in one place and stays honest about the order:
-//! `advance` → `deform` → `upload`.
-//!
-//! The examples do not all use every hook, so the whole module is allowed to
-//! carry unused helpers.
+//! The examples do not all use every hook, so this module allows unused helpers.
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -71,10 +66,8 @@ impl Session {
         &mut self.model
     }
 
-    /// Which hit area a clip-space point (`-1.0..=1.0`, `+y` up) lands in.
-    ///
-    /// This goes through the view's inverse transform, so it answers "what would a
-    /// click here hit" for the framing this session renders with.
+    /// Which hit area a clip-space point (`-1.0..=1.0`, `+y` up) lands in, through
+    /// the view's inverse transform.
     pub fn hit_area_at(&self, point: [f32; 2]) -> Option<&str> {
         let model_point = self.view.to_model(point);
         let index = self.model.hit_area(model_point)?;

@@ -1,8 +1,6 @@
-//! Shows which drawables a single parameter flips, with their texture, blend
-//! mode and mask set.
-//!
-//! Written to answer "why does this outfit toggle draw a wireframe hand?" —
-//! the answer lives in the drawable's metadata, not in the renderer.
+//! Shows which drawables one parameter flips, with their texture, blend mode and
+//! mask set — the answer to "why does this outfit toggle draw a wireframe hand?"
+//! lives in the drawable's metadata, not in the renderer.
 //!
 //! cargo run -p live2d-render --example switch -- <model.model3.json> <ParamId> <value0> <value1>
 

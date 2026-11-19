@@ -1,21 +1,13 @@
 //! Sweeps the look-at target slowly and counts how many pixels change per frame.
 //!
-//! `sweep` watches parameters and can only see whole-parameter jumps. A part
-//! popping, a mask switching or a drawable appearing changes a small number of
-//! pixels without moving any centroid, so this measures what the eye actually
-//! sees: the size of the frame-to-frame difference. On a smooth sweep it should
-//! stay flat; a spike is a visible hitch.
+//! `sweep` only sees whole-parameter jumps; a part popping, a mask switching or a
+//! drawable appearing moves few pixels and no centroid. On a smooth sweep this
+//! should stay flat, and a spike is a visible hitch.
 //!
 //! cargo run -p live2d-render --example jolt -- <model.model3.json> [frames]
 //!
-//! Knobs, all optional (the full list is in `README.md`):
-//!
-//! - `JOLT_RANGE=<lo>,<hi>` input range, default `-0.15,0.15`; `lo == hi` holds
-//!   the input still, which separates "moves with position" from "moves with time"
-//! - `JOLT_MOTION=1` keep the idle motion playing, the app's normal state
-//! - `JOLT_SETTLE=<frames>` frames before recording, default `120`
-//! - `JOLT_SIZE=<px>` capture size, default `640` — match the app's physical size
-//! - `LIVE2D_NO_PHYSICS` — flag, disables physics evaluation
+//! Knobs (`JOLT_RANGE`, `JOLT_MOTION`, `JOLT_SETTLE`, `JOLT_SIZE`,
+//! `LIVE2D_NO_PHYSICS`) are listed in `README.md`.
 
 use live2d_render::wgpu;
 use live2d_render::{AssetOptions, ClipRect, ModelOptions};
