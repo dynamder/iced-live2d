@@ -281,14 +281,19 @@ Live2dPipeline
 
 ```rust
 pub enum Live2dEvent<I: Interface> {
-    ModelLoaded { info: Arc<ModelInfo> },
-    ModelFailedToLoad { failure: LoadFailure },
-    ModelReportedProblem { problem: Problem },
-    MotionStarted { group: I::Motion, clip: usize, duration: f32, looping: bool },
-    MotionFinishedPlaying { group: I::Motion, clip: usize },
-    Pointer(PointerEvent<I>),
+    ModelLoaded { model: Live2dId, info: Arc<ModelInfo> },
+    ModelFailedToLoad { model: Live2dId, failure: LoadFailure },
+    ModelReportedProblem { model: Live2dId, problem: Problem },
+    MotionStarted { model: Live2dId, group: I::Motion, clip: usize, duration: f32, looping: bool },
+    MotionFinishedPlaying { model: Live2dId, group: I::Motion, clip: usize },
+    Pointer(PointerEvent<I::HitArea>),
+    Gesture(Gesture<I::HitArea>),
 }
 ```
+
+- 每个事件带 `Live2dId`（`Live2dModel::id()`），`Live2dEvent::model()` 统一取出。
+  身份必须是数据：`button` 能靠「一个控件一个变体」表达身份，是因为一个按钮对应一个动作；
+  live2d 一个模型有多个命中区、一套通用交互，循环里建出来的控件没有自己的变体可占。
 
 - `ModelInfo` 是**非泛型**的 asset 视图（canvas、全部名字与范围、命中区列表），用于 UI 展示与
   `Raw` 枚举，**不签发键**。`ModelInfo::bounds` 同时是取景输入。
@@ -312,27 +317,52 @@ pub enum Live2dEvent<I: Interface> {
   与视图变换无关；且每个 primitive 的 mask pass 紧跟自己的 model pass。代价是同一模型 N 个
   视图时 mask pass 跑 N 次——正确，只是重复，暂不优化。
 
-### 7.2 指针
+### 7.2 交互
 
-语义化事件经同一个通道：
+**归属**：交互是**视图**的属性，播放是**模型**的属性。悬停、按下、拖拽、手势状态都在
+`ViewSlot` 里，`ModelSlot` 只管播放；两个控件画同一模型时各自收到自己空间里的输入，互不影响。
 
-```text
-PointerEvent<I>::
-    Pressed  { area: Option<I::HitArea>, at: [f32; 2] }
-    Released { area: Option<I::HitArea>, at: [f32; 2] }
-    Entered  { area: I::HitArea }
-    Exited   { area: I::HitArea }
-    Dragged  { delta: [f32; 2] }
-    Scrolled { lines: f32 }
-```
+**身份**：见 §6。宿主下标会在 `Vec::remove` 之后指错模型，闭包捕获又要求宿主记得；把身份放进
+事件里，`Message::Pet(Live2dId)` 一个变体就覆盖所有模型。
 
-- 命中在 `prepare` 里做完（`step` 之后，用当帧网格），事件晚一帧；悬停用 `draw` 拿到的光标，
-  不需要请求/应答。`mouse_interaction` 用上一帧的命中结果。
-- 拖拽只发 `Dragged`：拖窗口还是驱动物理由宿主决定；滚轮只发 `Scrolled`，缩放等取景变换那一层。
-- `pause` = 全冻结（不推进时间、不请求帧），因此**暂停期间没有指针事件**。这是该语义的直接后果；
-  要「停动作但仍可交互」用 `stop_motion()`。
+**坐标**：`Sample { pixels, clip, model }` 是同一点的三种写法 —— 像素给拖窗口，裁剪空间与缩放
+无关，模型空间给命中区与物理。位置在 `update` 里就捕获（不是 `prepare` 里再取光标），否则快速
+按下再移开会把命中算错。
 
----
+原始词汇（`PointerEvent`，永远可用）：
+
+| 事件 | 何时 | 载荷 |
+|---|---|---|
+| `Pressed` / `Released` | 任意按键或手指按下、抬起；抬起在控件外也报 | 指针身份、命中区、位置 |
+| `Cancelled` | 失焦、触摸被系统收走 | 指针身份 |
+| `Moved` | 指针在控件内移动（只有订阅了才上报） | 位置 |
+| `Entered` / `Exited` | 进入 / 离开命中区 | 区域、位置 |
+| `Dragged` | 按下后移动，逐帧 | 起点、当前位置 |
+| `Scrolled` | 滚轮 | 行数、锚点 |
+
+分类词汇（`Gesture`，`.gestures(..)` 打开）：`Clicked` / `DoubleClicked` / `LongPressed` /
+`DragStarted` / `Dragged` / `DragEnded`，载荷是 `Tap`（带 `held`）或 `Drag`（带 `velocity`）。
+命中区在一次拖拽里固定为**按下时**那个：拖出头部不会变成「拖空气」。
+
+分类器是**纯状态机**（`gesture.rs`）：`push(event, now)`、`tick(now)`、`deadline()`。它没有自己
+的定时器，只告诉控件「下一个需要的时刻」，控件把它塞进 `request_redraw_at` —— 静止时不空转，
+长按与双击的窗口精确到点，状态机可以脱离 iced 单测。
+
+**钩子**：一个 `on_event` 加十二个按类钩子（`on_press` / `on_release` / `on_click` /
+`on_double_click` / `on_long_press` / `on_drag_start` / `on_drag` / `on_drag_end` / `on_scroll` /
+`on_enter` / `on_exit` / `on_move`），每个收 `Fn(载荷) -> Message`；另有两个非消息钩子：
+`cursor(Hover -> mouse::Interaction)` 是纯函数（不产生消息，所以不会自激），`capture(bool)` 在
+按下期间捕获事件，免得父级 `scrollable` 一起动。
+
+- 具体钩子优先于 `on_event`；没绑具体钩子的事件回落到 `on_event`；两者都没有就丢弃。
+  于是「只绑 `on_click`」的宿主一次点击恰好一条消息。
+- `on_move` 是唯一连续输入，不绑就不报。
+- 手势开启时 `on_drag` 收到分类后的 `Drag`（带速度），未开启时收到原始拖拽；两种情况都每帧一次，
+  不会重复。
+- 按下必有收尾：`Released` 或 `Cancelled`。
+- `Action` 一次只装一条消息，所以是「一帧排空一条」，顺序与发生顺序一致。
+
+**暂停**：`pause` 冻结的是**姿势**，不是输入。输入仍会请求一帧用于命中测试，那一帧不推进时间。
 
 ## 8. 与审计缺陷的对应
 
@@ -340,9 +370,9 @@ PointerEvent<I>::
 |---|---|
 | `on_event` 不设时事件通道无界增长 | `Primitive.events: Option<Sender>`，没有监听者就没有通道 |
 | 动作索引越界（计数跨组、点播单组） | 索引空间统一为 `(group, clip)`，组来自接口 |
-| 一模型挂多控件事件只到第一个 | 模型级 listener 广播 + 首注册补发加载结果 |
+| 一模型挂多控件事件只到第一个 | 加载/动作事件模型级广播 + 首注册补发；指针事件按视图路由，只发给产生它的控件 |
 | `look_at` 文档与实现矛盾 | 文档写死「视图提供的源优先，宿主值只在光标离开时生效」；标量策略留在模型 |
-| `pause` 冻结 look-at | 保持「pause = 全部」，写进文档；交互式停止用 `stop_motion` |
+| `pause` 冻结 look-at | `pause` 冻结姿势与时间，不再冻结输入（§7.2）；交互式停止动作仍用 `stop_motion` |
 | 自动接续与宿主点播差一帧 | 待机完全归宿主：`MotionStarted`/`MotionFinishedPlaying` 报 `(group, clip)`，下一个播什么由宿主决定 |
 | 参数/部件无写入路径 | 覆盖表 + 单点写入，raw 单位 |
 | `set_look_at_mode` 清空宿主 override | look-at 改为每步重算，不再占用 override 表 |
@@ -353,8 +383,9 @@ PointerEvent<I>::
 
 | 项 | 状态 |
 |---|---|
-| 命中范围：只认 `model3.json` 的 `HitAreas`，还是加 drawable 轮廓 | 未定；先按前者 + 未命中回传坐标 |
-| look-at 阻尼（官方 `CubismLook` 有 Damping） | 未定；`LookAtSource` 的文档矛盾无论如何都要修 |
+| 命中范围：只认 `model3.json` 的 `HitAreas`，还是加 drawable 轮廓 | 已定：只认前者，命中区之间重叠时取**声明顺序第一个**（与 Cubism SDK 一致） |
+| look-at 阻尼（官方 `CubismLook` 有 Damping） | 未定；`LookAtSource` 仍是 `fn`，宿主可自行平滑后写 [`Live2dModel::look_at`] |
+| 键盘 / 焦点 / 无障碍、多点捏合、笔压、视图变换（平移缩放）、惯性甩动 | 推迟，见 §7.2 末尾 |
 | 多视图取景 | **已排除**：mask 变换与视图无关（§7.1），不需要 mocari 补丁；像素验证随步骤 5 做 |
 | 动作优先级 / 队列 / crossfade | 推迟（mocari 现在还丢弃动作级 fade） |
 | 呼吸 / 眨眼 / 口型同步 | 推迟（mocari 没有，需要自己写） |
@@ -376,6 +407,7 @@ PointerEvent<I>::
 | 6. 交互层（指针、命中、光标形状） | ✅ | 滚轮/点击经 `Live2dEvent::Pointer` 到达宿主（`examples/typed` 打印） |
 | 7. `macros` feature 与 `#[derive(Vocabulary)]` | ✅ | 独立 crate `crates/iced-live2d-macros`；默认关闭 |
 | 8. §9 推迟的子系统 | ⏸ | 未开始（见 §9） |
+| 9. 交互层 2.0：身份、按视图状态、原始词汇、手势、钩子 | ✅ | `examples/interact`：点击/双击/长按/拖拽/滚轮/悬停各一条消息；两个控件同模型互不干扰（光标只在所在窗格产生 `Moved`）；拖出窗格松手仍收到 `Released`；失焦收到 `Cancelled`；手势状态机 9 个单测 |
 
 像素回归的命令与基线：
 

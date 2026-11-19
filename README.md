@@ -211,11 +211,13 @@ The component has its own examples, which need a window:
 
 | Example | Answers |
 |---|---|
-| `minimal` | two models in one window through the `Raw` interface; keys `R`/`E`/`P`/`1`/`2`, every component event printed |
+| `minimal` | two models in one window through the `Raw` interface, keyed by their `Live2dId`; keys `R`/`E`/`P`/`1`/`2`, every component event printed |
 | `typed` | a host-declared interface: typed keys for parameters, parts, motions and hit areas, and the load failure a model that lacks them produces |
+| `interact` | every input mapped to a message: click, double click, long press, drag, drag end, scroll (zooms the pane), hover, and gaze driven by the pointer |
 
 `cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second>]`
 `cargo run -p iced-live2d --features macros --example typed -- <model.model3.json>`
+`cargo run -p iced-live2d --example interact -- <model.model3.json> [<second>]`
 
 `sweep` is the fastest way to check a tracking bug: it prints the input parameter
 and the physics outputs per frame, and flags any frame-to-frame jump. Prefix it
@@ -268,12 +270,15 @@ crates/iced-live2d/            the reusable component: iced + live2d-render
   src/interface.rs             Interface, Vocabulary, VocabularySpec, KeyId, Mapping
   src/raw.rs                   Raw: the model's own entries as an interface
   src/model.rs                 Live2dAsset + Live2dModel<I>: budgets, keys, commands
-  src/widget.rs                Live2d widget + Live2dState (channel, pacing, pointer)
+  src/widget.rs                Live2d widget + Live2dState (channel, pacing, hooks)
   src/pipeline.rs              the three tables (asset/model/view) + the primitive
-  src/event.rs                 Live2dEvent<I>, PointerEvent<I>, Problem, LoadFailure
+  src/interaction.rs           PointerEvent, Pointing/Tap/Drag/Hovering, Sample, Gesture
+  src/gesture.rs               the classifier: clicks, holds, drags, double clicks
+  src/event.rs                 Live2dEvent<I>, Problem, LoadFailure
   src/look_at.rs               LookAtSource + look_at::cursor
-  examples/minimal.rs          two models through Raw, every event printed
+  examples/minimal.rs          two models through Raw, keyed by Live2dId
   examples/typed.rs            a host-declared interface (needs `macros`)
+  examples/interact.rs         every input mapped to a message
 crates/iced-live2d-macros/     the optional `Vocabulary` derive
 app/                           the demo app, now a thin host of the component
   src/main.rs                  CLI dispatch, key bindings, event printing
@@ -429,21 +434,84 @@ a directory listing and then chosen from it at random.
   `MotionFinishedPlaying` fires for clips that end, and playback then stops until
   the host asks again. A looping clip never finishes, which is why an idle clip
   that loops needs no scheduler at all.
-- **Pointer events are model-level and in model space**: `Pressed`/`Released` carry
-  the hit area (if any) and the point, `Entered`/`Exited` the area, `Dragged` the
-  delta in model plane units, `Scrolled` the lines. The widget turns them into
-  `mouse::Interaction::{Pointer, Grabbing}` for the cursor shape.
-- **`pause` is a total freeze**: no time, no frames, and therefore no pointer
-  events either. To stop a motion but keep interacting, use `stop_motion()`.
+- **Pointer events belong to the widget, not the model.** Two widgets drawing one
+  model keep separate hover, presses and drags: each reports input in its own space.
+  Every event names its model and carries the position in three forms — widget
+  pixels, clip space and model space (see `Sample`).
+- **`pause` freezes the pose, not the input.** Nothing steps and the model shows its
+  last frame, but the frame that input needs still happens, so hovering, clicking and
+  scrolling keep working.
 - **Only the wgpu renderer.** The widget delegates to iced's `shader` widget,
   which the tiny-skia backend does not have.
 - **Dropping an asset or model frees its GPU state** at the end of the next
   rendered frame, not immediately.
 
 `cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second>]`
-shows two models through `Raw`, and
+shows two models through `Raw`,
 `cargo run -p iced-live2d --features macros --example typed -- <model>` shows a
-declared interface — including what happens when the model does not declare it.
+declared interface — including what happens when the model does not declare it — and
+`cargo run -p iced-live2d --example interact -- <model> [<second>]` wires every input
+to a message and prints what arrives.
+
+### Interaction
+
+Input reaches the host as messages the host defines. Every event names the
+`Live2dId` of the model it happened on — a live2d widget is not a button, so its
+identity cannot live in the message variant. One model has several hit areas and the
+same vocabulary of clicks and drags serves every model, so the message is
+`(Live2dId, what happened)` and the variant says only what happened.
+
+Bind what you need; each method takes a closure that maps the event to your own
+message:
+
+| Method | Reported | Payload |
+|---|---|---|
+| `on_event` | everything the component says | `Live2dEvent<I>` |
+| `on_press` / `on_release` | a button or finger went down / came up | `Pointing<I::HitArea>` |
+| `on_click` / `on_double_click` | a press that came back without moving | `Tap<I::HitArea>` |
+| `on_long_press` | held still past the threshold, while still down | `Tap<I::HitArea>` |
+| `on_drag_start` / `on_drag` / `on_drag_end` | a press that travelled | `Drag<I::HitArea>` |
+| `on_scroll` | the wheel over the widget | `Scrolling` |
+| `on_enter` / `on_exit` | the pointer reached / left a hit area | `Hovering<I::HitArea>` |
+| `on_move` | the pointer moved over the widget | `Moving` |
+
+```rust
+live2d(&self.model)
+    .gestures(Gestures::default())                 // classify clicks, drags, holds
+    .cursor(|hover| match hover {                  // cursor shape, no message needed
+        Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
+        Hover { area: Some(_), .. } => mouse::Interaction::Pointer,
+        _ => mouse::Interaction::Idle,
+    })
+    .on_click(|tap| Message::Pet { model: tap.model, area: tap.area })
+    .on_drag(|drag| Message::Turned { model: drag.model, by: drag.delta() })
+    .on_scroll(|scroll| Message::Zoom { model: scroll.model, by: scroll.lines[1] })
+    .on_event(Message::Live2d)                     // everything else, load failures included
+```
+
+Decisions worth knowing:
+
+- **A specific hook wins over `on_event`** for the events it covers, and a more
+  specific hook that is *not* bound falls back to `on_event`. With neither, the event
+  is dropped — that is why binding only `on_click` costs exactly one message per
+  click, while binding `on_event` as well costs one per press, release and click.
+- **`on_move` is the only continuous input.** Nothing is reported per frame unless it
+  is bound.
+- **With `gestures`, `on_drag` reports the classified drag**, which carries velocity;
+  without it, the raw drag arrives, which does not. Either way it fires once per
+  frame, never twice.
+- **The hit area of a drag** is the one under the press, fixed for the whole drag —
+  dragging off a head does not turn the drag into a drag of nothing.
+- **A press is a promise.** Losing focus, or a touch the platform takes away, reports
+  `Cancelled`, so a host's own state machine always has a way out.
+- **`capture(true)`** stops a parent `scrollable` or draggable surface from also
+  reacting while a press is held.
+- `Sample` carries the same point as widget pixels, clip space and model space.
+  Pixels are what window dragging wants, clip space is zoom-independent, model space
+  is what hit areas and physics speak.
+
+Not there yet, deliberately: keyboard and focus, pinch, pen pressure, view transforms
+(pan/zoom of the framing itself), inertia and physics drags, and look-at damping.
 
 ## The four patches
 
