@@ -58,7 +58,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
         return Err(format!("{} is not a file", model.display()));
     }
 
-    Ok(Invocation::Run(Args { model, look_at_mode }))
+    Ok(Invocation::Run(Args {
+        model,
+        look_at_mode,
+    }))
 }
 
 #[cfg(test)]
