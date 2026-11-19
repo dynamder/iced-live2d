@@ -1,4 +1,10 @@
 //! What the component tells the host.
+//!
+//! Two kinds of thing arrive here, and they are different types on purpose: what the
+//! *model* says (loaded, failed, problems, motions) and what the *pointer* did. The
+//! second one depends on the widget's vocabulary — raw facts or classified gestures —
+//! so a widget reports `Live2dEvent<I, PointerEvent<I::HitArea>>` or
+//! `Live2dEvent<I, Gesture<I::HitArea>>` and never both.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -14,7 +20,7 @@ use crate::model::Live2dId;
 ///
 /// Events are **per model**, not per widget: two widgets drawing one model both
 /// receive all of them, and the second still receives the load result.
-pub enum Live2dEvent<I: Interface> {
+pub enum Live2dEvent<I: Interface, In> {
     /// The model is loaded, its interface validated, and drawn from this frame on.
     ///
     /// `info` is the asset's own description, and the identity raw keys are minted
@@ -65,31 +71,52 @@ pub enum Live2dEvent<I: Interface> {
         /// Index of the clip inside that group.
         clip: usize,
     },
-    /// The pointer did something on the widget.
-    Pointer(PointerEvent<I::HitArea>),
-    /// A sequence of pointer events was classified into one gesture.
-    ///
-    /// Only reported when the widget was given [`Gestures`](crate::Gestures). The raw events that
-    /// produced it keep arriving too, so a host may use either or both.
-    Gesture(Gesture<I::HitArea>),
+    /// The pointer did something, in the widget's vocabulary.
+    Input(In),
 }
 
-impl<I: Interface> Live2dEvent<I> {
+/// Everything one raw widget reports: the model's own events and raw pointer events.
+pub type RawEvent<I> = Live2dEvent<I, PointerEvent<<I as Interface>::HitArea>>;
+
+/// Everything one classified widget reports: the model's own events and gestures.
+pub type GestureEvent<I> = Live2dEvent<I, Gesture<<I as Interface>::HitArea>>;
+
+impl<I: Interface, In> Live2dEvent<I, In> {
     /// Which model this is about.
-    pub fn model(&self) -> Live2dId {
+    pub fn model(&self) -> Live2dId
+    where
+        In: Associated,
+    {
         match self {
             Live2dEvent::ModelLoaded { model, .. }
             | Live2dEvent::ModelFailedToLoad { model, .. }
             | Live2dEvent::ModelReportedProblem { model, .. }
             | Live2dEvent::MotionStarted { model, .. }
             | Live2dEvent::MotionFinishedPlaying { model, .. } => *model,
-            Live2dEvent::Pointer(event) => event.model(),
-            Live2dEvent::Gesture(gesture) => gesture.model(),
+            Live2dEvent::Input(input) => input.model(),
         }
     }
 }
 
-impl<I: Interface> Clone for Live2dEvent<I> {
+/// Anything an input payload can be asked of.
+pub trait Associated {
+    /// Which model this happened on.
+    fn model(&self) -> Live2dId;
+}
+
+impl<A> Associated for PointerEvent<A> {
+    fn model(&self) -> Live2dId {
+        PointerEvent::model(self)
+    }
+}
+
+impl<A> Associated for Gesture<A> {
+    fn model(&self) -> Live2dId {
+        Gesture::model(self)
+    }
+}
+
+impl<I: Interface, In: Clone> Clone for Live2dEvent<I, In> {
     fn clone(&self) -> Self {
         match self {
             Live2dEvent::ModelLoaded { model, info } => Live2dEvent::ModelLoaded {
@@ -126,13 +153,12 @@ impl<I: Interface> Clone for Live2dEvent<I> {
                     clip: *clip,
                 }
             }
-            Live2dEvent::Pointer(event) => Live2dEvent::Pointer(event.clone()),
-            Live2dEvent::Gesture(gesture) => Live2dEvent::Gesture(gesture.clone()),
+            Live2dEvent::Input(input) => Live2dEvent::Input(input.clone()),
         }
     }
 }
 
-impl<I: Interface> fmt::Debug for Live2dEvent<I> {
+impl<I: Interface, In: fmt::Debug> fmt::Debug for Live2dEvent<I, In> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Live2dEvent::ModelLoaded { model, info } => formatter
@@ -170,10 +196,7 @@ impl<I: Interface> fmt::Debug for Live2dEvent<I> {
                 .field("group", group)
                 .field("clip", clip)
                 .finish(),
-            Live2dEvent::Pointer(event) => formatter.debug_tuple("Pointer").field(event).finish(),
-            Live2dEvent::Gesture(gesture) => {
-                formatter.debug_tuple("Gesture").field(gesture).finish()
-            }
+            Live2dEvent::Input(input) => formatter.debug_tuple("Input").field(input).finish(),
         }
     }
 }
@@ -292,7 +315,7 @@ mod tests {
         let model = Live2dId::unique();
         let asset = live2d_render::AssetId::unique();
 
-        let pointer = Live2dEvent::<Raw>::Pointer(PointerEvent::Moved(Moving {
+        let pointer = RawEvent::<Raw>::Input(PointerEvent::Moved(Moving {
             model,
             at: Sample {
                 pixels: iced::Point::ORIGIN,
@@ -301,7 +324,7 @@ mod tests {
             },
             when: Instant::now(),
         }));
-        let started = Live2dEvent::<Raw>::MotionStarted {
+        let started = RawEvent::<Raw>::MotionStarted {
             model,
             group: motion(asset),
             clip: 0,

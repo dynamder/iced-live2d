@@ -18,8 +18,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Gesture, Gestures, Hover, Interface, Live2dAsset, Live2dEvent, Live2dModel,
-    ModelInfo, ModelOptions, Vocabulary, live2d, look_at,
+    AssetOptions, Gesture, GestureEvent, Gestures, Hover, Interface, Live2dAsset, Live2dEvent,
+    Live2dModel, ModelInfo, ModelOptions, Vocabulary, live2d, look_at,
 };
 
 /// The parameters this interface drives.
@@ -103,7 +103,7 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(Live2dEvent<Face>),
+    Live2d(GestureEvent<Face>),
     Key(keyboard::Event),
 }
 
@@ -146,8 +146,8 @@ impl App {
 
     fn view(&self) -> impl iced::Widget<Message> {
         let pane: Element<'_, Message> = live2d(&self.model)
-            .on_event(Message::Live2d)
             .gestures(Gestures::default())
+            .on_event(Message::Live2d)
             .look_at(look_at::cursor)
             .cursor(|hover| match hover {
                 Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
@@ -166,7 +166,7 @@ impl App {
         keyboard::listen().map(Message::Key)
     }
 
-    fn on_event(&mut self, event: Live2dEvent<Face>) {
+    fn on_event(&mut self, event: GestureEvent<Face>) {
         match &event {
             Live2dEvent::ModelLoaded { info, .. } => {
                 self.info = Some(Arc::clone(info));
@@ -206,7 +206,7 @@ impl App {
 
                 self.status = format!("finished {group:?} #{clip}");
             }
-            Live2dEvent::Gesture(Gesture::Clicked(tap)) => {
+            Live2dEvent::Input(Gesture::Clicked(tap)) => {
                 if tap.area == Some(FaceHitArea::Body) {
                     self.model.play_motion(FaceMotion::TapBody, 0);
                     self.status = "clicked Body: TapBody".to_owned();
@@ -214,11 +214,8 @@ impl App {
                     self.status = format!("clicked {:?}", tap.area);
                 }
             }
-            Live2dEvent::Gesture(gesture) => {
-                self.status = format!("{gesture:?}");
-            }
-            Live2dEvent::Pointer(event) => {
-                self.status = format!("{event:?}");
+            Live2dEvent::Input(input) => {
+                self.status = format!("{input:?}");
             }
         }
 

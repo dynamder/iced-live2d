@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use iced::{Fill, Subscription, Task, Widget, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Gestures, Hover, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions,
-    Raw, live2d, look_at, raw,
+    AssetOptions, GestureEvent, Gestures, Hover, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo,
+    ModelOptions, Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -79,7 +79,7 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(Live2dEvent<Raw>),
+    Live2d(GestureEvent<Raw>),
     NextMotion,
     NextExpression,
     ClearExpressions,
@@ -124,10 +124,9 @@ impl App {
 
     fn view(&self) -> impl Widget<Message> {
         live2d(&self.model)
-            .on_event(Message::Live2d)
-            // Classification is opt-in: without this the log shows presses and
-            // releases only, because those are the facts and a click is a judgement.
+            // The vocabulary first: it decides the event type the closure below sees.
             .gestures(Gestures::default())
+            .on_event(Message::Live2d)
             .look_at(look_at::cursor)
             .cursor(|hover| match hover {
                 Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
@@ -157,7 +156,7 @@ impl App {
         })
     }
 
-    fn report(&mut self, event: Live2dEvent<Raw>) {
+    fn report(&mut self, event: GestureEvent<Raw>) {
         match &event {
             Live2dEvent::ModelLoaded { info, .. } => {
                 self.info = Some(Arc::clone(info));
@@ -203,8 +202,7 @@ impl App {
                     self.model.play_motion(group.clone(), (*clip + 1) % clips);
                 }
             }
-            Live2dEvent::Pointer(event) => println!("live2d: pointer: {event:?}"),
-            Live2dEvent::Gesture(gesture) => println!("live2d: gesture: {gesture:?}"),
+            Live2dEvent::Input(input) => println!("live2d: gesture: {input:?}"),
         }
     }
 

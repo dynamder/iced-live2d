@@ -48,7 +48,10 @@ pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Messa
 /// Which input vocabulary a widget reports. Chosen once, at construction: the two
 /// vocabularies are mutually exclusive, so one physical action can only ever be
 /// handled once.
-pub trait Mode: sealed::Mode + 'static {}
+pub trait Mode: sealed::Mode + 'static {
+    /// The input vocabulary this mode reports.
+    type Input<A: Clone + std::fmt::Debug + 'static>: Clone + std::fmt::Debug + 'static;
+}
 
 /// Nothing chosen yet: the widget reports raw pointer events, and the raw hooks move
 /// it into [`RawMode`].
@@ -70,9 +73,17 @@ mod sealed {
     impl Mode for super::GestureMode {}
 }
 
-impl Mode for Unset {}
-impl Mode for RawMode {}
-impl Mode for GestureMode {}
+impl Mode for Unset {
+    type Input<A: Clone + std::fmt::Debug + 'static> = PointerEvent<A>;
+}
+
+impl Mode for RawMode {
+    type Input<A: Clone + std::fmt::Debug + 'static> = PointerEvent<A>;
+}
+
+impl Mode for GestureMode {
+    type Input<A: Clone + std::fmt::Debug + 'static> = Gesture<A>;
+}
 
 /// A Live2D model drawn as a widget. wgpu only; the tiny-skia backend cannot draw
 /// iced's `shader` widget. Box it with `column![…]` or `container`.
@@ -85,7 +96,7 @@ impl Mode for GestureMode {}
 /// component reports what happened and the host decides what it means.
 pub struct Live2d<'a, Message, I: Interface, M: Mode = Unset> {
     model: &'a Live2dModel<I>,
-    handlers: Handlers<'a, Message, I>,
+    handlers: Handlers<'a, Message, I, M>,
     gestures: Option<Gestures>,
     mode: PhantomData<M>,
     cursor: Option<Cursor<'a, I::HitArea>>,
@@ -100,13 +111,17 @@ pub struct Live2d<'a, Message, I: Interface, M: Mode = Unset> {
 /// One mapping from an input to the host's own message.
 type Handler<'a, Event, Message> = Rc<dyn Fn(Event) -> Message + 'a>;
 
+/// The catch-all [`Live2d::on_event`] closure, whose event type follows the mode.
+type AnyHandler<'a, Message, I, M> =
+    Handler<'a, Live2dEvent<I, <M as Mode>::Input<<I as Interface>::HitArea>>, Message>;
+
 /// The cursor hook: a pure function of hover, so it costs no message.
 type Cursor<'a, A> = Rc<dyn Fn(Hover<'_, A>) -> mouse::Interaction + 'a>;
 
 /// One closure per input the host asked for. A missing closure means "not
 /// interested", including for the frame request that input needs.
-struct Handlers<'a, Message, I: Interface> {
-    any: Option<Handler<'a, Live2dEvent<I>, Message>>,
+struct Handlers<'a, Message, I: Interface, M: Mode> {
+    any: Option<AnyHandler<'a, Message, I, M>>,
     press: Option<Handler<'a, Pointing<I::HitArea>, Message>>,
     release: Option<Handler<'a, Pointing<I::HitArea>, Message>>,
     click: Option<Handler<'a, Tap<I::HitArea>, Message>>,
@@ -121,7 +136,7 @@ struct Handlers<'a, Message, I: Interface> {
     moved: Option<Handler<'a, Moving, Message>>,
 }
 
-impl<Message, I: Interface> Default for Handlers<'_, Message, I> {
+impl<Message, I: Interface, M: Mode> Default for Handlers<'_, Message, I, M> {
     fn default() -> Self {
         Self {
             any: None,
@@ -141,7 +156,7 @@ impl<Message, I: Interface> Default for Handlers<'_, Message, I> {
     }
 }
 
-impl<Message, I: Interface> Clone for Handlers<'_, Message, I> {
+impl<Message, I: Interface, M: Mode> Clone for Handlers<'_, Message, I, M> {
     fn clone(&self) -> Self {
         Self {
             any: self.any.clone(),
@@ -161,7 +176,7 @@ impl<Message, I: Interface> Clone for Handlers<'_, Message, I> {
     }
 }
 
-impl<Message, I: Interface> Handlers<'_, Message, I> {
+impl<Message, I: Interface, M: Mode> Handlers<'_, Message, I, M> {
     /// Whether any input at all is wanted, which decides whether the widget asks
     /// the render layer for events.
     fn is_empty(&self) -> bool {
@@ -203,7 +218,7 @@ impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
     fn cast<M2: Mode>(self) -> Live2d<'a, Message, I, M2> {
         Live2d {
             model: self.model,
-            handlers: self.handlers,
+            handlers: Handlers::default(),
             gestures: self.gestures,
             mode: PhantomData,
             cursor: self.cursor,
@@ -222,7 +237,10 @@ impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
     /// frame, one frame late; a burst is queued, not lost.
     ///
     /// A more specific `on_*` handler wins over this one for the events it covers.
-    pub fn on_event(mut self, on_event: impl Fn(Live2dEvent<I>) -> Message + 'a) -> Self {
+    pub fn on_event(
+        mut self,
+        on_event: impl Fn(Live2dEvent<I, M::Input<I::HitArea>>) -> Message + 'a,
+    ) -> Self {
         self.handlers.any = Some(Rc::new(on_event));
         self
     }
@@ -321,13 +339,6 @@ impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
         !self.handlers.is_empty() || self.gestures.is_some() || self.cursor.is_some()
     }
 
-    /// The iced widget that owns layout, the tree slot and the render pass.
-    fn delegate(&self) -> shader::Shader<Message, Self> {
-        shader::Shader::new(self.clone())
-            .width(self.width)
-            .height(self.height)
-    }
-
     /// Queues the input a pointer event carries.
     ///
     /// Positions are captured here, not in `prepare`: iced delivers the event now
@@ -339,7 +350,7 @@ impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
     /// is paused: a frozen model still has a pose to hit-test.
     fn queue_input(
         &self,
-        state: &mut Live2dState<I>,
+        state: &mut Live2dState<I, M>,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -416,139 +427,16 @@ impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
 
         true
     }
+}
 
-    /// Moves every queued render-layer event into the widget's queue, keeping the
-    /// hover state the cursor hook reads and classifying pointer input on the way.
-    ///
-    /// A widget reports one vocabulary and only one: with gestures enabled the raw
-    /// pointer facts are consumed here and never reach the host, so a press that ends
-    /// as a click cannot also be handled as a press.
-    fn drain(&self, state: &mut Live2dState<I>) {
-        loop {
-            let Some(raw) = state.events.borrow_mut().try_recv() else {
-                return;
-            };
-
-            let event = self.convert(raw);
-
-            let Live2dEvent::Pointer(pointer) = &event else {
-                state.pending.push_back(event);
-
-                continue;
-            };
-
-            match pointer {
-                PointerEvent::Entered(hovered) => state.hover = Some(hovered.area.clone()),
-                PointerEvent::Exited(_) => state.hover = None,
-                _ => {}
-            }
-
-            if self.gestures.is_some() {
-                state.recognizer.push(pointer, &mut state.produced);
-
-                if let Some(gesture) = classify(pointer) {
-                    state.pending.push_back(Live2dEvent::Gesture(gesture));
-                }
-            } else {
-                state.pending.push_back(event);
-            }
-
-            for gesture in state.produced.drain(..) {
-                state.pending.push_back(Live2dEvent::Gesture(gesture));
-            }
-        }
-    }
-
-    /// Takes the next queued event, if the host listens for it.
-    fn next_message(&self, state: &mut Live2dState<I>) -> Option<Message> {
-        self.drain(state);
-
-        self.dispatch(state.pending.pop_front()?)
-    }
-
-    /// Hands one event to the closure that asked for it, preferring the specific
-    /// one over [`Live2d::on_event`].
-    fn dispatch(&self, event: Live2dEvent<I>) -> Option<Message> {
-        let handlers = &self.handlers;
-
-        let specific = match &event {
-            Live2dEvent::Pointer(PointerEvent::Pressed(pointing)) => handlers
-                .press
-                .as_ref()
-                .map(|handle| handle(pointing.clone())),
-            Live2dEvent::Pointer(PointerEvent::Released(pointing)) => handlers
-                .release
-                .as_ref()
-                .map(|handle| handle(pointing.clone())),
-            Live2dEvent::Pointer(PointerEvent::Entered(hovered)) => handlers
-                .enter
-                .as_ref()
-                .map(|handle| handle(hovered.clone())),
-            Live2dEvent::Pointer(PointerEvent::Exited(hovered)) => {
-                handlers.exit.as_ref().map(|handle| handle(hovered.clone()))
-            }
-            Live2dEvent::Pointer(PointerEvent::Scrolled(scrolled)) => {
-                handlers.scroll.as_ref().map(|handle| handle(*scrolled))
-            }
-            Live2dEvent::Pointer(PointerEvent::Dragged(dragged)) => {
-                if self.gestures.is_some() {
-                    None
-                } else {
-                    handlers.drag.as_ref().map(|handle| {
-                        handle(Drag {
-                            model: dragged.model,
-                            pointer: dragged.pointer,
-                            area: dragged.area.clone(),
-                            origin: dragged.origin,
-                            at: dragged.at,
-                            velocity: [0.0; 2],
-                        })
-                    })
-                }
-            }
-            Live2dEvent::Pointer(PointerEvent::Moved(moved)) => {
-                return handlers.moved.as_ref().map(|handle| handle(*moved));
-            }
-            Live2dEvent::Gesture(Gesture::Clicked(tap)) => {
-                handlers.click.as_ref().map(|handle| handle(tap.clone()))
-            }
-            Live2dEvent::Gesture(Gesture::DoubleClicked(tap)) => handlers
-                .double_click
-                .as_ref()
-                .map(|handle| handle(tap.clone())),
-            Live2dEvent::Gesture(Gesture::LongPressed(tap)) => handlers
-                .long_press
-                .as_ref()
-                .map(|handle| handle(tap.clone())),
-            Live2dEvent::Gesture(Gesture::DragStarted(drag)) => handlers
-                .drag_start
-                .as_ref()
-                .map(|handle| handle(drag.clone())),
-            Live2dEvent::Gesture(Gesture::Dragged(drag)) => {
-                handlers.drag.as_ref().map(|handle| handle(drag.clone()))
-            }
-            Live2dEvent::Gesture(Gesture::DragEnded(drag)) => handlers
-                .drag_end
-                .as_ref()
-                .map(|handle| handle(drag.clone())),
-            _ => None,
-        };
-
-        specific.or_else(|| handlers.any.as_ref().map(|handle| handle(event)))
-    }
-
-    /// Turns a render-layer event into the host's, stamping the model identity and
-    /// reporting a hand-written vocabulary that does not cover what was seen.
-    fn convert(&self, event: PipelineEvent) -> Live2dEvent<I> {
+impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
+    /// Turns a render-layer event into the host's, stamping the model identity.
+    fn translate(
+        &self,
+        event: PipelineEvent,
+    ) -> Result<Live2dEvent<I, M::Input<I::HitArea>>, Problem> {
         let model = self.model.id();
 
-        match Self::translate(model, event) {
-            Ok(event) => event,
-            Err(problem) => Live2dEvent::ModelReportedProblem { model, problem },
-        }
-    }
-
-    fn translate(model: crate::Live2dId, event: PipelineEvent) -> Result<Live2dEvent<I>, Problem> {
         Ok(match event {
             PipelineEvent::Loaded { info } => Live2dEvent::ModelLoaded { model, info },
             PipelineEvent::LoadFailed { failure } => {
@@ -572,83 +460,15 @@ impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
                 group: key::<I::Motion>(group, "motion")?,
                 clip,
             },
-            PipelineEvent::Pointer(kind) => Live2dEvent::Pointer(match kind {
-                PointerEventKind::Pressed {
-                    pointer,
-                    area,
-                    at,
-                    when,
-                } => PointerEvent::Pressed(Pointing {
-                    model,
-                    pointer,
-                    area: optional_key::<I::HitArea>(area, "hit area")?,
-                    at,
-                    when,
-                }),
-                PointerEventKind::Released {
-                    pointer,
-                    area,
-                    at,
-                    when,
-                } => PointerEvent::Released(Pointing {
-                    model,
-                    pointer,
-                    area: optional_key::<I::HitArea>(area, "hit area")?,
-                    at,
-                    when,
-                }),
-                PointerEventKind::Cancelled { pointer, when } => {
-                    PointerEvent::Cancelled(Cancelled {
-                        model,
-                        pointer,
-                        when,
-                    })
-                }
-                PointerEventKind::Moved { at, when } => {
-                    PointerEvent::Moved(Moving { model, at, when })
-                }
-                PointerEventKind::Entered { area, at, when } => PointerEvent::Entered(Hovering {
-                    model,
-                    area: key::<I::HitArea>(area, "hit area")?,
-                    at,
-                    when,
-                }),
-                PointerEventKind::Exited { area, at, when } => PointerEvent::Exited(Hovering {
-                    model,
-                    area: key::<I::HitArea>(area, "hit area")?,
-                    at,
-                    when,
-                }),
-                PointerEventKind::Dragged {
-                    pointer,
-                    area,
-                    origin,
-                    at,
-                    when,
-                } => PointerEvent::Dragged(Dragging {
-                    model,
-                    pointer,
-                    area: optional_key::<I::HitArea>(area, "hit area")?,
-                    origin,
-                    at,
-                    when,
-                }),
-                PointerEventKind::Scrolled { lines, at, when } => {
-                    PointerEvent::Scrolled(Scrolling {
-                        model,
-                        lines,
-                        at,
-                        when,
-                    })
-                }
-            }),
+            PipelineEvent::Pointer(_) => {
+                unreachable!("pointer events are turned into input before this point")
+            }
         })
     }
 }
 
 /// The pointer facts that are not about a button, expressed in the classified
-/// vocabulary: hover, movement and the wheel have no click to arbitrate with, so
-/// they survive the switch unchanged.
+/// vocabulary: hover, movement and the wheel have no click to arbitrate with.
 fn classify<A: Clone>(event: &PointerEvent<A>) -> Option<Gesture<A>> {
     Some(match event {
         PointerEvent::Entered(hovered) => Gesture::Entered(hovered.clone()),
@@ -659,6 +479,77 @@ fn classify<A: Clone>(event: &PointerEvent<A>) -> Option<Gesture<A>> {
         | PointerEvent::Released(_)
         | PointerEvent::Dragged(_)
         | PointerEvent::Cancelled(_) => return None,
+    })
+}
+
+/// Reduces one render-layer pointer event to the public payload.
+fn pointer_payload<A: Vocabulary>(
+    model: crate::Live2dId,
+    kind: PointerEventKind,
+) -> Result<PointerEvent<A>, Problem> {
+    Ok(match kind {
+        PointerEventKind::Pressed {
+            pointer,
+            area,
+            at,
+            when,
+        } => PointerEvent::Pressed(Pointing {
+            model,
+            pointer,
+            area: optional_key::<A>(area, "hit area")?,
+            at,
+            when,
+        }),
+        PointerEventKind::Released {
+            pointer,
+            area,
+            at,
+            when,
+        } => PointerEvent::Released(Pointing {
+            model,
+            pointer,
+            area: optional_key::<A>(area, "hit area")?,
+            at,
+            when,
+        }),
+        PointerEventKind::Cancelled { pointer, when } => PointerEvent::Cancelled(Cancelled {
+            model,
+            pointer,
+            when,
+        }),
+        PointerEventKind::Moved { at, when } => PointerEvent::Moved(Moving { model, at, when }),
+        PointerEventKind::Entered { area, at, when } => PointerEvent::Entered(Hovering {
+            model,
+            area: key::<A>(area, "hit area")?,
+            at,
+            when,
+        }),
+        PointerEventKind::Exited { area, at, when } => PointerEvent::Exited(Hovering {
+            model,
+            area: key::<A>(area, "hit area")?,
+            at,
+            when,
+        }),
+        PointerEventKind::Dragged {
+            pointer,
+            area,
+            origin,
+            at,
+            when,
+        } => PointerEvent::Dragged(Dragging {
+            model,
+            pointer,
+            area: optional_key::<A>(area, "hit area")?,
+            origin,
+            at,
+            when,
+        }),
+        PointerEventKind::Scrolled { lines, at, when } => PointerEvent::Scrolled(Scrolling {
+            lines,
+            at,
+            when,
+            model,
+        }),
     })
 }
 
@@ -694,12 +585,273 @@ impl<Message, I: Interface, M: Mode> Clone for Live2d<'_, Message, I, M> {
     }
 }
 
+#[allow(private_bounds)]
+impl<'a, Message, I: Interface, M: Plumbing> Live2d<'a, Message, I, M> {
+    /// The iced widget that owns layout, the tree slot and the render pass.
+    fn delegate(&self) -> shader::Shader<Message, Self> {
+        shader::Shader::new(self.clone())
+            .width(self.width)
+            .height(self.height)
+    }
+
+    /// Moves every queued render-layer event into the widget's queue, keeping the
+    /// hover state the cursor hook reads and turning pointer events into this mode's
+    /// vocabulary on the way.
+    fn drain(&self, state: &mut Live2dState<I, M>) {
+        loop {
+            let Some(raw) = state.events.borrow_mut().try_recv() else {
+                return;
+            };
+
+            let PipelineEvent::Pointer(kind) = raw else {
+                let event = match self.translate(raw) {
+                    Ok(event) => event,
+                    Err(problem) => Live2dEvent::ModelReportedProblem {
+                        model: self.model.id(),
+                        problem,
+                    },
+                };
+
+                state.pending.push_back(event);
+
+                continue;
+            };
+
+            let pointer = match pointer_payload::<I::HitArea>(self.model.id(), kind) {
+                Ok(pointer) => pointer,
+                Err(problem) => {
+                    state.pending.push_back(Live2dEvent::ModelReportedProblem {
+                        model: self.model.id(),
+                        problem,
+                    });
+
+                    continue;
+                }
+            };
+
+            match &pointer {
+                PointerEvent::Entered(hovered) => state.hover = Some(hovered.area.clone()),
+                PointerEvent::Exited(_) => state.hover = None,
+                _ => {}
+            }
+
+            M::ingest(&pointer, &mut state.recognizer, &mut state.produced);
+
+            for input in state.produced.drain(..) {
+                state.pending.push_back(Live2dEvent::Input(input));
+            }
+        }
+    }
+
+    /// Takes the next queued event, if the host listens for it.
+    fn next_message(&self, state: &mut Live2dState<I, M>) -> Option<Message> {
+        self.drain(state);
+
+        self.dispatch(state.pending.pop_front()?)
+    }
+
+    /// Hands one event to the closure that asked for it, preferring the specific one
+    /// over [`Live2d::on_event`].
+    fn dispatch(&self, event: Live2dEvent<I, M::Input<I::HitArea>>) -> Option<Message> {
+        match event {
+            Live2dEvent::Input(input) => {
+                let whole = Live2dEvent::Input(input.clone());
+
+                M::dispatch(&self.handlers, &input, whole)
+            }
+            other => self.handlers.any.as_ref().map(|handle| handle(other)),
+        }
+    }
+}
+
+/// What every mode has to answer: how a pointer event becomes its vocabulary, and
+/// which closure a vocabulary member belongs to.
+trait Plumbing: Mode + Sized {
+    fn ingest<A: Vocabulary + std::fmt::Debug>(
+        pointer: &PointerEvent<A>,
+        recognizer: &mut Recognizer<A>,
+        out: &mut Vec<Self::Input<A>>,
+    );
+
+    fn tick<A: Clone + PartialEq + std::fmt::Debug>(
+        recognizer: &mut Recognizer<A>,
+        now: Instant,
+        out: &mut Vec<Self::Input<A>>,
+    );
+
+    #[allow(private_interfaces)]
+    fn dispatch<Message, I: Interface>(
+        handlers: &Handlers<'_, Message, I, Self>,
+        input: &Self::Input<I::HitArea>,
+        event: Live2dEvent<I, Self::Input<I::HitArea>>,
+    ) -> Option<Message>;
+}
+
+impl Plumbing for Unset {
+    fn ingest<A: Vocabulary + std::fmt::Debug>(
+        pointer: &PointerEvent<A>,
+        _recognizer: &mut Recognizer<A>,
+        out: &mut Vec<PointerEvent<A>>,
+    ) {
+        out.push(pointer.clone());
+    }
+
+    fn tick<A: Clone + PartialEq + std::fmt::Debug>(
+        _recognizer: &mut Recognizer<A>,
+        _now: Instant,
+        _out: &mut Vec<PointerEvent<A>>,
+    ) {
+    }
+
+    fn dispatch<Message, I: Interface>(
+        handlers: &Handlers<'_, Message, I, Self>,
+        input: &PointerEvent<I::HitArea>,
+        event: Live2dEvent<I, PointerEvent<I::HitArea>>,
+    ) -> Option<Message> {
+        raw_dispatch(handlers, input, event)
+    }
+}
+
+impl Plumbing for RawMode {
+    fn ingest<A: Vocabulary + std::fmt::Debug>(
+        pointer: &PointerEvent<A>,
+        _recognizer: &mut Recognizer<A>,
+        out: &mut Vec<PointerEvent<A>>,
+    ) {
+        out.push(pointer.clone());
+    }
+
+    fn tick<A: Clone + PartialEq + std::fmt::Debug>(
+        _recognizer: &mut Recognizer<A>,
+        _now: Instant,
+        _out: &mut Vec<PointerEvent<A>>,
+    ) {
+    }
+
+    fn dispatch<Message, I: Interface>(
+        handlers: &Handlers<'_, Message, I, Self>,
+        input: &PointerEvent<I::HitArea>,
+        event: Live2dEvent<I, PointerEvent<I::HitArea>>,
+    ) -> Option<Message> {
+        raw_dispatch(handlers, input, event)
+    }
+}
+
+impl Plumbing for GestureMode {
+    fn ingest<A: Vocabulary + std::fmt::Debug>(
+        pointer: &PointerEvent<A>,
+        recognizer: &mut Recognizer<A>,
+        out: &mut Vec<Gesture<A>>,
+    ) {
+        recognizer.push(pointer, out);
+
+        if let Some(gesture) = classify(pointer) {
+            out.push(gesture);
+        }
+    }
+
+    fn tick<A: Clone + PartialEq + std::fmt::Debug>(
+        recognizer: &mut Recognizer<A>,
+        now: Instant,
+        out: &mut Vec<Gesture<A>>,
+    ) {
+        recognizer.tick(now, out);
+    }
+
+    fn dispatch<Message, I: Interface>(
+        handlers: &Handlers<'_, Message, I, Self>,
+        input: &Gesture<I::HitArea>,
+        event: Live2dEvent<I, Gesture<I::HitArea>>,
+    ) -> Option<Message> {
+        let specific = match input {
+            Gesture::Clicked(tap) => handlers.click.as_ref().map(|handle| handle(tap.clone())),
+            Gesture::DoubleClicked(tap) => handlers
+                .double_click
+                .as_ref()
+                .map(|handle| handle(tap.clone())),
+            Gesture::LongPressed(tap) => handlers
+                .long_press
+                .as_ref()
+                .map(|handle| handle(tap.clone())),
+            Gesture::DragStarted(drag) => handlers
+                .drag_start
+                .as_ref()
+                .map(|handle| handle(drag.clone())),
+            Gesture::Dragged(drag) => handlers.drag.as_ref().map(|handle| handle(drag.clone())),
+            Gesture::DragEnded(drag) => handlers
+                .drag_end
+                .as_ref()
+                .map(|handle| handle(drag.clone())),
+            Gesture::Entered(hovered) => handlers
+                .enter
+                .as_ref()
+                .map(|handle| handle(hovered.clone())),
+            Gesture::Exited(hovered) => {
+                handlers.exit.as_ref().map(|handle| handle(hovered.clone()))
+            }
+            Gesture::Scrolled(scrolled) => handlers.scroll.as_ref().map(|handle| handle(*scrolled)),
+            Gesture::Moved(_) => {
+                return handlers.moved.as_ref().map(|handle| match input {
+                    Gesture::Moved(moved) => handle(*moved),
+                    _ => unreachable!(),
+                });
+            }
+        };
+
+        specific.or_else(|| handlers.any.as_ref().map(|handle| handle(event)))
+    }
+}
+
+/// The raw vocabulary's half of [`Plumbing::dispatch`].
+fn raw_dispatch<Message, I: Interface, M: Mode>(
+    handlers: &Handlers<'_, Message, I, M>,
+    input: &PointerEvent<I::HitArea>,
+    event: Live2dEvent<I, M::Input<I::HitArea>>,
+) -> Option<Message> {
+    let specific = match input {
+        PointerEvent::Pressed(pointing) => handlers
+            .press
+            .as_ref()
+            .map(|handle| handle(pointing.clone())),
+        PointerEvent::Released(pointing) => handlers
+            .release
+            .as_ref()
+            .map(|handle| handle(pointing.clone())),
+        PointerEvent::Entered(hovered) => handlers
+            .enter
+            .as_ref()
+            .map(|handle| handle(hovered.clone())),
+        PointerEvent::Exited(hovered) => {
+            handlers.exit.as_ref().map(|handle| handle(hovered.clone()))
+        }
+        PointerEvent::Scrolled(scrolled) => {
+            handlers.scroll.as_ref().map(|handle| handle(*scrolled))
+        }
+        PointerEvent::Dragged(dragged) => handlers.drag.as_ref().map(|handle| {
+            handle(Drag {
+                model: dragged.model,
+                pointer: dragged.pointer,
+                area: dragged.area.clone(),
+                origin: dragged.origin,
+                at: dragged.at,
+                velocity: [0.0; 2],
+            })
+        }),
+        PointerEvent::Moved(moved) => {
+            return handlers.moved.as_ref().map(|handle| handle(*moved));
+        }
+        PointerEvent::Cancelled(_) => None,
+    };
+
+    specific.or_else(|| handlers.any.as_ref().map(|handle| handle(event.clone())))
+}
+
 /// The widget's own tree slot: one event channel and one view per instance.
-pub struct Live2dState<I: Interface> {
+pub struct Live2dState<I: Interface, M: Mode = RawMode> {
     events: RefCell<Channel>,
-    pending: VecDeque<Live2dEvent<I>>,
+    pending: VecDeque<Live2dEvent<I, M::Input<I::HitArea>>>,
     recognizer: Recognizer<I::HitArea>,
-    produced: Vec<Gesture<I::HitArea>>,
+    produced: Vec<M::Input<I::HitArea>>,
     hover: Option<I::HitArea>,
     pressed: bool,
     view: ViewId,
@@ -729,7 +881,7 @@ impl Channel {
     }
 }
 
-impl<I: Interface> Default for Live2dState<I> {
+impl<I: Interface, M: Mode> Default for Live2dState<I, M> {
     fn default() -> Self {
         Self {
             events: RefCell::new(Channel::default()),
@@ -744,19 +896,19 @@ impl<I: Interface> Default for Live2dState<I> {
     }
 }
 
-impl<I: Interface> Live2dState<I> {
+impl<I: Interface, M: Mode> Live2dState<I, M> {
     fn presence(&self) -> Arc<Presence> {
         Arc::clone(&self.presence)
     }
 }
 
-impl<Message, I: Interface, M: Mode> shader::Program<Message> for Live2d<'_, Message, I, M> {
-    type State = Live2dState<I>;
+impl<Message, I: Interface, M: Plumbing> shader::Program<Message> for Live2d<'_, Message, I, M> {
+    type State = Live2dState<I, M>;
     type Primitive = Live2dPrimitive;
 
     fn update(
         &self,
-        state: &mut Live2dState<I>,
+        state: &mut Live2dState<I, M>,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -768,10 +920,10 @@ impl<Message, I: Interface, M: Mode> shader::Program<Message> for Live2d<'_, Mes
         let interacting = self.queue_input(state, event, bounds, cursor, now);
 
         state.recognizer.configure(self.gestures);
-        state.recognizer.tick(now, &mut state.produced);
+        M::tick(&mut state.recognizer, now, &mut state.produced);
 
-        while let Some(gesture) = state.produced.pop() {
-            state.pending.push_front(Live2dEvent::Gesture(gesture));
+        while let Some(input) = state.produced.pop() {
+            state.pending.push_front(Live2dEvent::Input(input));
         }
 
         let message = self.next_message(state);
@@ -810,7 +962,7 @@ impl<Message, I: Interface, M: Mode> shader::Program<Message> for Live2d<'_, Mes
 
     fn draw(
         &self,
-        state: &Live2dState<I>,
+        state: &Live2dState<I, M>,
         cursor: mouse::Cursor,
         bounds: Rectangle,
     ) -> Live2dPrimitive {
@@ -873,7 +1025,7 @@ impl<Message, I: Interface, M: Mode> shader::Program<Message> for Live2d<'_, Mes
 
     fn mouse_interaction(
         &self,
-        state: &Live2dState<I>,
+        state: &Live2dState<I, M>,
         _bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> mouse::Interaction {
@@ -892,7 +1044,7 @@ impl<Message, I: Interface, M: Mode> iced::advanced::widget::Meta for Live2d<'_,
 impl<Message, I, M, Theme, Renderer> Widget<Message, Theme, Renderer> for Live2d<'_, Message, I, M>
 where
     I: Interface,
-    M: Mode,
+    M: Plumbing,
     shader::Shader<Message, Self>: Widget<Message, Theme, Renderer>,
 {
     fn tag(&self) -> tree::Tag {

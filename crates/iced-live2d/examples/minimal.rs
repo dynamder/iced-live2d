@@ -27,7 +27,7 @@ use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Hover, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo, ModelOptions,
-    Raw, live2d, look_at, raw,
+    Raw, RawEvent, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -70,7 +70,7 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(Live2dEvent<Raw>),
+    Live2d(RawEvent<Raw>),
     Key(keyboard::Event),
 }
 
@@ -171,7 +171,7 @@ impl App {
             .map_or(0, |index| index + 1)
     }
 
-    fn on_event(&mut self, event: Live2dEvent<Raw>) {
+    fn on_event(&mut self, event: RawEvent<Raw>) {
         let id = event.model();
         let label = self.label(id);
 
@@ -222,8 +222,7 @@ impl App {
 
                 format!("model {label} finished {} #{}", group.name(), clip)
             }
-            Live2dEvent::Pointer(event) => format!("model {label} pointer {event:?}"),
-            Live2dEvent::Gesture(gesture) => format!("model {label} gesture {gesture:?}"),
+            Live2dEvent::Input(input) => format!("model {label} pointer {input:?}"),
         };
 
         println!("{status}");

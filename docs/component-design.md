@@ -333,6 +333,21 @@ pub enum Live2dEvent<I: Interface> {
 `.gestures(..)`）：原始控件上不存在 gesture 钩子，分类控件上不存在原始钩子，所以一次物理动作
 只可能被处理一次。要原始信息就必须自己分类（双击、长按都是宿主的判断）。
 
+选择也决定了**事件类型**，因此必须先选词汇再绑 `on_event`：
+
+```rust
+pub enum Live2dEvent<I: Interface, In> {
+    ModelLoaded { .. }, ModelFailedToLoad { .. }, ModelReportedProblem { .. },
+    MotionStarted { .. }, MotionFinishedPlaying { .. },
+    Input(In),
+}
+pub type RawEvent<I> = Live2dEvent<I, PointerEvent<<I as Interface>::HitArea>>;
+pub type GestureEvent<I> = Live2dEvent<I, Gesture<<I as Interface>::HitArea>>;
+```
+
+两个类型各自带着自己的输入词汇，宿主不可能「match 到另一种词汇的分支」，也不需要写 `_ => {}`
+把它兜掉。
+
 原始词汇（`PointerEvent`，`.raw()` 才有）：
 
 | 事件 | 何时 | 载荷 |

@@ -466,9 +466,16 @@ same vocabulary of clicks and drags serves every model, so the message is
 it, so the same physical action can never be handled twice:
 
 ```rust
-live2d(&model).raw()                  // raw facts, classified by the host
-live2d(&model).gestures(Gestures::default())   // the component classifies
+live2d(&model).raw()                            // RawEvent:    raw facts, host classifies
+live2d(&model).gestures(Gestures::default())    // GestureEvent: the component classifies
 ```
+
+The choice decides the **event type**, so it comes before `on_event`: a raw widget
+hands the closure `RawEvent<I>` and a classified one `GestureEvent<I>`. The two
+carry the same model events (loaded, failed, problems, motions) and a different
+input arm — `Live2dEvent::Input(PointerEvent<..>)` versus
+`Live2dEvent::Input(Gesture<..>)` — so a message type names the vocabulary it holds
+and a handler cannot match the wrong one.
 
 | Method | Available in | Reported | Payload |
 |---|---|---|---|

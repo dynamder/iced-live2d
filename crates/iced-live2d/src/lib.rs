@@ -27,7 +27,7 @@ mod widget;
 pub mod look_at;
 pub mod raw;
 
-pub use event::{Live2dEvent, LoadFailure, Problem};
+pub use event::{Associated, GestureEvent, Live2dEvent, LoadFailure, Problem, RawEvent};
 pub use interaction::{
     Cancelled, Drag, Dragging, Gesture, Gestures, Hover, Hovering, Moving, Pointer, PointerEvent,
     Pointing, Sample, Scrolling, Tap,
@@ -51,6 +51,6 @@ pub use live2d_render::{
 /// Compile-time check that events may cross the render-to-UI channel.
 const _: fn() = || {
     fn assert_send<T: Send>() {}
-    assert_send::<Live2dEvent<raw::Raw>>();
+    assert_send::<RawEvent<raw::Raw>>();
     assert_send::<Problem>();
 };

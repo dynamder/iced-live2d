@@ -24,8 +24,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, container, row, text};
 use iced::{Element, Fill, Length, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, GestureMode, Gestures, Hover, Live2d, Live2dAsset, Live2dEvent, Live2dId,
-    Live2dModel, ModelOptions, Raw, live2d, raw,
+    AssetOptions, GestureEvent, GestureMode, Gestures, Hover, Live2d, Live2dAsset, Live2dEvent,
+    Live2dId, Live2dModel, ModelOptions, Raw, live2d, raw,
 };
 
 fn main() -> iced::Result {
@@ -63,7 +63,7 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(Live2dEvent<Raw>),
+    Live2d(GestureEvent<Raw>),
     Petted {
         model: Live2dId,
         what: String,
@@ -210,7 +210,7 @@ impl App {
             .map_or(0, |index| index + 1)
     }
 
-    fn on_event(&mut self, event: Live2dEvent<Raw>) {
+    fn on_event(&mut self, event: GestureEvent<Raw>) {
         let model = event.model();
         let label = self.label(model);
 
@@ -240,7 +240,7 @@ impl App {
                     pane.model.play_random_motion(group.clone());
                 }
             }
-            Live2dEvent::Pointer(_) | Live2dEvent::Gesture(_) => {}
+            Live2dEvent::Input(_) => {}
         }
     }
 
@@ -267,8 +267,8 @@ impl App {
 fn widget(pane: &Pane) -> Live2d<'_, Message, Raw, GestureMode> {
     live2d(&pane.model)
         .fill(pane.fill)
-        .on_event(Message::Live2d)
         .gestures(Gestures::default())
+        .on_event(Message::Live2d)
         .cursor(|hover| match hover {
             Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
             Hover { area: Some(_), .. } => mouse::Interaction::Pointer,
