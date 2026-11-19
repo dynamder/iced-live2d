@@ -1,0 +1,4 @@
+# Patch files are applied with `git apply`, which compares bytes: keep them LF in the
+# working tree on every platform, or a Windows checkout (core.autocrlf=true) turns them
+# into patches that no longer match the sources they were generated from.
+*.patch text eol=lf

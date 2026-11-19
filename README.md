@@ -407,10 +407,9 @@ scene uploads at half resolution by default:
 
 Pass `AssetOptions { texture_scale: 1.0, .. }` for full quality (`SceneOptions` in the
 render layer); mipmapped upload keeps thin line art intact when the model is drawn small,
-which is why minification without a mip chain looks like dashed speckles. The same model
-hosted in a Chromium webview running the official Cubism Web SDK costs **3.2×** this
-app's memory — method and numbers in
-[docs/web-sdk-benchmark.md](docs/web-sdk-benchmark.md).
+which is why minification without a mip chain looks like dashed speckles. For reference,
+the same model hosted in a Chromium webview running the official Cubism Web SDK measured
+**3.2×** this app's private working set on the same machine.
 
 ## Pitfalls
 
@@ -447,10 +446,8 @@ committed so a fresh clone builds; the workspace dependency points straight at i
 `patches/` is kept so the difference against upstream can be audited line by line.
 
 Unpatched `0.4.1` cannot render this rig, and the fixes belong upstream rather than in
-every consumer. They are written up with upstream line references, the reference
-behaviour each restores, and the measurements, in
-[docs/mocari-upstream-report.md](docs/mocari-upstream-report.md); further testing before
-submitting them is still in progress.
+every consumer. Each patch file opens with what it corrects and how it was verified;
+they are still being tested in more detail before being submitted upstream.
 
 ## Why iced comes from git
 
@@ -476,20 +473,7 @@ The sample characters used for comparisons are the official Cubism samples, used
 their own terms; [docs/test-models.md](docs/test-models.md) collects the provenance and
 the licence text for each rig in the corpus.
 
-## Background reading
+## Documentation
 
-- [docs/component-design.md](docs/component-design.md) — the settled component design:
-  immutable assets, interface vocabularies, the `Raw` escape hatch, load-time validation
-- [docs/rust-iced-live2d-plan.md](docs/rust-iced-live2d-plan.md) — architecture notes,
-  iced 0.15-dev API findings, pitfalls
-- [docs/test-models.md](docs/test-models.md) — the model corpus, what each rig exercises,
-  and where each model's terms of use live
-- [docs/web-sdk-benchmark.md](docs/web-sdk-benchmark.md) — native iced vs a Chromium
-  webview running the Cubism Web SDK: memory, the clip-mask quota trap, and why the
-  webview looked softer
-- [docs/mocari-upstream-report.md](docs/mocari-upstream-report.md) — the vendored fixes
-  as an upstream defect report
-- [docs/component-gap-audit.md](docs/component-gap-audit.md),
-  [docs/iced-live2d-component-plan.md](docs/iced-live2d-component-plan.md),
-  [docs/live2d-native-feasibility.md](docs/live2d-native-feasibility.md) — the audits and
-  plans the component was extracted from
+- [docs/test-models.md](docs/test-models.md) — the model corpus: where each rig comes
+  from, what it exercises, and where its terms of use live

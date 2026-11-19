@@ -14,8 +14,8 @@
 # reading of the sentinel.
 #
 # Apply with:
-#   cargo fetch                                   # put mocari 0.4.1 in the registry
-#   powershell -File scripts/vendor-mocari.ps1    # does the copy + this patch
+#   cargo fetch                               # put mocari 0.4.1 in the registry
+#   git apply -p1 <this file>                 # on a copy of those sources
 #
 # Worth reporting upstream: the fix belongs in DrawableInfo::from_mesh, not in
 # every consumer.

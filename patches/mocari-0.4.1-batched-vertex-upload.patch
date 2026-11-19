@@ -32,7 +32,7 @@
 # pixel-identical to the unpatched build.
 #
 # Apply with:
-#   powershell -File scripts/vendor-mocari.ps1
+#   git apply -p1 <this file>    # on a copy of the crates.io 0.4.1 sources
 #
 # Worth reporting upstream: both changes are local to buffers.rs and draw.rs.
 diff --git a/src/render/wgpu/buffers.rs b/src/render/wgpu/buffers.rs

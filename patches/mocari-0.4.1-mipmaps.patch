@@ -12,7 +12,7 @@
 # Costs +33% VRAM and ~0.5 s of startup for a rig this size; measured on the
 # DeepSeek rig the finger line art goes from dotted to continuous.
 #
-# Apply with: powershell -File scripts/vendor-mocari.ps1
+# Apply with: git apply -p1 <this file> on a copy of the crates.io 0.4.1 sources
 
 --- a/src/render/wgpu/pipeline.rs
 +++ b/src/render/wgpu/pipeline.rs

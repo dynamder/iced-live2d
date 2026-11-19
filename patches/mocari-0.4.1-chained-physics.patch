@@ -24,7 +24,7 @@
 #   after:  ParamAngleX +27.750, FrontHairX1 -0.135
 #
 # Apply with:
-#   powershell -File scripts/vendor-mocari.ps1
+#   git apply -p1 <this file>    # on a copy of the crates.io 0.4.1 sources
 #
 # Worth reporting upstream: the fix belongs in evaluate_setting, not in a fork.
 diff --git a/src/core/physics.rs b/src/core/physics.rs

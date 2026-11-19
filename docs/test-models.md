@@ -1,7 +1,7 @@
 # Test corpus
 
-The spike needs more than one rig: every Live2D convention we have hit so far was
-discovered by a model that did something different. This is the list of models we
+This crate is driven by models, and every Live2D convention it has hit so far was
+discovered by a rig that did something different. This is the list of models we
 validate against, why each one is in the set, and where its terms of use live.
 
 **No model asset is committed to this repository.** `.gitignore` excludes the
@@ -42,7 +42,7 @@ files stay out of git, and the credit lives in the README. Author: 原画及拆�
 
 ## What each model exercises
 
-`scripts/` has nothing to do here; the two commands that matter are:
+The two commands that matter are:
 
 ```bash
 cargo run -p live2d-render --example rig -- "<model>.model3.json"        # routing, no GPU
