@@ -2,12 +2,18 @@
 //!
 //! It hunts discontinuities: the cursor crossing the model's centre line is
 //! `AngleX` crossing its default, where a wrong normalisation branch or a dead zone
-//! shows up as a visible jolt. See `docs/mocari-suspected-physics-chaining.md`.
+//! shows up as a visible jolt.
 //!
 //! cargo run -p live2d-render --example sweep -- <model.model3.json> [frames]
 //!
-//! Knobs (`SWEEP_DIRECT`, `SWEEP_RANGE`, `SWEEP_ALL`, `SWEEP_JUMP`,
-//! `SWEEP_SETTLE`, `SWEEP_MOTION`) are listed in `README.md`.
+//! The columns are a fixed list of conventionally named parameters, so a rig that
+//! spells them differently or lacks them entirely prints `-` in their place; that is
+//! a property of the model, not a physics result.
+//!
+//! Knobs: `SWEEP_DIRECT=<ParamId>` writes that parameter instead of the look-at
+//! target, `SWEEP_RANGE=<low>,<high>`, `SWEEP_ALL=1` watches every parameter,
+//! `SWEEP_JUMP=<delta>`, `SWEEP_SETTLE=<frames>`, `SWEEP_MOTION=1` keeps the
+//! motion playing.
 
 use live2d_render::wgpu;
 use live2d_render::{AssetOptions, ModelOptions};
@@ -114,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("frame\tx\t{}", TRACKED.join("\t"));
     }
 
-    let mut previous: Option<Vec<f32>> = None;
+    let mut previous: Option<Vec<Option<f32>>> = None;
 
     for frame in 0..frames {
         let t = frame as f32 / (frames.max(2) - 1) as f32;
@@ -123,9 +129,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         drive(&mut session, &direct, x);
         session.advance(&device, &queue, live2d_render::STEP)?;
 
-        let values: Vec<f32> = watched
+        let values: Vec<Option<f32>> = watched
             .iter()
-            .map(|id| session.model().parameter_value(id).unwrap_or(f32::NAN))
+            .map(|id| session.model().parameter_value(id))
             .collect();
 
         if !watch_all {
@@ -133,7 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{frame}\t{x:.3}\t{}",
                 values
                     .iter()
-                    .map(|v| format!("{v:.3}"))
+                    .map(|value| match value {
+                        Some(value) => format!("{value:.3}"),
+                        None => "-".to_owned(),
+                    })
                     .collect::<Vec<_>>()
                     .join("\t")
             );
@@ -145,9 +154,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .zip(&values)
                 .zip(&watched)
                 .filter_map(|((before, after), id)| {
+                    let (before, after) = ((*before)?, (*after)?);
                     let delta = (after - before).abs();
 
-                    (delta > jump_threshold).then_some((delta, id.as_str(), *before, *after))
+                    (delta > jump_threshold).then_some((delta, id.as_str(), before, after))
                 })
                 .collect();
 
