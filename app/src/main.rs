@@ -151,7 +151,7 @@ impl App {
 
     fn report(&mut self, event: Live2dEvent<Raw>) {
         match &event {
-            Live2dEvent::ModelLoaded { info } => {
+            Live2dEvent::ModelLoaded { info, .. } => {
                 self.info = Some(Arc::clone(info));
 
                 println!(
@@ -169,21 +169,22 @@ impl App {
                     self.model.play_motion(group, 0);
                 }
             }
-            Live2dEvent::ModelFailedToLoad { failure } => {
+            Live2dEvent::ModelFailedToLoad { failure, .. } => {
                 eprintln!("live2d: failed to load {failure}");
             }
-            Live2dEvent::ModelReportedProblem { problem } => eprintln!("live2d: {problem}"),
+            Live2dEvent::ModelReportedProblem { problem, .. } => eprintln!("live2d: {problem}"),
             Live2dEvent::MotionStarted {
                 group,
                 clip,
                 duration,
                 looping,
+                ..
             } => println!(
                 "live2d: started {} #{} ({duration:.2} s, looping: {looping})",
                 group.name(),
                 clip
             ),
-            Live2dEvent::MotionFinishedPlaying { group, clip } => {
+            Live2dEvent::MotionFinishedPlaying { group, clip, .. } => {
                 println!("live2d: finished {} #{}", group.name(), clip);
 
                 // Keep the group running in order; the component stops and waits.
@@ -194,7 +195,7 @@ impl App {
                     self.model.play_motion(group.clone(), (*clip + 1) % clips);
                 }
             }
-            Live2dEvent::Pointer(pointer) => println!("live2d: {pointer:?}"),
+            Live2dEvent::Pointer { event, .. } => println!("live2d: {event:?}"),
         }
     }
 

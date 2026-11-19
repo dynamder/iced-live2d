@@ -28,7 +28,7 @@ pub mod raw;
 pub use event::{Live2dEvent, LoadFailure, PointerEvent, Problem};
 pub use interface::{Interface, InterfaceSpec, KeyId, MissingNames, Vocabulary, VocabularySpec};
 pub use look_at::LookAtSource;
-pub use model::{Live2dAsset, Live2dModel, Parameters, Parts};
+pub use model::{Live2dAsset, Live2dId, Live2dModel, Parameters, Parts};
 pub use raw::{Raw, RawExpression, RawHitArea, RawKey, RawMotion, RawParameter, RawPart};
 pub use widget::{Live2d, Live2dState, live2d};
 

@@ -7,9 +7,13 @@
 //! ```
 //!
 //! Keys: `R` random clip of the next group, `E` next expression, `P` pause/resume,
-//! `1`/`2` drop that model — its GPU state goes one frame later. `LIVE2D_PROFILE=1`
-//! prints the per-frame cost.
+//! `1`/`2` drop the first/second live model. `LIVE2D_PROFILE=1` prints the
+//! per-frame cost.
+//!
+//! Every event carries a [`Live2dId`], so the models are keyed by it and no
+//! position in a `Vec` has to be tracked through events.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,8 +21,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, window};
 use iced_live2d::{
-    AssetOptions, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions, Raw, live2d,
-    look_at, raw,
+    AssetOptions, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo, ModelOptions, Raw,
+    live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -52,40 +56,45 @@ struct Slot {
 }
 
 struct App {
-    slots: Vec<Option<Slot>>,
+    /// Keyed by the identity every event carries, so iteration order is creation
+    /// order and nothing shifts when one is dropped.
+    slots: BTreeMap<Live2dId, Slot>,
     paused: bool,
     status: String,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(usize, Live2dEvent<Raw>),
+    Live2d(Live2dEvent<Raw>),
     Key(keyboard::Event),
 }
 
 impl App {
     fn new(paths: Vec<PathBuf>) -> Self {
-        let slots = paths
-            .into_iter()
-            .map(|path| {
-                // Opting into the sidecar scan is the host's call.
-                let asset = Live2dAsset::new(
-                    path,
-                    AssetOptions {
-                        texture_scale: 0.5,
-                        scan_sidecars: true,
-                    },
-                );
-                let model = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
+        let mut slots = BTreeMap::new();
 
-                Some(Slot {
+        for path in paths {
+            // Opting into the sidecar scan is the host's call.
+            let asset = Live2dAsset::new(
+                path,
+                AssetOptions {
+                    texture_scale: 0.5,
+                    scan_sidecars: true,
+                },
+            );
+            let model = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
+            let id = model.id();
+
+            slots.insert(
+                id,
+                Slot {
                     model,
                     info: None,
                     next_group: 0,
                     next_expression: 0,
-                })
-            })
-            .collect();
+                },
+            );
+        }
 
         Self {
             slots,
@@ -96,7 +105,7 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Live2d(index, event) => self.on_event(index, event),
+            Message::Live2d(event) => self.on_event(event),
             Message::Key(keyboard::Event::KeyPressed {
                 text: Some(text),
                 repeat: false,
@@ -105,8 +114,8 @@ impl App {
                 "r" => self.next_motion(),
                 "e" => self.next_expression(),
                 "p" => self.toggle_pause(),
-                "1" => self.drop_model(0),
-                "2" => self.drop_model(1),
+                "1" => self.drop_nth(0),
+                "2" => self.drop_nth(1),
                 _ => {}
             },
             Message::Key(_) => {}
@@ -116,26 +125,26 @@ impl App {
     }
 
     fn view(&self) -> impl iced::Widget<Message> {
-        let mut panes: Vec<Element<'_, Message>> = Vec::with_capacity(self.slots.len());
-
-        for (index, slot) in self.slots.iter().enumerate() {
-            match slot {
-                Some(slot) => panes.push(
+        let panes: Vec<Element<'_, Message>> = if self.slots.is_empty() {
+            vec![
+                iced::widget::container(text("every model was dropped"))
+                    .center(Fill)
+                    ._boxed(),
+            ]
+        } else {
+            self.slots
+                .values()
+                .map(|slot| {
                     live2d(&slot.model)
-                        .on_event(move |event| Message::Live2d(index, event))
+                        .on_event(Message::Live2d)
                         .look_at(look_at::cursor)
                         .profile(std::env::var_os("LIVE2D_PROFILE").is_some())
                         .width(Fill)
                         .height(Fill)
-                        ._boxed(),
-                ),
-                None => panes.push(
-                    iced::widget::container(text(format!("model {} dropped", index + 1)))
-                        .center(Fill)
-                        ._boxed(),
-                ),
-            }
-        }
+                        ._boxed()
+                })
+                .collect()
+        };
 
         column![row(panes).height(Fill), text(self.status.as_str())]
     }
@@ -144,12 +153,23 @@ impl App {
         keyboard::listen().map(Message::Key)
     }
 
-    fn on_event(&mut self, index: usize, event: Live2dEvent<Raw>) {
+    /// Where a model sits in the live set, for the status line only.
+    fn label(&self, id: Live2dId) -> usize {
+        self.slots
+            .keys()
+            .position(|key| *key == id)
+            .map_or(0, |index| index + 1)
+    }
+
+    fn on_event(&mut self, event: Live2dEvent<Raw>) {
+        let id = event.model();
+        let label = self.label(id);
+
         let status = match &event {
-            Live2dEvent::ModelLoaded { info } => {
+            Live2dEvent::ModelLoaded { info, .. } => {
                 let start = raw::motions(info).into_iter().next();
 
-                if let Some(slot) = self.slots.get_mut(index).and_then(Option::as_mut) {
+                if let Some(slot) = self.slots.get_mut(&id) {
                     slot.info = Some(Arc::clone(info));
 
                     // Nothing plays until the host says so.
@@ -159,8 +179,7 @@ impl App {
                 }
 
                 format!(
-                    "model {} loaded: {} motions in {} groups, {} expressions, {} parameters, {} hit areas",
-                    index + 1,
+                    "model {label} loaded: {} motions in {} groups, {} expressions, {} parameters, {} hit areas",
                     info.motion_count(),
                     info.motions.len(),
                     info.expressions.len(),
@@ -168,32 +187,32 @@ impl App {
                     info.hit_areas.len(),
                 )
             }
-            Live2dEvent::ModelFailedToLoad { failure } => {
-                format!("model {} failed to load: {failure}", index + 1)
+            Live2dEvent::ModelFailedToLoad { failure, .. } => {
+                format!("model {label} failed to load: {failure}")
             }
-            Live2dEvent::ModelReportedProblem { problem } => {
-                format!("model {}: {problem}", index + 1)
+            Live2dEvent::ModelReportedProblem { problem, .. } => {
+                format!("model {label}: {problem}")
             }
             Live2dEvent::MotionStarted {
                 group,
                 clip,
                 duration,
                 looping,
+                ..
             } => format!(
-                "model {} started {} #{} ({duration:.2} s, looping: {looping})",
-                index + 1,
+                "model {label} started {} #{} ({duration:.2} s, looping: {looping})",
                 group.name(),
                 clip
             ),
-            Live2dEvent::MotionFinishedPlaying { group, clip } => {
+            Live2dEvent::MotionFinishedPlaying { group, clip, .. } => {
                 // A looping idle never ends; a one-shot does, and the host picks.
-                if let Some(slot) = self.slots.get_mut(index).and_then(Option::as_mut) {
+                if let Some(slot) = self.slots.get_mut(&id) {
                     slot.model.play_random_motion(group.clone());
                 }
 
-                format!("model {} finished {} #{}", index + 1, group.name(), clip)
+                format!("model {label} finished {} #{}", group.name(), clip)
             }
-            Live2dEvent::Pointer(event) => format!("model {} {event:?}", index + 1),
+            Live2dEvent::Pointer { event, .. } => format!("model {label} {event:?}"),
         };
 
         println!("{status}");
@@ -201,7 +220,7 @@ impl App {
     }
 
     fn next_motion(&mut self) {
-        for slot in self.slots.iter_mut().flatten() {
+        for slot in self.slots.values_mut() {
             let Some(info) = slot.info.as_ref() else {
                 continue;
             };
@@ -217,7 +236,7 @@ impl App {
     }
 
     fn next_expression(&mut self) {
-        for slot in self.slots.iter_mut().flatten() {
+        for slot in self.slots.values_mut() {
             let Some(info) = slot.info.as_ref() else {
                 continue;
             };
@@ -235,7 +254,7 @@ impl App {
     fn toggle_pause(&mut self) {
         self.paused = !self.paused;
 
-        for slot in self.slots.iter_mut().flatten() {
+        for slot in self.slots.values_mut() {
             if self.paused {
                 slot.model.pause();
             } else {
@@ -244,22 +263,21 @@ impl App {
         }
 
         self.status = if self.paused {
-            "paused (no frames, no pointer events)".to_owned()
+            "paused (nothing steps; pointer events still arrive)".to_owned()
         } else {
             "running".to_owned()
         };
     }
 
-    fn drop_model(&mut self, index: usize) {
-        let Some(slot) = self.slots.get_mut(index) else {
+    fn drop_nth(&mut self, nth: usize) {
+        let Some(id) = self.slots.keys().nth(nth).copied() else {
             return;
         };
 
-        if slot.take().is_none() {
-            return;
-        }
+        self.slots.remove(&id);
 
-        println!("model {} dropped", index + 1);
-        self.status = format!("model {} dropped", index + 1);
+        let status = format!("model {} dropped", nth + 1);
+        println!("{status}");
+        self.status = status;
     }
 }

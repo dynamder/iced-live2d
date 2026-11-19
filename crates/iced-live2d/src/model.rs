@@ -93,7 +93,7 @@ pub struct Live2dModel<I: Interface> {
 }
 
 pub(crate) struct Inner<I: Interface> {
-    id: ModelId,
+    id: Live2dId,
     asset: AssetId,
     asset_options: AssetOptions,
     path: Arc<PathBuf>,
@@ -119,11 +119,15 @@ pub(crate) struct Inner<I: Interface> {
 pub(crate) struct Presence;
 
 /// Identity of one model instance.
+///
+/// Stable for the model's lifetime, unlike a position in a `Vec`. Every event the
+/// component sends carries it, so a host driving several models never has to guess
+/// which one an event is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ModelId(u64);
+pub struct Live2dId(u64);
 
-impl ModelId {
-    fn unique() -> Self {
+impl Live2dId {
+    pub(crate) fn unique() -> Self {
         Self(NEXT_MODEL.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -174,7 +178,7 @@ impl<I: Interface> Live2dModel<I> {
     pub fn new(asset: &Live2dAsset, options: ModelOptions) -> Self {
         Self {
             inner: Rc::new(Inner {
-                id: ModelId::unique(),
+                id: Live2dId::unique(),
                 asset: asset.id(),
                 asset_options: asset.options(),
                 path: asset.path_arc(),
@@ -194,6 +198,11 @@ impl<I: Interface> Live2dModel<I> {
                 presence: Arc::new(Presence),
             }),
         }
+    }
+
+    /// This instance's identity, which every event about it carries.
+    pub fn id(&self) -> Live2dId {
+        self.inner.id
     }
 
     /// The asset this instance was built from.
@@ -467,7 +476,7 @@ impl<I: Interface> Parts<'_, I> {
 }
 
 impl<I: Interface> Inner<I> {
-    pub(crate) fn id(&self) -> ModelId {
+    pub(crate) fn id(&self) -> Live2dId {
         self.id
     }
 

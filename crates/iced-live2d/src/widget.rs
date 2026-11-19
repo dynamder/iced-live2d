@@ -164,9 +164,12 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
 
         let event = state.pending.pop_front()?;
 
-        let event = match Self::convert(event) {
+        let event = match self.convert(event) {
             Ok(event) => event,
-            Err(problem) => Live2dEvent::ModelReportedProblem { problem },
+            Err(problem) => Live2dEvent::ModelReportedProblem {
+                model: self.model.id(),
+                problem,
+            },
         };
 
         Some(on_event(event))
@@ -174,44 +177,53 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
 
     /// Turns a render-layer event into the host's, or into a problem when the
     /// vocabulary does not cover what was reported.
-    fn convert(event: PipelineEvent) -> Result<Live2dEvent<I>, Problem> {
+    fn convert(&self, event: PipelineEvent) -> Result<Live2dEvent<I>, Problem> {
+        let model = self.model.id();
+
         Ok(match event {
-            PipelineEvent::Loaded { info } => Live2dEvent::ModelLoaded { info },
-            PipelineEvent::LoadFailed { failure } => Live2dEvent::ModelFailedToLoad { failure },
-            PipelineEvent::Problem(problem) => Live2dEvent::ModelReportedProblem { problem },
+            PipelineEvent::Loaded { info } => Live2dEvent::ModelLoaded { model, info },
+            PipelineEvent::LoadFailed { failure } => {
+                Live2dEvent::ModelFailedToLoad { model, failure }
+            }
+            PipelineEvent::Problem(problem) => Live2dEvent::ModelReportedProblem { model, problem },
             PipelineEvent::MotionStarted {
                 group,
                 clip,
                 duration,
                 looping,
             } => Live2dEvent::MotionStarted {
+                model,
                 group: key::<I::Motion>(group, "motion")?,
                 clip,
                 duration,
                 looping,
             },
             PipelineEvent::MotionFinished { group, clip } => Live2dEvent::MotionFinishedPlaying {
+                model,
                 group: key::<I::Motion>(group, "motion")?,
                 clip,
             },
-            PipelineEvent::Pointer(kind) => Live2dEvent::Pointer(match kind {
-                PointerEventKind::Pressed { area, at } => PointerEvent::Pressed {
-                    area: optional_key::<I::HitArea>(area, "hit area")?,
-                    at,
+            PipelineEvent::Pointer(kind) => Live2dEvent::Pointer {
+                model,
+                event: match kind {
+                    PointerEventKind::Pressed { area, at } => PointerEvent::Pressed {
+                        area: optional_key::<I::HitArea>(area, "hit area")?,
+                        at,
+                    },
+                    PointerEventKind::Released { area, at } => PointerEvent::Released {
+                        area: optional_key::<I::HitArea>(area, "hit area")?,
+                        at,
+                    },
+                    PointerEventKind::Entered { area } => PointerEvent::Entered {
+                        area: key::<I::HitArea>(area, "hit area")?,
+                    },
+                    PointerEventKind::Exited { area } => PointerEvent::Exited {
+                        area: key::<I::HitArea>(area, "hit area")?,
+                    },
+                    PointerEventKind::Dragged { delta } => PointerEvent::Dragged { delta },
+                    PointerEventKind::Scrolled { lines } => PointerEvent::Scrolled { lines },
                 },
-                PointerEventKind::Released { area, at } => PointerEvent::Released {
-                    area: optional_key::<I::HitArea>(area, "hit area")?,
-                    at,
-                },
-                PointerEventKind::Entered { area } => PointerEvent::Entered {
-                    area: key::<I::HitArea>(area, "hit area")?,
-                },
-                PointerEventKind::Exited { area } => PointerEvent::Exited {
-                    area: key::<I::HitArea>(area, "hit area")?,
-                },
-                PointerEventKind::Dragged { delta } => PointerEvent::Dragged { delta },
-                PointerEventKind::Scrolled { lines } => PointerEvent::Scrolled { lines },
-            }),
+            },
         })
     }
 }

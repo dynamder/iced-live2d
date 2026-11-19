@@ -22,7 +22,7 @@ use live2d_render::{
 
 use crate::event::{LoadFailure, Problem};
 use crate::interface::{InterfaceSpec, KeyId, Mapping};
-use crate::model::{ModelId, PointerInput, Presence};
+use crate::model::{Live2dId, PointerInput, Presence};
 
 /// Source of view identities, one per widget slot in the UI tree.
 static NEXT_VIEW: AtomicU64 = AtomicU64::new(1);
@@ -89,7 +89,7 @@ pub struct Live2dPrimitive {
     pub(crate) asset: AssetId,
     pub(crate) asset_options: AssetOptions,
     pub(crate) path: Arc<PathBuf>,
-    pub(crate) model: ModelId,
+    pub(crate) model: Live2dId,
     pub(crate) model_options: ModelOptions,
     pub(crate) view: ViewId,
     pub(crate) spec: InterfaceSpec,
@@ -147,7 +147,7 @@ impl shader::Primitive for Live2dPrimitive {
 pub struct Live2dPipeline {
     renderer: WgpuLive2dRenderer,
     assets: HashMap<AssetId, AssetSlot>,
-    models: HashMap<ModelId, ModelSlot>,
+    models: HashMap<Live2dId, ModelSlot>,
     views: HashMap<ViewId, ViewSlot>,
     /// Events found while *rendering*, handed to the next `prepare` so that they
     /// can be broadcast with everything else.
@@ -311,7 +311,7 @@ impl Live2dPipeline {
         }
     }
 
-    fn push_render_failure(&self, model: ModelId, error: Error) {
+    fn push_render_failure(&self, model: Live2dId, error: Error) {
         let message = error.to_string();
         let mut pending = lock(&self.pending);
 
@@ -346,10 +346,10 @@ fn lock(pending: &Mutex<Pending>) -> MutexGuard<'_, Pending> {
 
 #[derive(Default)]
 struct Pending {
-    events: Vec<(ModelId, PipelineEvent)>,
+    events: Vec<(Live2dId, PipelineEvent)>,
     /// Last render failure per model, so a failure that repeats every frame is
     /// reported once.
-    render_failures: HashMap<ModelId, String>,
+    render_failures: HashMap<Live2dId, String>,
 }
 
 struct AssetSlot {

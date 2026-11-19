@@ -7,6 +7,7 @@ use std::sync::Arc;
 use live2d_render::{Error, ModelInfo};
 
 use crate::interface::{Interface, MissingNames};
+use crate::model::Live2dId;
 
 /// Something the component wants the host to know, delivered one frame late.
 ///
@@ -18,6 +19,8 @@ pub enum Live2dEvent<I: Interface> {
     /// `info` is the asset's own description, and the identity raw keys are minted
     /// with.
     ModelLoaded {
+        /// Which model.
+        model: Live2dId,
         /// What the model exposes.
         info: Arc<ModelInfo>,
     },
@@ -25,17 +28,23 @@ pub enum Live2dEvent<I: Interface> {
     /// retried; the widget keeps reserving its space, so a host that wants the
     /// layout to collapse has to stop showing it.
     ModelFailedToLoad {
+        /// Which model.
+        model: Live2dId,
         /// Which path failed, and why.
         failure: LoadFailure,
     },
     /// Playback continues, but not the way the model file asked for. A cause that
     /// repeats every frame is reported once.
     ModelReportedProblem {
+        /// Which model.
+        model: Live2dId,
         /// What went wrong.
         problem: Problem,
     },
     /// A motion started playing.
     MotionStarted {
+        /// Which model.
+        model: Live2dId,
         /// The motion group the clip belongs to.
         group: I::Motion,
         /// Index of the clip inside that group.
@@ -48,13 +57,34 @@ pub enum Live2dEvent<I: Interface> {
     },
     /// A non-looping motion played to its end.
     MotionFinishedPlaying {
+        /// Which model.
+        model: Live2dId,
         /// The motion group the clip belonged to.
         group: I::Motion,
         /// Index of the clip inside that group.
         clip: usize,
     },
     /// The pointer did something on the widget.
-    Pointer(PointerEvent<I>),
+    Pointer {
+        /// Which model.
+        model: Live2dId,
+        /// What the pointer did.
+        event: PointerEvent<I>,
+    },
+}
+
+impl<I: Interface> Live2dEvent<I> {
+    /// Which model this is about.
+    pub fn model(&self) -> Live2dId {
+        match self {
+            Live2dEvent::ModelLoaded { model, .. }
+            | Live2dEvent::ModelFailedToLoad { model, .. }
+            | Live2dEvent::ModelReportedProblem { model, .. }
+            | Live2dEvent::MotionStarted { model, .. }
+            | Live2dEvent::MotionFinishedPlaying { model, .. }
+            | Live2dEvent::Pointer { model, .. } => *model,
+        }
+    }
 }
 
 /// A pointer interaction, in the terms a Live2D model speaks.
@@ -155,33 +185,44 @@ impl<I: Interface> fmt::Debug for PointerEvent<I> {
 impl<I: Interface> Clone for Live2dEvent<I> {
     fn clone(&self) -> Self {
         match self {
-            Live2dEvent::ModelLoaded { info } => Live2dEvent::ModelLoaded {
+            Live2dEvent::ModelLoaded { model, info } => Live2dEvent::ModelLoaded {
+                model: *model,
                 info: Arc::clone(info),
             },
-            Live2dEvent::ModelFailedToLoad { failure } => Live2dEvent::ModelFailedToLoad {
+            Live2dEvent::ModelFailedToLoad { model, failure } => Live2dEvent::ModelFailedToLoad {
+                model: *model,
                 failure: failure.clone(),
             },
-            Live2dEvent::ModelReportedProblem { problem } => Live2dEvent::ModelReportedProblem {
-                problem: problem.clone(),
-            },
+            Live2dEvent::ModelReportedProblem { model, problem } => {
+                Live2dEvent::ModelReportedProblem {
+                    model: *model,
+                    problem: problem.clone(),
+                }
+            }
             Live2dEvent::MotionStarted {
+                model,
                 group,
                 clip,
                 duration,
                 looping,
             } => Live2dEvent::MotionStarted {
+                model: *model,
                 group: group.clone(),
                 clip: *clip,
                 duration: *duration,
                 looping: *looping,
             },
-            Live2dEvent::MotionFinishedPlaying { group, clip } => {
+            Live2dEvent::MotionFinishedPlaying { model, group, clip } => {
                 Live2dEvent::MotionFinishedPlaying {
+                    model: *model,
                     group: group.clone(),
                     clip: *clip,
                 }
             }
-            Live2dEvent::Pointer(event) => Live2dEvent::Pointer(event.clone()),
+            Live2dEvent::Pointer { model, event } => Live2dEvent::Pointer {
+                model: *model,
+                event: event.clone(),
+            },
         }
     }
 }
@@ -189,36 +230,46 @@ impl<I: Interface> Clone for Live2dEvent<I> {
 impl<I: Interface> fmt::Debug for Live2dEvent<I> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Live2dEvent::ModelLoaded { info } => formatter
+            Live2dEvent::ModelLoaded { model, info } => formatter
                 .debug_struct("ModelLoaded")
+                .field("model", model)
                 .field("info", info)
                 .finish(),
-            Live2dEvent::ModelFailedToLoad { failure } => formatter
+            Live2dEvent::ModelFailedToLoad { model, failure } => formatter
                 .debug_struct("ModelFailedToLoad")
+                .field("model", model)
                 .field("failure", failure)
                 .finish(),
-            Live2dEvent::ModelReportedProblem { problem } => formatter
+            Live2dEvent::ModelReportedProblem { model, problem } => formatter
                 .debug_struct("ModelReportedProblem")
+                .field("model", model)
                 .field("problem", problem)
                 .finish(),
             Live2dEvent::MotionStarted {
+                model,
                 group,
                 clip,
                 duration,
                 looping,
             } => formatter
                 .debug_struct("MotionStarted")
+                .field("model", model)
                 .field("group", group)
                 .field("clip", clip)
                 .field("duration", duration)
                 .field("looping", looping)
                 .finish(),
-            Live2dEvent::MotionFinishedPlaying { group, clip } => formatter
+            Live2dEvent::MotionFinishedPlaying { model, group, clip } => formatter
                 .debug_struct("MotionFinishedPlaying")
+                .field("model", model)
                 .field("group", group)
                 .field("clip", clip)
                 .finish(),
-            Live2dEvent::Pointer(event) => formatter.debug_tuple("Pointer").field(event).finish(),
+            Live2dEvent::Pointer { model, event } => formatter
+                .debug_struct("Pointer")
+                .field("model", model)
+                .field("event", event)
+                .finish(),
         }
     }
 }
@@ -312,5 +363,42 @@ impl fmt::Display for Problem {
                 "ignored {vocabulary} #{index}: the vocabulary does not cover it"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interface::{KeyId, Vocabulary};
+    use crate::raw::{Raw, RawMotion};
+
+    fn motion(asset: live2d_render::AssetId) -> RawMotion {
+        RawMotion::from_id(&KeyId {
+            asset,
+            index: 0,
+            name: Arc::from("Idle"),
+        })
+        .expect("a raw key")
+    }
+
+    #[test]
+    fn every_event_reports_its_model() {
+        let model = Live2dId::unique();
+        let asset = live2d_render::AssetId::unique();
+
+        let pointer = Live2dEvent::<Raw>::Pointer {
+            model,
+            event: PointerEvent::Dragged { delta: [1.0, 2.0] },
+        };
+        let started = Live2dEvent::<Raw>::MotionStarted {
+            model,
+            group: motion(asset),
+            clip: 0,
+            duration: 1.0,
+            looping: false,
+        };
+
+        assert_eq!(pointer.model(), model);
+        assert_eq!(started.model(), model);
     }
 }
