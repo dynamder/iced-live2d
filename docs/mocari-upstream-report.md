@@ -23,7 +23,7 @@ issue 用的素材：现象、根因（带代码与行号）、上游对照实�
   - Live2D 官方样例 8 个（Haru / Hiyori / Mao / Mark / Natori / Ren / Rice / Wanko，
     Free Material License）——问题 2 可以直接用它们复现；问题 4 的"逐 drawable 上传"部分
     也能（任何 drawable 数上百的模型都够），动态遮罩那部分不行（见第 6 节）。
-- 补丁（`scripts/vendor-mocari.ps1 -Force` 从 registry 重建后按文件名顺序应用）：
+- 补丁（在 registry 的 0.4.1 解压副本上按文件名顺序应用）：
 
 | 补丁 | 改动文件 |
 |---|---|

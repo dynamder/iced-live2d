@@ -8,7 +8,7 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Title,
-    [string]$Out = "D:\native-cubism\.tmp-window.png",
+    [string]$Out = (Join-Path (Split-Path -Parent $PSScriptRoot) ".tmp-window.png"),
     [switch]$NoMove
 )
 

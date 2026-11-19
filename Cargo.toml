@@ -11,7 +11,6 @@ publish = false
 
 [workspace.dependencies]
 wgpu = "30"
-# mocari 0.4.1 cannot draw this rig unpatched: `vendor/mocari` is the crates.io
-# release plus every `patches/mocari-0.4.1-*.patch`. It is committed so a fresh
-# clone resolves without a setup step; ./scripts/vendor-mocari.ps1 refreshes it.
+# mocari 0.4.1 cannot render this rig unpatched, so it is vendored until the fixes
+# reach upstream: `vendor/mocari` is the crates.io release plus `patches/`.
 mocari = { path = "vendor/mocari" }

@@ -289,10 +289,11 @@ app/                           the demo app, now a thin host of the component
   src/main.rs                  CLI dispatch, key bindings, event printing
   src/cli.rs                   --model / --track / --list
 patches/                       the four mocari fixes, as patch files
-scripts/vendor-mocari.ps1      rebuilds vendor/mocari from the registry + patches
-scripts/mocari-patch.py        regenerates a patch body from vendor/mocari (dev tool)
+vendor/mocari/                 crates.io 0.4.1 + patches/, committed so a clone builds
 scripts/shot.ps1               DPI-aware window screenshot (dev tool)
 scripts/shot-window.ps1        screenshot any window by title prefix (dev tool)
+scripts/memory-probe.ps1       memory of the native app vs a Chromium host (dev tool)
+scripts/web-probe/             the Cubism Web SDK page that benchmark compares against
 docs/                          feasibility write-up, plan, audit, design, defect records
 ```
 
@@ -549,64 +550,17 @@ Decisions worth knowing:
 Not there yet, deliberately: keyboard and focus, pinch, pen pressure, view transforms
 (pan/zoom of the framing itself), inertia and physics drags, and look-at damping.
 
-## The four patches
+## Vendored mocari
 
-All four live in `patches/` and are applied to a vendored copy at `vendor/mocari`,
-which is committed so a fresh clone builds; the workspace dependency in
-`Cargo.toml` points straight at it, and `scripts/vendor-mocari.ps1 -Force`
-rebuilds it from the cargo registry.
+`vendor/mocari` is the crates.io `0.4.1` release plus the four diffs in `patches/`,
+committed so a fresh clone builds; the workspace dependency points straight at it, and
+`patches/` is kept so the difference against upstream can be audited line by line.
 
-**1. Negative mask sentinel.** `mocari 0.4.1` cannot open this model: one of its
-715 drawables carries `masks == [-1]`, a sentinel some exporters write for "not
-masked", and mocari feeds it straight into a `usize` conversion:
-
-```
-failed to create a clipping layout: invalid mask drawable index -1
-```
-
-Filtering negative mask entries treats that drawable as unmasked, which is the
-only sensible reading. The official viewer reports 181 clipped drawables against
-our 182 raw entries, which confirms the semantics.
-See [`patches/mocari-0.4.1-negative-masks.patch`](patches/mocari-0.4.1-negative-masks.patch).
-
-**2. Missing mip chain.** mocari uploads every texture with `mip_level_count: 1`,
-so a rig authored at 4096–8192 px and drawn a few hundred pixels tall minifies
-4–8x with a single bilinear tap: line art breaks into dotted speckles. The
-official viewer enables mipmaps by default. The patch builds the chain on upload
-and sets `mipmap_filter = Linear`; it costs +33% VRAM and ~0.5 s of startup.
-See [`patches/mocari-0.4.1-mipmaps.patch`](patches/mocari-0.4.1-mipmaps.patch).
-
-**3. Physics chains do not propagate.** Each physics setting writes its output back into the
-parameter cache, and that cache is how a later setting sees the result in the same
-substep — the official framework says so in a comment on the cache. mocari rebinds the
-cache slice and passes it as the computed value, so the write is a no-op. On this rig
-**113 reads** across settings depend on that propagation (hair, tail, ribbons, chest,
-skirt), so before the patch everything past the first hop stood still. The fix is two
-lines; `FrontHairX1` goes from 0.000 to -0.136 while `ParamAngleX` sweeps to +26.5.
-See [`patches/mocari-0.4.1-chained-physics.patch`](patches/mocari-0.4.1-chained-physics.patch)
-and [`docs/mocari-chained-physics.md`](docs/mocari-chained-physics.md).
-
-**4. Geometry is uploaded one drawable at a time, and dynamic masks are fatal.**
-Two problems in the same file, and together they are why the 715-drawable rig ran
-at 35 fps. Every drawable owned its own vertex buffer, so a frame that deforms the
-whole model issued 715 `write_buffer` calls. Worse, `update_drawables` returned an
-error when a drawable's mask set changed — and drawable 373 of this rig switches
-masks on **every frame**, because that is what dynamic masks are for. The caller's
-only option was to rebuild every GPU buffer, which is what cost 18 ms of upload
-time per frame. Neither masks, textures nor blend modes live in the vertex buffer:
-they belong to the draw loop and the clipping plan. The patch packs every drawable
-into one shared vertex buffer (one write per frame), applies those four values in
-place, and reports them through `WgpuMeshUpdate::structure_changed()` so the caller
-rebuilds clipping resources and nothing else. Upload time on this rig went from
-**18 ms to 1.2 ms per frame**, the scene went from 1.6 animation steps per frame
-(35 fps) to 1.00 (60 fps), and offscreen captures of both this rig and `Rice` are
-pixel-identical to the unpatched build.
-See [`patches/mocari-0.4.1-batched-vertex-upload.patch`](patches/mocari-0.4.1-batched-vertex-upload.patch).
-
-All four belong upstream — they should not be every consumer's problem. They are
-written up together, with upstream line references, the reference implementation
-each one follows and the measurements, in
-[`docs/mocari-upstream-report.md`](docs/mocari-upstream-report.md).
+Unpatched `0.4.1` cannot render this rig, and the fixes belong upstream rather than in
+every consumer. They are written up with upstream line references, the reference
+behaviour each one restores, and the measurements, in
+[`docs/mocari-upstream-report.md`](docs/mocari-upstream-report.md); further testing
+before submitting them is still in progress.
 
 ## Why the git dependency on iced
 
