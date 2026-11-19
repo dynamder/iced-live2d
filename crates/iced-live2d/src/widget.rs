@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use iced::advanced::layout;
@@ -15,8 +15,10 @@ use iced::{Length, Rectangle, mouse, touch, window};
 use live2d_render::STEP;
 
 use crate::event::{Live2dEvent, Problem};
+use crate::gesture::Recognizer;
 use crate::interaction::{
-    Cancelled, Dragging, Hovering, Moving, Pointer, PointerEvent, Pointing, Scrolling,
+    Cancelled, Drag, Dragging, Gesture, Gestures, Hover, Hovering, Moving, Pointer, PointerEvent,
+    Pointing, Scrolling, Tap,
 };
 use crate::interface::{Interface, KeyId, Vocabulary};
 use crate::look_at::LookAtSource;
@@ -47,14 +49,105 @@ pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Messa
 ///
 /// The widget drives its own frames. A host must **not** also subscribe to
 /// [`window::frames`]: `RedrawRequest` holds one request and the last writer wins.
+///
+/// Input reaches the host through the `on_*` methods, each of which takes a closure
+/// that maps the event to the host's own message. Nothing is decided here: the
+/// component reports what happened and the host decides what it means.
 pub struct Live2d<'a, Message, I: Interface> {
     model: &'a Live2dModel<I>,
-    on_event: Option<Rc<dyn Fn(Live2dEvent<I>) -> Message + 'a>>,
+    handlers: Handlers<'a, Message, I>,
+    gestures: Option<Gestures>,
+    cursor: Option<Cursor<'a, I::HitArea>>,
     look_at: Option<LookAtSource>,
+    capture: bool,
     fill: f32,
     profile: bool,
     width: Length,
     height: Length,
+}
+
+/// One mapping from an input to the host's own message.
+type Handler<'a, Event, Message> = Rc<dyn Fn(Event) -> Message + 'a>;
+
+/// The cursor hook: a pure function of hover, so it costs no message.
+type Cursor<'a, A> = Rc<dyn Fn(Hover<'_, A>) -> mouse::Interaction + 'a>;
+
+/// One closure per input the host asked for. A missing closure means "not
+/// interested", including for the frame request that input needs.
+struct Handlers<'a, Message, I: Interface> {
+    any: Option<Handler<'a, Live2dEvent<I>, Message>>,
+    press: Option<Handler<'a, Pointing<I::HitArea>, Message>>,
+    release: Option<Handler<'a, Pointing<I::HitArea>, Message>>,
+    click: Option<Handler<'a, Tap<I::HitArea>, Message>>,
+    double_click: Option<Handler<'a, Tap<I::HitArea>, Message>>,
+    long_press: Option<Handler<'a, Tap<I::HitArea>, Message>>,
+    drag_start: Option<Handler<'a, Drag<I::HitArea>, Message>>,
+    drag: Option<Handler<'a, Drag<I::HitArea>, Message>>,
+    drag_end: Option<Handler<'a, Drag<I::HitArea>, Message>>,
+    scroll: Option<Handler<'a, Scrolling, Message>>,
+    enter: Option<Handler<'a, Hovering<I::HitArea>, Message>>,
+    exit: Option<Handler<'a, Hovering<I::HitArea>, Message>>,
+    moved: Option<Handler<'a, Moving, Message>>,
+}
+
+impl<Message, I: Interface> Default for Handlers<'_, Message, I> {
+    fn default() -> Self {
+        Self {
+            any: None,
+            press: None,
+            release: None,
+            click: None,
+            double_click: None,
+            long_press: None,
+            drag_start: None,
+            drag: None,
+            drag_end: None,
+            scroll: None,
+            enter: None,
+            exit: None,
+            moved: None,
+        }
+    }
+}
+
+impl<Message, I: Interface> Clone for Handlers<'_, Message, I> {
+    fn clone(&self) -> Self {
+        Self {
+            any: self.any.clone(),
+            press: self.press.clone(),
+            release: self.release.clone(),
+            click: self.click.clone(),
+            double_click: self.double_click.clone(),
+            long_press: self.long_press.clone(),
+            drag_start: self.drag_start.clone(),
+            drag: self.drag.clone(),
+            drag_end: self.drag_end.clone(),
+            scroll: self.scroll.clone(),
+            enter: self.enter.clone(),
+            exit: self.exit.clone(),
+            moved: self.moved.clone(),
+        }
+    }
+}
+
+impl<Message, I: Interface> Handlers<'_, Message, I> {
+    /// Whether any input at all is wanted, which decides whether the widget asks
+    /// the render layer for events.
+    fn is_empty(&self) -> bool {
+        self.any.is_none()
+            && self.press.is_none()
+            && self.release.is_none()
+            && self.click.is_none()
+            && self.double_click.is_none()
+            && self.long_press.is_none()
+            && self.drag_start.is_none()
+            && self.drag.is_none()
+            && self.drag_end.is_none()
+            && self.scroll.is_none()
+            && self.enter.is_none()
+            && self.exit.is_none()
+            && self.moved.is_none()
+    }
 }
 
 impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
@@ -62,8 +155,11 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
     pub fn new(model: &'a Live2dModel<I>) -> Self {
         Self {
             model,
-            on_event: None,
+            handlers: Handlers::default(),
+            gestures: None,
+            cursor: None,
             look_at: None,
+            capture: false,
             fill: DEFAULT_FILL,
             profile: false,
             width: Length::Fill,
@@ -71,12 +167,148 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
         }
     }
 
-    /// Sends [`Live2dEvent`]s to the host as `Message`.
+    /// Sends every [`Live2dEvent`] to the host as `Message`.
     ///
     /// Without it events are dropped, load failures included. At most one per
     /// frame, one frame late; a burst is queued, not lost.
+    ///
+    /// A more specific `on_*` handler wins over this one for the events it covers.
     pub fn on_event(mut self, on_event: impl Fn(Live2dEvent<I>) -> Message + 'a) -> Self {
-        self.on_event = Some(Rc::new(on_event));
+        self.handlers.any = Some(Rc::new(on_event));
+        self
+    }
+
+    /// A button or finger went down.
+    pub fn on_press(mut self, on_press: impl Fn(Pointing<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.press = Some(Rc::new(on_press));
+        self
+    }
+
+    /// A button or finger came up, inside the widget or not.
+    pub fn on_release(mut self, on_release: impl Fn(Pointing<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.release = Some(Rc::new(on_release));
+        self
+    }
+
+    /// A press and release on the same hit area, without moving.
+    ///
+    /// Needs [`Live2d::gestures`].
+    pub fn on_click(mut self, on_click: impl Fn(Tap<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.click = Some(Rc::new(on_click));
+        self
+    }
+
+    /// Two clicks in quick succession. The second click is not reported twice.
+    ///
+    /// Needs [`Live2d::gestures`].
+    pub fn on_double_click(
+        mut self,
+        on_double_click: impl Fn(Tap<I::HitArea>) -> Message + 'a,
+    ) -> Self {
+        self.handlers.double_click = Some(Rc::new(on_double_click));
+        self
+    }
+
+    /// A press held still for a while, reported while the pointer is still down.
+    ///
+    /// The release that follows is not reported as a click. Needs
+    /// [`Live2d::gestures`].
+    pub fn on_long_press(
+        mut self,
+        on_long_press: impl Fn(Tap<I::HitArea>) -> Message + 'a,
+    ) -> Self {
+        self.handlers.long_press = Some(Rc::new(on_long_press));
+        self
+    }
+
+    /// A press travelled far enough to become a drag.
+    ///
+    /// Needs [`Live2d::gestures`].
+    pub fn on_drag_start(
+        mut self,
+        on_drag_start: impl Fn(Drag<I::HitArea>) -> Message + 'a,
+    ) -> Self {
+        self.handlers.drag_start = Some(Rc::new(on_drag_start));
+        self
+    }
+
+    /// The pointer moved while held down, once per frame.
+    ///
+    /// With [`Live2d::gestures`] the classified [`Gesture::Dragged`] is reported
+    /// instead, so this never fires twice for one movement; without it, the raw drag
+    /// arrives, which carries no velocity.
+    pub fn on_drag(mut self, on_drag: impl Fn(Drag<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.drag = Some(Rc::new(on_drag));
+        self
+    }
+
+    /// The drag ended; the pointer is no longer down.
+    ///
+    /// Needs [`Live2d::gestures`].
+    pub fn on_drag_end(mut self, on_drag_end: impl Fn(Drag<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.drag_end = Some(Rc::new(on_drag_end));
+        self
+    }
+
+    /// The wheel turned over the widget.
+    pub fn on_scroll(mut self, on_scroll: impl Fn(Scrolling) -> Message + 'a) -> Self {
+        self.handlers.scroll = Some(Rc::new(on_scroll));
+        self
+    }
+
+    /// The pointer came onto a hit area.
+    pub fn on_enter(mut self, on_enter: impl Fn(Hovering<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.enter = Some(Rc::new(on_enter));
+        self
+    }
+
+    /// The pointer left a hit area.
+    pub fn on_exit(mut self, on_exit: impl Fn(Hovering<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.exit = Some(Rc::new(on_exit));
+        self
+    }
+
+    /// The pointer moved over the widget, once per frame.
+    ///
+    /// Only reported when this is set: it is the one continuous input, and a host
+    /// that does not need it should not pay a message per frame.
+    pub fn on_move(mut self, on_move: impl Fn(Moving) -> Message + 'a) -> Self {
+        self.handlers.moved = Some(Rc::new(on_move));
+        self
+    }
+
+    /// Classifies presses into clicks, double clicks, long presses and drags.
+    ///
+    /// Off by default: without it the host sees presses, releases and raw drags and
+    /// can classify them itself. See [`Gestures`] for the thresholds.
+    pub fn gestures(mut self, gestures: Gestures) -> Self {
+        self.gestures = Some(gestures);
+        self
+    }
+
+    /// Sets the cursor shape from what is under the pointer.
+    ///
+    /// Off by default, and a pure function of hover, so it costs no message:
+    ///
+    /// ```text
+    /// .cursor(|hover| match hover {
+    ///     Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
+    ///     Hover { area: Some(_), .. } => mouse::Interaction::Pointer,
+    ///     _ => mouse::Interaction::Idle,
+    /// })
+    /// ```
+    pub fn cursor(
+        mut self,
+        cursor: impl Fn(Hover<'_, I::HitArea>) -> mouse::Interaction + 'a,
+    ) -> Self {
+        self.cursor = Some(Rc::new(cursor));
+        self
+    }
+
+    /// Captures pointer events while a press is held, so a parent widget that
+    /// scrolls or drags does not also react. Off by default.
+    pub fn capture(mut self, capture: bool) -> Self {
+        self.capture = capture;
         self
     }
 
@@ -116,6 +348,11 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
         self
     }
 
+    /// Whether the render layer should report input to this widget at all.
+    fn listens(&self) -> bool {
+        !self.handlers.is_empty() || self.gestures.is_some() || self.cursor.is_some()
+    }
+
     /// The iced widget that owns layout, the tree slot and the render pass.
     fn delegate(&self) -> shader::Shader<Message, Self> {
         shader::Shader::new(self.clone())
@@ -129,9 +366,12 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
     /// and the render layer runs later, so a press that is followed by a fast move
     /// must remember where it landed. A release is queued wherever it happens,
     /// inside the widget or not.
+    ///
+    /// Returns whether the event needs a frame, which is also true while the model
+    /// is paused: a frozen model still has a pose to hit-test.
     fn queue_input(
         &self,
-        state: &mut Live2dState,
+        state: &mut Live2dState<I>,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
@@ -204,29 +444,124 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
         true
     }
 
-    /// Takes the next queued event, if the host listens for them.
-    fn next_message(&self, state: &mut Live2dState) -> Option<Message> {
-        state.drain();
+    /// Moves every queued render-layer event into the widget's queue, keeping the
+    /// hover state the cursor hook reads and classifying pointer input on the way.
+    fn drain(&self, state: &mut Live2dState<I>, now: Instant) {
+        loop {
+            let Some(raw) = state.events.borrow_mut().try_recv() else {
+                return;
+            };
 
-        let on_event = self.on_event.as_ref()?;
-        let event = state.pending.pop_front()?;
+            let event = self.convert(raw);
 
-        let event = match self.convert(event) {
-            Ok(event) => event,
-            Err(problem) => Live2dEvent::ModelReportedProblem {
-                model: self.model.id(),
-                problem,
-            },
-        };
+            if let Live2dEvent::Pointer(pointer) = &event {
+                match pointer {
+                    PointerEvent::Entered(hovered) => state.hover = Some(hovered.area.clone()),
+                    PointerEvent::Exited(_) => state.hover = None,
+                    _ => {}
+                }
 
-        Some(on_event(event))
+                state.recognizer.push(pointer, now, &mut state.produced);
+            }
+
+            state.pending.push_back(event);
+
+            for gesture in state.produced.drain(..) {
+                state.pending.push_back(Live2dEvent::Gesture(gesture));
+            }
+        }
     }
 
-    /// Turns a render-layer event into the host's, or into a problem when the
-    /// vocabulary does not cover what was reported.
-    fn convert(&self, event: PipelineEvent) -> Result<Live2dEvent<I>, Problem> {
+    /// Takes the next queued event, if the host listens for it.
+    fn next_message(&self, state: &mut Live2dState<I>, now: Instant) -> Option<Message> {
+        self.drain(state, now);
+
+        self.dispatch(state.pending.pop_front()?)
+    }
+
+    /// Hands one event to the closure that asked for it, preferring the specific
+    /// one over [`Live2d::on_event`].
+    fn dispatch(&self, event: Live2dEvent<I>) -> Option<Message> {
+        let handlers = &self.handlers;
+
+        let specific = match &event {
+            Live2dEvent::Pointer(PointerEvent::Pressed(pointing)) => handlers
+                .press
+                .as_ref()
+                .map(|handle| handle(pointing.clone())),
+            Live2dEvent::Pointer(PointerEvent::Released(pointing)) => handlers
+                .release
+                .as_ref()
+                .map(|handle| handle(pointing.clone())),
+            Live2dEvent::Pointer(PointerEvent::Entered(hovered)) => handlers
+                .enter
+                .as_ref()
+                .map(|handle| handle(hovered.clone())),
+            Live2dEvent::Pointer(PointerEvent::Exited(hovered)) => {
+                handlers.exit.as_ref().map(|handle| handle(hovered.clone()))
+            }
+            Live2dEvent::Pointer(PointerEvent::Scrolled(scrolled)) => {
+                handlers.scroll.as_ref().map(|handle| handle(*scrolled))
+            }
+            Live2dEvent::Pointer(PointerEvent::Dragged(dragged)) => {
+                if self.gestures.is_some() {
+                    None
+                } else {
+                    handlers.drag.as_ref().map(|handle| {
+                        handle(Drag {
+                            model: dragged.model,
+                            pointer: dragged.pointer,
+                            area: dragged.area.clone(),
+                            origin: dragged.origin,
+                            at: dragged.at,
+                            velocity: [0.0; 2],
+                        })
+                    })
+                }
+            }
+            Live2dEvent::Pointer(PointerEvent::Moved(moved)) => {
+                return handlers.moved.as_ref().map(|handle| handle(*moved));
+            }
+            Live2dEvent::Gesture(Gesture::Clicked(tap)) => {
+                handlers.click.as_ref().map(|handle| handle(tap.clone()))
+            }
+            Live2dEvent::Gesture(Gesture::DoubleClicked(tap)) => handlers
+                .double_click
+                .as_ref()
+                .map(|handle| handle(tap.clone())),
+            Live2dEvent::Gesture(Gesture::LongPressed(tap)) => handlers
+                .long_press
+                .as_ref()
+                .map(|handle| handle(tap.clone())),
+            Live2dEvent::Gesture(Gesture::DragStarted(drag)) => handlers
+                .drag_start
+                .as_ref()
+                .map(|handle| handle(drag.clone())),
+            Live2dEvent::Gesture(Gesture::Dragged(drag)) => {
+                handlers.drag.as_ref().map(|handle| handle(drag.clone()))
+            }
+            Live2dEvent::Gesture(Gesture::DragEnded(drag)) => handlers
+                .drag_end
+                .as_ref()
+                .map(|handle| handle(drag.clone())),
+            _ => None,
+        };
+
+        specific.or_else(|| handlers.any.as_ref().map(|handle| handle(event)))
+    }
+
+    /// Turns a render-layer event into the host's, stamping the model identity and
+    /// reporting a hand-written vocabulary that does not cover what was seen.
+    fn convert(&self, event: PipelineEvent) -> Live2dEvent<I> {
         let model = self.model.id();
 
+        match Self::translate(model, event) {
+            Ok(event) => event,
+            Err(problem) => Live2dEvent::ModelReportedProblem { model, problem },
+        }
+    }
+
+    fn translate(model: crate::Live2dId, event: PipelineEvent) -> Result<Live2dEvent<I>, Problem> {
         Ok(match event {
             PipelineEvent::Loaded { info } => Live2dEvent::ModelLoaded { model, info },
             PipelineEvent::LoadFailed { failure } => {
@@ -283,11 +618,13 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
                 }),
                 PointerEventKind::Dragged {
                     pointer,
+                    area,
                     origin,
                     at,
                 } => PointerEvent::Dragged(Dragging {
                     model,
                     pointer,
+                    area: optional_key::<I::HitArea>(area, "hit area")?,
                     origin,
                     at,
                 }),
@@ -317,8 +654,11 @@ impl<Message, I: Interface> Clone for Live2d<'_, Message, I> {
     fn clone(&self) -> Self {
         Self {
             model: self.model,
-            on_event: self.on_event.clone(),
+            handlers: self.handlers.clone(),
+            gestures: self.gestures,
+            cursor: self.cursor.clone(),
             look_at: self.look_at,
+            capture: self.capture,
             fill: self.fill,
             profile: self.profile,
             width: self.width,
@@ -328,13 +668,15 @@ impl<Message, I: Interface> Clone for Live2d<'_, Message, I> {
 }
 
 /// The widget's own tree slot: one event channel and one view per instance.
-pub struct Live2dState {
+pub struct Live2dState<I: Interface> {
     events: RefCell<Channel>,
-    pending: VecDeque<PipelineEvent>,
+    pending: VecDeque<Live2dEvent<I>>,
+    recognizer: Recognizer<I::HitArea>,
+    produced: Vec<Gesture<I::HitArea>>,
+    hover: Option<I::HitArea>,
+    pressed: bool,
     view: ViewId,
     presence: Arc<Presence>,
-    hovered: bool,
-    pressed: bool,
 }
 
 /// The events channel, created the first time a widget actually asks for one.
@@ -360,85 +702,89 @@ impl Channel {
     }
 }
 
-impl Default for Live2dState {
+impl<I: Interface> Default for Live2dState<I> {
     fn default() -> Self {
         Self {
             events: RefCell::new(Channel::default()),
             pending: VecDeque::new(),
+            recognizer: Recognizer::default(),
+            produced: Vec::new(),
+            hover: None,
+            pressed: false,
             view: ViewId::unique(),
             presence: Arc::new(Presence),
-            hovered: false,
-            pressed: false,
         }
     }
 }
 
-impl Live2dState {
+impl<I: Interface> Live2dState<I> {
     fn presence(&self) -> Arc<Presence> {
         Arc::clone(&self.presence)
-    }
-
-    /// Moves every queued render-layer event into the widget's queue, noting hover.
-    fn drain(&mut self) {
-        loop {
-            let event = self.events.borrow_mut().try_recv();
-
-            let Some(event) = event else {
-                return;
-            };
-
-            match &event {
-                PipelineEvent::Pointer(PointerEventKind::Entered { .. }) => self.hovered = true,
-                PipelineEvent::Pointer(PointerEventKind::Exited { .. }) => self.hovered = false,
-                _ => {}
-            }
-
-            self.pending.push_back(event);
-        }
     }
 }
 
 impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> {
-    type State = Live2dState;
+    type State = Live2dState<I>;
     type Primitive = Live2dPrimitive;
 
     fn update(
         &self,
-        state: &mut Live2dState,
+        state: &mut Live2dState<I>,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<Message>> {
-        let interacting = self.queue_input(state, event, bounds, cursor);
-
-        let message = self.next_message(state);
-        let draining = !state.pending.is_empty();
-
-        let next_frame = match event {
-            iced::Event::Window(window::Event::RedrawRequested(now)) if !self.model.is_paused() => {
-                Some(*now + REDRAW_LEAD)
-            }
-            // A burst of events must not wait for the model to animate.
-            _ if draining => Some(iced::time::Instant::now()),
-            // Input needs a frame to be hit-tested even when the model is frozen;
-            // that frame steps nothing, it only renders what is already there.
-            _ if interacting => Some(iced::time::Instant::now()),
-            _ => None,
+        let now = match event {
+            iced::Event::Window(window::Event::RedrawRequested(at)) => *at,
+            _ => Instant::now(),
         };
 
-        match (message, next_frame) {
-            (Some(message), Some(at)) => {
-                Some(shader::Action::publish(message).and_request_redraw_at(at))
-            }
-            (Some(message), None) => Some(shader::Action::publish(message)),
-            (None, Some(at)) => Some(shader::Action::request_redraw_at(at)),
-            (None, None) => None,
+        let interacting = self.queue_input(state, event, bounds, cursor);
+
+        state.recognizer.configure(self.gestures);
+        state.recognizer.tick(now, &mut state.produced);
+
+        while let Some(gesture) = state.produced.pop() {
+            state.pending.push_front(Live2dEvent::Gesture(gesture));
         }
+
+        let message = self.next_message(state, now);
+        let draining = !state.pending.is_empty();
+
+        let mut next_frame = None::<Instant>;
+
+        if let iced::Event::Window(window::Event::RedrawRequested(at)) = event
+            && !self.model.is_paused()
+        {
+            next_frame = Some(*at + REDRAW_LEAD);
+        }
+
+        if draining || interacting {
+            next_frame =
+                Some(next_frame.map_or_else(Instant::now, |frame| frame.min(Instant::now())));
+        }
+
+        if let Some(deadline) = state.recognizer.deadline() {
+            next_frame = Some(next_frame.map_or(deadline, |frame| frame.min(deadline)));
+        }
+
+        let mut action = match (message, next_frame) {
+            (Some(message), Some(at)) => shader::Action::publish(message).and_request_redraw_at(at),
+            (Some(message), None) => shader::Action::publish(message),
+            (None, Some(at)) => shader::Action::request_redraw_at(at),
+            (None, None) => return None,
+        };
+
+        if self.capture && state.pressed {
+            action = action.and_capture();
+        }
+
+        Some(action)
     }
 
     fn draw(
         &self,
-        state: &Live2dState,
+        state: &Live2dState<I>,
         cursor: mouse::Cursor,
         bounds: Rectangle,
     ) -> Live2dPrimitive {
@@ -459,7 +805,7 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
             None
         };
 
-        let events = if self.on_event.is_some() {
+        let events = if self.listens() {
             Some(state.events.borrow_mut().sender())
         } else {
             None
@@ -501,16 +847,16 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
 
     fn mouse_interaction(
         &self,
-        state: &Live2dState,
+        state: &Live2dState<I>,
         _bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if state.pressed {
-            mouse::Interaction::Grabbing
-        } else if state.hovered {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::Idle
+        match &self.cursor {
+            Some(hook) => hook(Hover {
+                area: state.hover.as_ref(),
+                pressed: state.pressed,
+            }),
+            None => mouse::Interaction::Idle,
         }
     }
 }

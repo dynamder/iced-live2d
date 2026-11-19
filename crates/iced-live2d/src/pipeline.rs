@@ -68,6 +68,7 @@ pub(crate) enum PointerEventKind {
     },
     Dragged {
         pointer: Pointer,
+        area: Option<KeyId>,
         origin: Sample,
         at: Sample,
     },
@@ -464,6 +465,8 @@ struct Interaction {
 
 struct Down {
     pointer: Pointer,
+    /// The hit area under the press, if any: a drag reports where it started.
+    area: Option<usize>,
     origin: Point,
     /// Where the pointer is now, from the frame cursor or from a touch move.
     current: Point,
@@ -954,6 +957,7 @@ fn pointer(
                 interaction.down.retain(|down| down.pointer != pointer);
                 interaction.down.push(Down {
                     pointer,
+                    area,
                     origin: at,
                     current: at,
                     reported: at,
@@ -1057,6 +1061,9 @@ fn pointer(
             listener,
             PipelineEvent::Pointer(PointerEventKind::Dragged {
                 pointer: down.pointer,
+                area: down
+                    .area
+                    .and_then(|area| area_key(primitive.asset, info, &ready.mapping, area)),
                 origin,
                 at,
             }),

@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use iced::advanced::Widget as _;
 use iced::widget::{column, row, text};
-use iced::{Element, Fill, Subscription, Task, keyboard, window};
+use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo, ModelOptions, Raw,
-    live2d, look_at, raw,
+    AssetOptions, Hover, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo, ModelOptions,
+    Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -138,6 +138,11 @@ impl App {
                     live2d(&slot.model)
                         .on_event(Message::Live2d)
                         .look_at(look_at::cursor)
+                        .cursor(|hover| match hover {
+                            Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
+                            Hover { area: Some(_), .. } => mouse::Interaction::Pointer,
+                            _ => mouse::Interaction::Idle,
+                        })
                         .profile(std::env::var_os("LIVE2D_PROFILE").is_some())
                         .width(Fill)
                         .height(Fill)
@@ -213,6 +218,7 @@ impl App {
                 format!("model {label} finished {} #{}", group.name(), clip)
             }
             Live2dEvent::Pointer(event) => format!("model {label} {event:?}"),
+            Live2dEvent::Gesture(gesture) => format!("model {label} {gesture:?}"),
         };
 
         println!("{status}");

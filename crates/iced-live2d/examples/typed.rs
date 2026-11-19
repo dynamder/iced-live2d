@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use iced::advanced::Widget as _;
 use iced::widget::{column, text};
-use iced::{Element, Fill, Subscription, Task, keyboard, window};
+use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions,
+    AssetOptions, Hover, Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions,
     PointerEvent, Vocabulary, live2d, look_at,
 };
 
@@ -148,6 +148,11 @@ impl App {
         let pane: Element<'_, Message> = live2d(&self.model)
             .on_event(Message::Live2d)
             .look_at(look_at::cursor)
+            .cursor(|hover| match hover {
+                Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
+                Hover { area: Some(_), .. } => mouse::Interaction::Pointer,
+                _ => mouse::Interaction::Idle,
+            })
             .profile(std::env::var_os("LIVE2D_PROFILE").is_some())
             .width(Fill)
             .height(Fill)

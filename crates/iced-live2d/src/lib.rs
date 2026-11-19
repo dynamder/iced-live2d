@@ -17,6 +17,7 @@
 #![warn(missing_docs)]
 
 mod event;
+mod gesture;
 mod interaction;
 mod interface;
 mod model;
@@ -28,7 +29,8 @@ pub mod raw;
 
 pub use event::{Live2dEvent, LoadFailure, Problem};
 pub use interaction::{
-    Cancelled, Dragging, Hovering, Moving, Pointer, PointerEvent, Pointing, Sample, Scrolling,
+    Cancelled, Drag, Dragging, Gesture, Gestures, Hover, Hovering, Moving, Pointer, PointerEvent,
+    Pointing, Sample, Scrolling, Tap,
 };
 pub use interface::{Interface, InterfaceSpec, KeyId, MissingNames, Vocabulary, VocabularySpec};
 pub use look_at::LookAtSource;

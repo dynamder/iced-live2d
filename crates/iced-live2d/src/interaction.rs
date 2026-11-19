@@ -5,6 +5,8 @@
 //! interface's hit-area type — `Pointing<FaceHitArea>` — which is the only part of
 //! a vocabulary that input mentions.
 
+use std::time::Duration;
+
 use iced::Point;
 use iced::mouse;
 use iced::touch;
@@ -70,18 +72,20 @@ pub struct Moving {
 
 /// A pointer moving while held down.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Dragging {
+pub struct Dragging<A> {
     /// Which model.
     pub model: Live2dId,
     /// Which pointer.
     pub pointer: Pointer,
+    /// The hit area the drag started on, if any.
+    pub area: Option<A>,
     /// Where the press happened.
     pub origin: Sample,
     /// Where the pointer is now.
     pub at: Sample,
 }
 
-impl Dragging {
+impl<A> Dragging<A> {
     /// Distance travelled since the press, in model units.
     pub fn delta(&self) -> [f32; 2] {
         [
@@ -129,7 +133,7 @@ pub enum PointerEvent<A> {
     /// The pointer left a hit area.
     Exited(Hovering<A>),
     /// The pointer moved while held down. Only the press's hit area is reported.
-    Dragged(Dragging),
+    Dragged(Dragging<A>),
     /// The wheel turned.
     Scrolled(Scrolling),
 }
@@ -144,6 +148,120 @@ impl<A> PointerEvent<A> {
             PointerEvent::Entered(hovered) | PointerEvent::Exited(hovered) => hovered.model,
             PointerEvent::Dragged(dragged) => dragged.model,
             PointerEvent::Scrolled(scrolled) => scrolled.model,
+        }
+    }
+}
+
+/// What the pointer is doing over a widget, for
+/// [`Live2d::cursor`](crate::Live2d::cursor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hover<'a, A> {
+    /// The hit area under the pointer, if any.
+    pub area: Option<&'a A>,
+    /// Whether a press is being held.
+    pub pressed: bool,
+}
+
+/// A press that was released without turning into a drag.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tap<A> {
+    /// Which model.
+    pub model: Live2dId,
+    /// Which pointer.
+    pub pointer: Pointer,
+    /// The hit area that was pressed and released, if the press started on one.
+    pub area: Option<A>,
+    /// Where it was released.
+    pub at: Sample,
+    /// How long the press was held.
+    pub held: Duration,
+}
+
+/// A press that travelled far enough to count as a drag.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Drag<A> {
+    /// Which model.
+    pub model: Live2dId,
+    /// Which pointer.
+    pub pointer: Pointer,
+    /// The hit area the drag started on, if any. Fixed for the whole drag.
+    pub area: Option<A>,
+    /// Where the press happened.
+    pub origin: Sample,
+    /// Where the pointer is now.
+    pub at: Sample,
+    /// Pixels per second, measured over the last frame of the drag. Zero until the
+    /// pointer has moved at least once, and left at its last value when it stops.
+    pub velocity: [f32; 2],
+}
+
+impl<A> Drag<A> {
+    /// Distance travelled since the press, in model units.
+    pub fn delta(&self) -> [f32; 2] {
+        [
+            self.at.model[0] - self.origin.model[0],
+            self.at.model[1] - self.origin.model[1],
+        ]
+    }
+}
+
+/// What a pointer did, once the sequences above have been classified.
+///
+/// Produced only when the widget was given [`Gestures`]; the raw [`PointerEvent`]s
+/// keep arriving either way.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gesture<A> {
+    /// Pressed and released on the same hit area, in under
+    /// [`Gestures::long_press`](crate::Gestures::long_press), without moving.
+    Clicked(Tap<A>),
+    /// Two clicks in quick succession on the same hit area. The second click is not
+    /// reported separately.
+    DoubleClicked(Tap<A>),
+    /// Held without moving for at least [`Gestures::long_press`]. Reported while the
+    /// pointer is still down, and the release that follows is not a click.
+    LongPressed(Tap<A>),
+    /// The press travelled past [`Gestures::drag_threshold`](crate::Gestures::drag_threshold).
+    DragStarted(Drag<A>),
+    /// The pointer moved while held down, once per frame.
+    Dragged(Drag<A>),
+    /// The drag ended; the pointer is no longer down.
+    DragEnded(Drag<A>),
+}
+
+impl<A> Gesture<A> {
+    /// Which model this happened on.
+    pub fn model(&self) -> Live2dId {
+        match self {
+            Gesture::Clicked(tap) | Gesture::DoubleClicked(tap) | Gesture::LongPressed(tap) => {
+                tap.model
+            }
+            Gesture::DragStarted(drag) | Gesture::Dragged(drag) | Gesture::DragEnded(drag) => {
+                drag.model
+            }
+        }
+    }
+}
+
+/// How raw pointer input is classified into [`Gesture`]s.
+///
+/// The defaults are the ones a desktop pointer feels right with; every field is
+/// meant to be overridden.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Gestures {
+    /// Pixels a press may travel before it becomes a drag.
+    pub drag_threshold: f32,
+    /// How long a press must hold still to become a long press.
+    pub long_press: Duration,
+    /// How far apart two clicks may be to count as a double click.
+    pub double_click: Duration,
+}
+
+impl Default for Gestures {
+    fn default() -> Self {
+        Self {
+            drag_threshold: 5.0,
+            long_press: Duration::from_millis(500),
+            double_click: Duration::from_millis(300),
         }
     }
 }

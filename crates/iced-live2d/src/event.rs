@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use live2d_render::{Error, ModelInfo};
 
-use crate::interaction::PointerEvent;
+use crate::interaction::{Gesture, PointerEvent};
 use crate::interface::{Interface, MissingNames};
 use crate::model::Live2dId;
 
@@ -67,6 +67,11 @@ pub enum Live2dEvent<I: Interface> {
     },
     /// The pointer did something on the widget.
     Pointer(PointerEvent<I::HitArea>),
+    /// A sequence of pointer events was classified into one gesture.
+    ///
+    /// Only reported when the widget was given [`Gestures`](crate::Gestures). The raw events that
+    /// produced it keep arriving too, so a host may use either or both.
+    Gesture(Gesture<I::HitArea>),
 }
 
 impl<I: Interface> Live2dEvent<I> {
@@ -79,6 +84,7 @@ impl<I: Interface> Live2dEvent<I> {
             | Live2dEvent::MotionStarted { model, .. }
             | Live2dEvent::MotionFinishedPlaying { model, .. } => *model,
             Live2dEvent::Pointer(event) => event.model(),
+            Live2dEvent::Gesture(gesture) => gesture.model(),
         }
     }
 }
@@ -121,6 +127,7 @@ impl<I: Interface> Clone for Live2dEvent<I> {
                 }
             }
             Live2dEvent::Pointer(event) => Live2dEvent::Pointer(event.clone()),
+            Live2dEvent::Gesture(gesture) => Live2dEvent::Gesture(gesture.clone()),
         }
     }
 }
@@ -164,6 +171,9 @@ impl<I: Interface> fmt::Debug for Live2dEvent<I> {
                 .field("clip", clip)
                 .finish(),
             Live2dEvent::Pointer(event) => formatter.debug_tuple("Pointer").field(event).finish(),
+            Live2dEvent::Gesture(gesture) => {
+                formatter.debug_tuple("Gesture").field(gesture).finish()
+            }
         }
     }
 }

@@ -11,10 +11,10 @@ mod cli;
 
 use std::sync::Arc;
 
-use iced::{Fill, Subscription, Task, Widget, keyboard, window};
+use iced::{Fill, Subscription, Task, Widget, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions, Raw, live2d,
-    look_at, raw,
+    AssetOptions, Hover, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions, Raw,
+    live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -126,6 +126,11 @@ impl App {
         live2d(&self.model)
             .on_event(Message::Live2d)
             .look_at(look_at::cursor)
+            .cursor(|hover| match hover {
+                Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
+                Hover { area: Some(_), .. } => mouse::Interaction::Pointer,
+                _ => mouse::Interaction::Idle,
+            })
             .profile(std::env::var_os("LIVE2D_PROFILE").is_some())
             .width(Fill)
             .height(Fill)
@@ -196,6 +201,7 @@ impl App {
                 }
             }
             Live2dEvent::Pointer(event) => println!("live2d: {event:?}"),
+            Live2dEvent::Gesture(gesture) => println!("live2d: {gesture:?}"),
         }
     }
 
