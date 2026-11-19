@@ -23,32 +23,12 @@ fn main() -> iced::Result {
             println!("{}", cli::USAGE);
             return Ok(());
         }
-        Ok(cli::Invocation::List) => {
-            let models = cli::discover();
-
-            if models.is_empty() {
-                println!("no models found; see docs/test-models.md");
-            }
-
-            for (name, path) in models {
-                println!("{name:<12} {}", path.display());
-            }
-
-            return Ok(());
-        }
         Ok(cli::Invocation::Run(args)) => args,
         Err(error) => {
             eprintln!("{error}\n\n{}", cli::USAGE);
             std::process::exit(2);
         }
     };
-
-    if !args.model.exists() {
-        eprintln!(
-            "live2d: model not found at {}\nrun `app --list` to see what is available",
-            args.model.display()
-        );
-    }
 
     let path = args.model;
     let look_at_mode = args.look_at_mode;

@@ -368,7 +368,7 @@ crates/live2d-render/          只依赖 wgpu + mocari，不依赖 iced（升级
   examples/shared/gpu.rs       上面两个需要 GPU 的例子的公共引导
 app/                           iced 0.15-dev 外壳（已迁到 iced-live2d，见组件计划）
   src/main.rs                  application / 键盘 / 事件打印
-  src/cli.rs                   --model / --track / --list
+  src/cli.rs                   模型路径 + --track
 crates/iced-live2d/            可复用组件：Program + Primitive + Pipeline 都在这里
   src/widget.rs                Live2d 控件（委托 shader::Shader）+ Live2dState
   src/pipeline.rs              Live2dPipeline（按模型 id 建槽位）+ Live2dPrimitive
@@ -376,8 +376,6 @@ crates/iced-live2d/            可复用组件：Program + Primitive + Pipeline 
   src/event.rs / src/look_at.rs 事件载荷 / LookAtSource + look_at::cursor
 vendor/mocari                   mocari 0.4.1 + 四个补丁（Cargo.toml 的 workspace 依赖指过来）
 patches/                       负 mask、mipmap、物理链路、合批上传四个修复的 patch 文件
-scripts/shot.ps1               截图（DPI 感知，否则只截到左上角）
-scripts/shot-window.ps1        按标题前缀截任意窗口（用来截官方 Viewer 做对比）
 ```
 
 **内置操作**：`R` 下一段动作，`E` 下一个表情，鼠标移动 → 头部/眼球跟随。写入的是官方 Viewer 默认的那 5 条绑定（`AngleX`、`AngleY`、`ParamBodyAngleX`、`ParamEyeBallX`、`ParamEyeBallY`），`ParamAngle*` 由物理推出。

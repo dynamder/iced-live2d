@@ -66,26 +66,21 @@ from the official Cubism samples and are used under their own terms. See
 - Rust **1.93+** (iced master's MSRV; edition 2024)
 - A GPU with Vulkan/DX12/Metal for `wgpu`
 - A Live2D model directory (`*.model3.json` + `*.moc3` + textures). **None is
-  committed** — model assets are copyrighted.
+  committed** — model assets are copyrighted. [docs/test-models.md](docs/test-models.md)
+  says where the official samples come from and what their terms are.
 
 ## Quick start
 
 ```bash
-# open the default rig
-cargo run --release -p app
+# the app takes a model path; there is no built-in default
+cargo run --release -p app -- "path/to/Hiyori.model3.json"
 
-# open any model by name, or by path
-cargo run --release -p app -- --model Hiyori
-cargo run --release -p app -- "path/to/model/xxx.model3.json"
-
-# what can be named
-cargo run --release -p app -- --list
+# reproduce the Cubism Viewer's own mouse bindings instead of the rig's
+cargo run --release -p app -- "path/to/Hiyori.model3.json" --track viewer
 ```
 
-`--model <name>` matches a model directory or file stem, case-insensitively,
-inside `models/`, `.refs/models/`,
-`.refs/cubism-web-samples/Samples/Resources/` and the rig under development.
-`--track viewer` switches to the Cubism Viewer's own bindings (see
+`--track adapted` (the default) follows the conventions the rig itself declares;
+`viewer` is the Cubism Viewer's binding table (see
 [the tracking section](#capturing-a-frame-without-a-window)). `--help` lists
 everything.
 
@@ -111,7 +106,7 @@ every parameter to its default and then `apply_physics(0.0)` returned before
 writing the physics outputs, so for one frame the hair, skirt and accessories
 snapped to their rest pose and back. Only the parts the cursor does not drive and
 physics does are affected, which is why it looked like isolated components
-blinking. Under `--model 大肥鱼` the same bug is invisible in practice: that rig
+blinking. On the 大肥鱼 rig the same bug is invisible in practice: that rig
 took ~28 ms per frame, so the duplicate instant almost never happened for it.
 
 The component that ships here drives its own frames and runs at a steady 16.7 ms
@@ -287,13 +282,10 @@ crates/iced-live2d/            the reusable component: iced + live2d-render
 crates/iced-live2d-macros/     the optional `Vocabulary` derive
 app/                           the demo app, now a thin host of the component
   src/main.rs                  CLI dispatch, key bindings, event printing
-  src/cli.rs                   --model / --track / --list
+  src/cli.rs                   the model path and --track
 patches/                       the four mocari fixes, as patch files
 vendor/mocari/                 crates.io 0.4.1 + patches/, committed so a clone builds
-scripts/shot.ps1               DPI-aware window screenshot (dev tool)
-scripts/shot-window.ps1        screenshot any window by title prefix (dev tool)
-scripts/memory-probe.ps1       memory of the native app vs a Chromium host (dev tool)
-scripts/web-probe/             the Cubism Web SDK page that benchmark compares against
+scripts/web-probe/             the Cubism Web SDK page the memory benchmark compares against
 docs/                          feasibility write-up, plan, audit, design, defect records
 ```
 
