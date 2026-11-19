@@ -613,7 +613,7 @@ fn register(slot: &mut ModelSlot, events: Option<&Sender<PipelineEvent>>) {
         return;
     };
 
-    if slot.listeners.iter().any(|sender| sender.same_channel(events)) {
+    if !listen(&mut slot.listeners, events) {
         return;
     }
 
@@ -626,8 +626,23 @@ fn register(slot: &mut ModelSlot, events: Option<&Sender<PipelineEvent>>) {
         },
     };
 
-    slot.listeners.push(events.clone());
     let _ = events.send(event);
+}
+
+/// Records a listener, returning whether it was new.
+///
+/// A widget that redraws registers again every frame; the channel identity, not
+/// the count, decides.
+fn listen(
+    listeners: &mut Vec<Sender<PipelineEvent>>,
+    events: &Sender<PipelineEvent>,
+) -> bool {
+    if listeners.iter().any(|sender| sender.same_channel(events)) {
+        return false;
+    }
+
+    listeners.push(events.clone());
+    true
 }
 
 fn broadcast(listeners: &mut Vec<Sender<PipelineEvent>>, event: PipelineEvent) {
@@ -1030,6 +1045,50 @@ impl Default for Profile {
             delta_min: Duration::MAX,
             delta_max: Duration::ZERO,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn problem() -> PipelineEvent {
+        PipelineEvent::Problem(Problem::CommandQueueOverflow { dropped: 1 })
+    }
+
+    #[test]
+    fn a_listener_is_recorded_once_however_often_it_registers() {
+        let (sender, _receiver) = crossbeam_channel::unbounded();
+        let mut listeners = Vec::new();
+
+        assert!(listen(&mut listeners, &sender));
+        assert!(!listen(&mut listeners, &sender.clone()));
+        assert_eq!(listeners.len(), 1);
+    }
+
+    #[test]
+    fn every_live_listener_gets_the_event() {
+        let (first, first_receiver) = crossbeam_channel::unbounded();
+        let (second, second_receiver) = crossbeam_channel::unbounded();
+        let mut listeners = vec![first, second];
+
+        broadcast(&mut listeners, problem());
+
+        assert!(first_receiver.try_recv().is_ok());
+        assert!(second_receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn a_listener_whose_widget_left_the_tree_is_dropped() {
+        let (dead, dead_receiver) = crossbeam_channel::unbounded();
+        let (live, live_receiver) = crossbeam_channel::unbounded::<PipelineEvent>();
+        drop(dead_receiver);
+
+        let mut listeners = vec![dead, live];
+        broadcast(&mut listeners, problem());
+
+        assert_eq!(listeners.len(), 1);
+        assert!(live_receiver.try_recv().is_ok());
     }
 }
 

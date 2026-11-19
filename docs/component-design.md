@@ -233,7 +233,10 @@ pub enum Idle<M> { Declared, Group(M), Off }
 ```
 
   `Declared`（默认）取模型声明的 `Idle` 组，组内随机（对齐官方）；`Group` 指定另一组；
-  `Off` 即完全由宿主驱动。`Raw` 的 `Declared` 靠名字 `Idle` 解析，解析不到就是 `Off`。
+  `Off` 即完全由宿主驱动。`Raw` 的 `Declared` 靠名字 `Idle` 解析，解析不到就是 `Off`，
+  声明里没有 `Idle` 组、靠目录扫描出来的模型则落到 `Scanned` 组。
+- 模型自己开始播放一次：第一步若还没有任何动作，就按策略起一个待机动作；`stop_motion()`
+  会把这次「隐式开始」消费掉，之后完全由宿主决定。
 - `duration` / `looping` 只有解析过动作文件才知道，因此随 `MotionStarted` 到达，不进加载期元数据。
 
 ### 4.3 表情

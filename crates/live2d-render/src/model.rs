@@ -83,6 +83,11 @@ pub struct Model {
     look_at_mode: LookAtMode,
     physics_enabled: bool,
     idle: Option<usize>,
+    /// Whether the implicit first idle has already been offered.
+    ///
+    /// A fresh model starts playing by itself, but only once: after the host asks
+    /// for a motion or stops one, the choice is theirs.
+    auto_idle: bool,
     random: u64,
     dirty: bool,
     stepper: Stepper,
@@ -105,6 +110,7 @@ impl Model {
             look_at_mode: LookAtMode::default(),
             physics_enabled: true,
             idle: None,
+            auto_idle: false,
             random: RANDOM_SEED,
             dirty: true,
             stepper: Stepper::new(),
@@ -320,6 +326,10 @@ impl Model {
     /// Unlike [`Model::set_idle`] this does not start another one: nothing plays
     /// until the host or the idle policy asks for a motion.
     pub fn stop_motion(&mut self) {
+        // A host that stops before anything started has said what it wants: the
+        // implicit first idle must not override that.
+        self.auto_idle = true;
+
         if self.player.is_none() {
             return;
         }
@@ -365,6 +375,14 @@ impl Model {
     /// frame renders them.
     fn step(&mut self) {
         let seconds = STEP.as_secs_f32();
+
+        if !self.auto_idle {
+            self.auto_idle = true;
+
+            if self.player.is_none() {
+                self.play_idle();
+            }
+        }
 
         self.runtime.reset_parameters();
         self.runtime.reset_part_opacities();
