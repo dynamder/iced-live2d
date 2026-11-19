@@ -14,7 +14,7 @@ When error-handling, every error should be exposed properly to the user.
 
 If you are writing a new feature, you should always search relevant code and try to reuse them when possible and doesn't contradiced with the primary rule.
 
-Git commit in small step, conventional commit, but don't prose about the commit message.
+Git commit in small step, conventional commit, but don't prose about the commit message. The commit message should only be a few sentences.
 
 When you finish a new feature, there should always be a human-runnable and human-distinguishable executable for users to check.
 
