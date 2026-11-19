@@ -87,6 +87,13 @@ VRAM.
 - **View transforms.** `View` knows aspect and `fill` only
   ([view.rs](../crates/live2d-render/src/view.rs#L40-L143)): no pan, zoom,
   rotation, mirror or anchor.
+- **Model-target curves.** A `motion3.json` curve can target the model instead of a
+  parameter: `Opacity` fades the whole model, `EyeBlink` multiplies the model's
+  eye-blink group, `LipSync` adds to its lip-sync group. `mocari` drops all three
+  ([motion.rs](../vendor/mocari/src/motion.rs#L144-L162)). Mark animates its blinks
+  this way in every clip, so those blinks are lost today; Haru ships an `Opacity`
+  curve per clip that happens to stay at 1.0. The first two need the
+  `model3.json` `Groups` ids plumbed in, and `Opacity` needs a renderer change.
 - **Playback control.** No seek, speed or `time_scale`; the loop flag is the
   file's; `stop_motion` has no fade-out; `ModelInfo` reports clip counts without
   names or durations ([info.rs](../crates/live2d-render/src/info.rs#L35-L42));

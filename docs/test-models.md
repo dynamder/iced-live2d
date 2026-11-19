@@ -73,6 +73,50 @@ cargo run -p live2d-render --example offscreen -- "<model>.model3.json" out.png 
 | Wanko | 25 | `PARAM_ANGLE_X` style | yes | no | 12 | 0 | old upper-case/underscore naming, no eye-ball parameters |
 | 大肥鱼 | 509 | `AngleX` / `PositionX` (physics inputs) | yes (131 settings) | yes | 8 | 23 | the VTuber convention: look-at inputs feed physics outputs |
 
+## What the formats disagree about
+
+Six years of authoring show up in the files. Everything below was read off the
+corpus with the loader this crate uses, and all nine parse.
+
+| Model | `.moc3` | Optional sidecars declared | Motions (declared / files) | Fade declared in |
+|---|---|---|---|---|
+| Haru | 3.0.0 | physics, pose, user data, display info, expressions | 6 / 27 | `model3.json` 0.5 s |
+| Hiyori | 4.0.0 | physics, pose, user data, display info | 10 / 10 | `model3.json` 0.5 s |
+| Mao | 5.0.0 | physics, pose, display info, expressions | 8 / 8 | `Meta` 0.0 / 0.25 / 0.5 / 1.0 |
+| Mark | 4.0.0 | physics, user data, display info | 6 / 6 | `model3.json` 0.5 s |
+| Natori | 3.0.0 | physics, pose, display info, expressions | 8 / 8 | nowhere: 1.0 s |
+| Ren | 5.3.0 | physics, display info, expressions | 3 / 3 | `Meta` 0.25 s on two |
+| Rice | 4.0.0 | physics, display info | 4 / 4 | nowhere: 1.0 s |
+| Wanko | 3.0.0 | physics, display info | 5 / 12 | nowhere: 1.0 s |
+| 大肥鱼 | 5.0.0 | physics, display info | 0 / 8 (in `Animation/`) | nowhere: 1.0 s |
+
+What that costs anyone reading these files:
+
+- **A motion's fade is declared in one of two places.** `Motions.<group>[i]` in
+  `model3.json` overrides `Meta.FadeInTime` / `Meta.FadeOutTime` in the
+  `motion3.json`, and both fall back to 1.0 s. Three models declare it in the
+  model file, two in the motion file, four nowhere. Read only one of the two and
+  half the corpus fades for the wrong length.
+- **Zero is a value, not "unset".** Mao declares 0.0 s on some clips — a hard cut
+  the animator asked for — while leaving the key out on others. A parser that
+  filters out falsy values turns that cut into one second.
+- **`Motions` can be absent entirely**, not empty: 大肥鱼 has no key, and its
+  eight clips sit in `Animation/`. Only a directory scan finds them, and a scanned
+  clip has no `model3.json` entry, so it can only inherit the motion file's own
+  fade or the default.
+- **`exp3.json` and `pose3.json` carry no `Version`**, only `Type`; `physics3.json`
+  and `cdi3.json` always do (`3`). Mao and Ren add `cdi3.json`'s
+  `CombinedParameters`; 大肥鱼's expressions add VTube Studio's
+  `IsModelCustomizationExpression`. Reading these files means ignoring what is not
+  understood, never rejecting a document for having more in it.
+- **Every one of the 113 clips declares `Loop: true`**, including 大肥鱼's
+  one-shot "switch the hand" transitions. A clip that ends on its own does not
+  exist in this corpus; leaving one means `stop_motion` or starting another.
+- **Model-target curves are data, not decoration.** Haru ships an `Opacity` curve
+  in all 27 clips (constant 1.0 — dropping it costs nothing), while Mark ships an
+  `EyeBlink` curve in all six that actually animates 0 to 1. `mocari` drops
+  `Target: "Model"` curves today, so Mark's authored blinks are lost.
+
 ## What the corpus already caught
 
 - **Wanko** uses `PARAM_ANGLE_X` / `PARAM_BODY_ANGLE_X` (upper case, underscores)
