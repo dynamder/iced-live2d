@@ -132,12 +132,14 @@ impl<I: Interface> fmt::Debug for PointerEvent<I> {
                 .field("area", area)
                 .field("at", at)
                 .finish(),
-            PointerEvent::Entered { area } => {
-                formatter.debug_struct("Entered").field("area", area).finish()
-            }
-            PointerEvent::Exited { area } => {
-                formatter.debug_struct("Exited").field("area", area).finish()
-            }
+            PointerEvent::Entered { area } => formatter
+                .debug_struct("Entered")
+                .field("area", area)
+                .finish(),
+            PointerEvent::Exited { area } => formatter
+                .debug_struct("Exited")
+                .field("area", area)
+                .finish(),
             PointerEvent::Dragged { delta } => formatter
                 .debug_struct("Dragged")
                 .field("delta", delta)
@@ -251,7 +253,11 @@ impl fmt::Display for LoadFailure {
                 write!(formatter, "{}: {error}", path.display())
             }
             LoadFailure::Interface { path, missing } => {
-                write!(formatter, "{}: interface mismatch: {missing}", path.display())
+                write!(
+                    formatter,
+                    "{}: interface mismatch: {missing}",
+                    path.display()
+                )
             }
         }
     }

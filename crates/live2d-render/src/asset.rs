@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use mocari::ModelRuntime;
 use mocari::assets::{RuntimeModel, load_model_runtime};
 use mocari::json::Physics3;
 use mocari::render::wgpu::{WgpuLive2dRenderer, WgpuTexture};
-use mocari::ModelRuntime;
 use wgpu::{Device, Queue};
 
 use crate::bounds::ModelBounds;
@@ -80,8 +80,7 @@ pub(crate) struct Shared {
     pub rigs: Arc<Rigs>,
 }
 
-#[derive(Debug)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct ExpressionRef {
     pub name: Arc<str>,
     pub path: PathBuf,
@@ -189,7 +188,10 @@ impl Asset {
                     clips: clips.len(),
                 })
                 .collect(),
-            expressions: expressions.iter().map(|item| Arc::clone(&item.name)).collect(),
+            expressions: expressions
+                .iter()
+                .map(|item| Arc::clone(&item.name))
+                .collect(),
             hit_areas: runtime
                 .model()
                 .hit_areas()

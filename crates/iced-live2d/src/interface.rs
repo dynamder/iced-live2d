@@ -123,9 +123,7 @@ impl InterfaceSpec {
             info.parameter(name)
         });
         let parts = resolve(self.part, info.parts.len(), |name| info.part(name));
-        let motions = resolve(self.motion, info.motions.len(), |name| {
-            info.motion(name)
-        });
+        let motions = resolve(self.motion, info.motions.len(), |name| info.motion(name));
         let expressions = resolve(self.expression, info.expressions.len(), |name| {
             info.expression(name)
         });
@@ -192,7 +190,6 @@ impl Mapping {
     pub(crate) fn hit_area_vocabulary(&self, area: usize) -> Option<usize> {
         self.hit_areas.iter().position(|mapped| *mapped == area)
     }
-
 }
 
 /// The names an interface asked for that a model does not declare — what a host
@@ -340,7 +337,9 @@ mod tests {
 
     #[test]
     fn a_model_vocabulary_is_the_identity() {
-        let mapping = SPEC.resolve(&info(&["A", "B"], &["Idle", "Tap"])).expect("resolves");
+        let mapping = SPEC
+            .resolve(&info(&["A", "B"], &["Idle", "Tap"]))
+            .expect("resolves");
 
         assert_eq!(mapping.motion(1), Some(1));
         assert_eq!(mapping.motion_vocabulary(1), Some(1));
@@ -348,7 +347,9 @@ mod tests {
 
     #[test]
     fn the_reverse_mapping_finds_the_vocabulary_index() {
-        let mapping = SPEC.resolve(&info(&["A", "B"], &["Tap", "Idle"])).expect("resolves");
+        let mapping = SPEC
+            .resolve(&info(&["A", "B"], &["Tap", "Idle"]))
+            .expect("resolves");
 
         assert_eq!(mapping.motion(0), Some(0));
         assert_eq!(mapping.motion_vocabulary(0), Some(0));
@@ -362,7 +363,9 @@ mod tests {
             motion: VocabularySpec::Static(&["Tap"]),
             ..SPEC
         };
-        let mapping = spec.resolve(&info(&["A", "B"], &["Idle", "Tap"])).expect("resolves");
+        let mapping = spec
+            .resolve(&info(&["A", "B"], &["Idle", "Tap"]))
+            .expect("resolves");
 
         assert_eq!(mapping.motion(0), Some(1));
         assert_eq!(mapping.motion_vocabulary(1), Some(0));

@@ -28,9 +28,7 @@ mod model;
 mod rig;
 mod view;
 
-pub use asset::{
-    Asset, AssetOptions, IDLE_GROUP, ModelOptions, Prepared, SCANNED_GROUP,
-};
+pub use asset::{Asset, AssetOptions, IDLE_GROUP, ModelOptions, Prepared, SCANNED_GROUP};
 pub use bounds::ModelBounds;
 pub use error::{Error, Result};
 pub use gpu::ModelGpu;

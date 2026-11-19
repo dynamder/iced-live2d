@@ -7,11 +7,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use live2d_render::ModelBounds;
 use live2d_render::mocari::assets::load_model_runtime;
 use live2d_render::mocari::expression::load_expression;
 use live2d_render::mocari::json::{Physics3, PhysicsValueKind};
 use live2d_render::mocari::motion::load_motion;
-use live2d_render::ModelBounds;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()

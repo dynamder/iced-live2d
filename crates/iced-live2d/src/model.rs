@@ -277,8 +277,7 @@ impl<I: Interface> Live2dModel<I> {
     /// An out-of-range pair is reported as a
     /// [`Problem::Renderer`](crate::Problem::Renderer), not ignored.
     pub fn play_motion(&self, group: I::Motion, clip: usize) {
-        self.inner
-            .push_command(Command::PlayMotion { group, clip });
+        self.inner.push_command(Command::PlayMotion { group, clip });
     }
 
     /// Plays a random clip of `group` — the usual way to pick an idle clip when one
@@ -648,7 +647,10 @@ mod tests {
         assert_eq!(problems.len(), 1);
         assert!(matches!(
             problems.first(),
-            Some(Problem::ForeignKey { vocabulary: "parameter", .. })
+            Some(Problem::ForeignKey {
+                vocabulary: "parameter",
+                ..
+            })
         ));
     }
 
@@ -701,7 +703,9 @@ mod tests {
     #[test]
     fn an_untouched_model_has_no_target() {
         assert_eq!(
-            Live2dModel::<Raw>::new(&asset(), ModelOptions::default()).inner.target(),
+            Live2dModel::<Raw>::new(&asset(), ModelOptions::default())
+                .inner
+                .target(),
             None
         );
     }

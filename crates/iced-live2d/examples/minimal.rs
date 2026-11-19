@@ -191,12 +191,7 @@ impl App {
                     slot.model.play_random_motion(group.clone());
                 }
 
-                format!(
-                    "model {} finished {} #{}",
-                    index + 1,
-                    group.name(),
-                    clip
-                )
+                format!("model {} finished {} #{}", index + 1, group.name(), clip)
             }
             Live2dEvent::Pointer(event) => format!("model {} {event:?}", index + 1),
         };

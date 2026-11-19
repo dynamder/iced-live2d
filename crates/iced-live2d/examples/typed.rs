@@ -19,8 +19,7 @@ use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, window};
 use iced_live2d::{
     AssetOptions, Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions,
-    PointerEvent, Vocabulary,
-    live2d, look_at,
+    PointerEvent, Vocabulary, live2d, look_at,
 };
 
 /// The parameters this interface drives.
@@ -189,9 +188,8 @@ impl App {
                 duration,
                 looping,
             } => {
-                self.status = format!(
-                    "started {group:?} #{clip} ({duration:.2} s, looping: {looping})"
-                );
+                self.status =
+                    format!("started {group:?} #{clip} ({duration:.2} s, looping: {looping})");
             }
             Live2dEvent::MotionFinishedPlaying { group, clip } => {
                 // Back to the first idle clip, which is this example's policy.

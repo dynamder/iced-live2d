@@ -18,9 +18,7 @@ use crate::event::{Live2dEvent, PointerEvent, Problem};
 use crate::interface::{Interface, KeyId, Vocabulary};
 use crate::look_at::LookAtSource;
 use crate::model::{Command, Live2dModel, PointerInput, Presence};
-use crate::pipeline::{
-    FrameInputs, Live2dPrimitive, PipelineEvent, PointerEventKind, ViewId,
-};
+use crate::pipeline::{FrameInputs, Live2dPrimitive, PipelineEvent, PointerEventKind, ViewId};
 
 /// `1.0` touches the edges; the sample models were framed for this.
 const DEFAULT_FILL: f32 = 0.925;

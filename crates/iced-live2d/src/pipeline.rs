@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Sender;
 use iced::Rectangle;
-use iced::widget::shader;
 use iced::wgpu;
+use iced::widget::shader;
 use live2d_render::{
-    Asset, AssetId, AssetOptions, ClipRect, Error, LookAtMode, Model, ModelGpu,
-    ModelInfo, ModelOptions, Prepared, View, WgpuLive2dRenderer,
+    Asset, AssetId, AssetOptions, ClipRect, Error, LookAtMode, Model, ModelGpu, ModelInfo,
+    ModelOptions, Prepared, View, WgpuLive2dRenderer,
 };
 
 use crate::event::{LoadFailure, Problem};
@@ -177,8 +177,10 @@ impl shader::Pipeline for Live2dPipeline {
 
         self.assets
             .retain(|id, slot| slot.presence.strong_count() > 0 || live.contains(id));
-        self.models.retain(|_, slot| slot.presence.strong_count() > 0);
-        self.views.retain(|_, slot| slot.presence.strong_count() > 0);
+        self.models
+            .retain(|_, slot| slot.presence.strong_count() > 0);
+        self.views
+            .retain(|_, slot| slot.presence.strong_count() > 0);
 
         let models = &self.models;
         lock(&self.pending)
@@ -234,10 +236,8 @@ impl Live2dPipeline {
             register(slot, primitive.events.as_ref());
         }
 
-        let (Some(asset), Some(view)) = (
-            assets.get(&primitive.asset),
-            views.get(&primitive.view),
-        ) else {
+        let (Some(asset), Some(view)) = (assets.get(&primitive.asset), views.get(&primitive.view))
+        else {
             return;
         };
 
@@ -273,11 +273,22 @@ impl Live2dPipeline {
         target: &wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
     ) {
-        let (Some(AssetSlot { state: AssetState::Ready(asset), .. }), Some(ModelSlot { state: ModelState::Ready(ready), .. }), Some(view)) = (
+        let (
+            Some(AssetSlot {
+                state: AssetState::Ready(asset),
+                ..
+            }),
+            Some(ModelSlot {
+                state: ModelState::Ready(ready),
+                ..
+            }),
+            Some(view),
+        ) = (
             self.assets.get(&primitive.asset),
             self.models.get(&primitive.model),
             self.views.get(&primitive.view),
-        ) else {
+        )
+        else {
             return;
         };
 
@@ -288,11 +299,14 @@ impl Live2dPipeline {
             height: clip_bounds.height,
         };
 
-        if let Err(error) =
-            ready
-                .gpu
-                .encode(&self.renderer, encoder, target, clip, asset.textures(), &view.view)
-        {
+        if let Err(error) = ready.gpu.encode(
+            &self.renderer,
+            encoder,
+            target,
+            clip,
+            asset.textures(),
+            &view.view,
+        ) {
             self.push_render_failure(primitive.model, error);
         }
     }
@@ -357,14 +371,17 @@ impl AssetSlot {
     fn from_parse(primitive: &Live2dPrimitive) -> Self {
         let presence = Arc::downgrade(&primitive.asset_presence);
 
-        let state = match Asset::parse(primitive.asset, primitive.path.as_path(), primitive.asset_options) {
+        let state = match Asset::parse(
+            primitive.asset,
+            primitive.path.as_path(),
+            primitive.asset_options,
+        ) {
             Ok(prepared) => AssetState::Parsed(Box::new(prepared)),
             Err(error) => AssetState::Failed(Arc::new(error)),
         };
 
         Self { presence, state }
     }
-
 }
 
 impl AssetState {
@@ -539,7 +556,11 @@ fn renderer_failure(primitive: &Live2dPrimitive, error: Arc<Error>) -> LoadFailu
     }
 }
 
-fn failed(primitive: &Live2dPrimitive, presence: Weak<Presence>, failure: LoadFailure) -> ModelSlot {
+fn failed(
+    primitive: &Live2dPrimitive,
+    presence: Weak<Presence>,
+    failure: LoadFailure,
+) -> ModelSlot {
     ModelSlot {
         presence,
         asset: primitive.asset,
@@ -559,10 +580,19 @@ fn new_ready(
 ) -> ModelSlot {
     let model = asset.model();
 
-    let gpu = match ModelGpu::new(gpu.renderer, gpu.device, &model, primitive.model_options.mask_size) {
+    let gpu = match ModelGpu::new(
+        gpu.renderer,
+        gpu.device,
+        &model,
+        primitive.model_options.mask_size,
+    ) {
         Ok(gpu) => gpu,
         Err(error) => {
-            return failed(primitive, presence, renderer_failure(primitive, Arc::new(error)));
+            return failed(
+                primitive,
+                presence,
+                renderer_failure(primitive, Arc::new(error)),
+            );
         }
     };
 
@@ -612,10 +642,7 @@ fn register(slot: &mut ModelSlot, events: Option<&Sender<PipelineEvent>>) {
 ///
 /// A widget that redraws registers again every frame; the channel identity, not
 /// the count, decides.
-fn listen(
-    listeners: &mut Vec<Sender<PipelineEvent>>,
-    events: &Sender<PipelineEvent>,
-) -> bool {
+fn listen(listeners: &mut Vec<Sender<PipelineEvent>>, events: &Sender<PipelineEvent>) -> bool {
     if listeners.iter().any(|sender| sender.same_channel(events)) {
         return false;
     }
@@ -714,7 +741,10 @@ fn reconcile(
             if deformed {
                 let started = Instant::now();
 
-                match ready.gpu.upload(gpu.renderer, gpu.device, gpu.queue, &ready.model) {
+                match ready
+                    .gpu
+                    .upload(gpu.renderer, gpu.device, gpu.queue, &ready.model)
+                {
                     Ok(Some(reason)) => report(&mut ready.last_problem, listeners, reason),
                     Ok(None) => {}
                     Err(error) => report(&mut ready.last_problem, listeners, error),
@@ -779,7 +809,10 @@ fn pointer(
         if let Some(previous) = ready.hover
             && let Some(area) = area_key(primitive.asset, info, &ready.mapping, previous)
         {
-            broadcast(listeners, PipelineEvent::Pointer(PointerEventKind::Exited { area }));
+            broadcast(
+                listeners,
+                PipelineEvent::Pointer(PointerEventKind::Exited { area }),
+            );
         }
 
         if let Some(next) = hit
@@ -807,9 +840,8 @@ fn pointer(
                 broadcast(
                     listeners,
                     PipelineEvent::Pointer(PointerEventKind::Pressed {
-                        area: hit.and_then(|area| {
-                            area_key(primitive.asset, info, &ready.mapping, area)
-                        }),
+                        area: hit
+                            .and_then(|area| area_key(primitive.asset, info, &ready.mapping, area)),
                         at,
                     }),
                 );
@@ -825,9 +857,8 @@ fn pointer(
                 broadcast(
                     listeners,
                     PipelineEvent::Pointer(PointerEventKind::Released {
-                        area: hit.and_then(|area| {
-                            area_key(primitive.asset, info, &ready.mapping, area)
-                        }),
+                        area: hit
+                            .and_then(|area| area_key(primitive.asset, info, &ready.mapping, area)),
                         at,
                     }),
                 );
@@ -888,24 +919,14 @@ fn vocabulary_problem(
     );
 }
 
-fn motion_key(
-    asset: AssetId,
-    info: &ModelInfo,
-    mapping: &Mapping,
-    group: usize,
-) -> Option<KeyId> {
+fn motion_key(asset: AssetId, info: &ModelInfo, mapping: &Mapping, group: usize) -> Option<KeyId> {
     let index = mapping.motion_vocabulary(group)?;
     let name = Arc::clone(&info.motions.get(group)?.name);
 
     Some(KeyId { asset, index, name })
 }
 
-fn area_key(
-    asset: AssetId,
-    info: &ModelInfo,
-    mapping: &Mapping,
-    area: usize,
-) -> Option<KeyId> {
+fn area_key(asset: AssetId, info: &ModelInfo, mapping: &Mapping, area: usize) -> Option<KeyId> {
     let index = mapping.hit_area_vocabulary(area)?;
     let name = Arc::clone(&info.hit_areas.get(area)?.name);
 
@@ -1046,4 +1067,3 @@ mod tests {
         assert!(live_receiver.try_recv().is_ok());
     }
 }
-
