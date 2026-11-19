@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 use iced::{Fill, Subscription, Task, Widget, keyboard, window};
 use iced_live2d::{
-    AssetOptions, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, Raw, live2d, look_at, raw,
+    AssetOptions, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions, Raw, live2d,
+    look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -97,14 +98,14 @@ impl App {
     fn new(path: std::path::PathBuf, look_at_mode: iced_live2d::LookAtMode) -> Self {
         // Scanning is the app's decision: this rig ships its motion files without
         // listing them, and only the app knows whether that folder is a loop set.
-        let asset = Live2dAsset::with_options(
+        let asset = Live2dAsset::new(
             path,
             AssetOptions {
                 texture_scale: 0.5,
                 scan_sidecars: true,
             },
         );
-        let model = Live2dModel::<Raw>::new(&asset);
+        let model = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
         model.set_look_at_mode(look_at_mode);
 
         Self {

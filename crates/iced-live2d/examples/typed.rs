@@ -24,7 +24,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, window};
 use iced_live2d::{
-    Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, PointerEvent, Vocabulary,
+    AssetOptions, Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions,
+    PointerEvent, Vocabulary,
     live2d, look_at,
 };
 
@@ -118,8 +119,8 @@ enum Message {
 
 impl App {
     fn new(path: PathBuf) -> Self {
-        let asset = Live2dAsset::from_path(path);
-        let model = Live2dModel::<Face>::new(&asset);
+        let asset = Live2dAsset::new(path, AssetOptions::default());
+        let model = Live2dModel::<Face>::new(&asset, ModelOptions::default());
 
         Self {
             model,

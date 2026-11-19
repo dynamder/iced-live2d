@@ -16,9 +16,9 @@
 //! - [`Live2dEvent`] — load outcome, problems, motion transitions, pointer input.
 //!
 //! ```text
-//! let asset = Live2dAsset::from_path("Hiyori.model3.json");
-//! let model = Live2dModel::<Face>::new(&asset);
-//! // ... in the host's view:
+//! let asset = Live2dAsset::new("Hiyori.model3.json", AssetOptions::default());
+//! let model = Live2dModel::<Face>::new(&asset, ModelOptions::default());
+//! // ... in the host's view, and the host decides what plays:
 //! live2d(&model)
 //!     .on_event(Message::Live2d)
 //!     .look_at(look_at::cursor)

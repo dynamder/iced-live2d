@@ -40,17 +40,17 @@ pub struct Live2dAsset {
 }
 
 impl Live2dAsset {
-    /// An asset to load from `path` with [`AssetOptions::default`].
+    /// An asset to load from `path`, with an explicit budget.
     ///
     /// `path` is the `.model3.json`; everything else is found from there. A path
     /// that does not exist is not rejected here — it fails on the first frame and
     /// is reported as a load failure.
-    pub fn from_path(path: impl Into<PathBuf>) -> Self {
-        Self::with_options(path, AssetOptions::default())
-    }
-
-    /// An asset with an explicit texture budget.
-    pub fn with_options(path: impl Into<PathBuf>, options: AssetOptions) -> Self {
+    ///
+    /// There is deliberately no constructor that invents the options: whether to
+    /// spend 592 MB of VRAM or 37, and whether to scan a folder for animation
+    /// files, is not something this crate can guess. Start from
+    /// [`AssetOptions::default`] and override what matters.
+    pub fn new(path: impl Into<PathBuf>, options: AssetOptions) -> Self {
         Self {
             id: AssetId::unique(),
             path: Arc::new(path.into()),
@@ -182,13 +182,12 @@ pub(crate) enum PointerInput {
 }
 
 impl<I: Interface> Live2dModel<I> {
-    /// An instance of `asset` with [`ModelOptions::default`].
-    pub fn new(asset: &Live2dAsset) -> Self {
-        Self::with_options(asset, ModelOptions::default())
-    }
-
-    /// An instance with an explicit GPU budget.
-    pub fn with_options(asset: &Live2dAsset, options: ModelOptions) -> Self {
+    /// An instance of `asset`, with an explicit GPU budget.
+    ///
+    /// The mask render target is per instance, so this is the one budget that is
+    /// not shared: start from [`ModelOptions::default`] and raise `mask_size` for a
+    /// rig whose packed mask contexts run out of atlas space.
+    pub fn new(asset: &Live2dAsset, options: ModelOptions) -> Self {
         Self {
             inner: Rc::new(Inner {
                 id: ModelId::unique(),
@@ -602,26 +601,26 @@ mod tests {
     use crate::raw::{Raw, RawMotion, RawParameter};
 
     fn asset() -> Live2dAsset {
-        Live2dAsset::from_path("model.model3.json")
+        Live2dAsset::new("model.model3.json", AssetOptions::default())
     }
 
     #[test]
     fn the_constructor_touches_no_files() {
-        let asset = Live2dAsset::from_path("nowhere/gone.model3.json");
+        let asset = Live2dAsset::new("nowhere/gone.model3.json", AssetOptions::default());
 
         assert_eq!(asset.path(), Path::new("nowhere/gone.model3.json"));
     }
 
     #[test]
     fn a_model_inherits_the_asset_identity_and_budget() {
-        let asset = Live2dAsset::with_options(
+        let asset = Live2dAsset::new(
             "model.model3.json",
             AssetOptions {
                 texture_scale: 0.25,
                 scan_sidecars: false,
             },
         );
-        let model = Live2dModel::<Raw>::new(&asset);
+        let model = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
 
         assert_eq!(model.asset(), asset.id());
         assert_eq!(model.path(), asset.path());
@@ -629,7 +628,7 @@ mod tests {
 
     #[test]
     fn commands_keep_their_order_and_are_drained_once() {
-        let model = Live2dModel::<Raw>::new(&asset());
+        let model = Live2dModel::<Raw>::new(&asset(), ModelOptions::default());
         let group = RawMotion::from_id(&crate::interface::KeyId {
             asset: model.asset(),
             index: 0,
@@ -646,7 +645,7 @@ mod tests {
 
     #[test]
     fn the_queue_drops_the_oldest_command_and_reports_it_once() {
-        let model = Live2dModel::<Raw>::new(&asset());
+        let model = Live2dModel::<Raw>::new(&asset(), ModelOptions::default());
         let group = RawMotion::from_id(&crate::interface::KeyId {
             asset: model.asset(),
             index: 0,
@@ -672,7 +671,7 @@ mod tests {
     #[test]
     fn a_key_from_another_asset_is_rejected_and_reported_once() {
         let own = asset();
-        let model = Live2dModel::<Raw>::new(&own);
+        let model = Live2dModel::<Raw>::new(&own, ModelOptions::default());
         let foreign = RawParameter::from_id(&crate::interface::KeyId {
             asset: AssetId::unique(),
             index: 0,
@@ -695,8 +694,8 @@ mod tests {
 
     #[test]
     fn a_key_from_the_same_asset_is_accepted() {
-        let asset = Live2dAsset::from_path("model.model3.json");
-        let model = Live2dModel::<Raw>::new(&asset);
+        let asset = Live2dAsset::new("model.model3.json", AssetOptions::default());
+        let model = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
         let own = RawParameter::from_id(&crate::interface::KeyId {
             asset: model.asset(),
             index: 0,
@@ -714,7 +713,7 @@ mod tests {
 
     #[test]
     fn pause_and_physics_are_readable_back() {
-        let model = Live2dModel::<Raw>::new(&asset());
+        let model = Live2dModel::<Raw>::new(&asset(), ModelOptions::default());
 
         model.pause();
         model.set_physics_enabled(false);
@@ -731,7 +730,7 @@ mod tests {
 
     #[test]
     fn the_last_look_at_value_wins() {
-        let model = Live2dModel::<Raw>::new(&asset());
+        let model = Live2dModel::<Raw>::new(&asset(), ModelOptions::default());
 
         model.look_at([0.2, 0.3]);
         model.look_at([-0.5, 0.75]);
@@ -741,14 +740,17 @@ mod tests {
 
     #[test]
     fn an_untouched_model_has_no_target() {
-        assert_eq!(Live2dModel::<Raw>::new(&asset()).inner.target(), None);
+        assert_eq!(
+            Live2dModel::<Raw>::new(&asset(), ModelOptions::default()).inner.target(),
+            None
+        );
     }
 
     #[test]
     fn models_get_distinct_ids_and_presences() {
         let asset = asset();
-        let first = Live2dModel::<Raw>::new(&asset);
-        let second = Live2dModel::<Raw>::new(&asset);
+        let first = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
+        let second = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
 
         assert_ne!(first.inner.id(), second.inner.id());
         assert_ne!(

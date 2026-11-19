@@ -299,17 +299,21 @@ is behind the component. There is no frame subscription to write and no iced
 plumbing to copy:
 
 ```rust
-use iced_live2d::{Live2dAsset, Live2dModel, Raw, live2d, look_at};
+use iced_live2d::{
+    AssetOptions, Live2dAsset, Live2dModel, ModelOptions, Raw, live2d, look_at,
+};
 
 struct App {
-    asset: Live2dAsset,     // one file, its textures, shared
     hiyori: Live2dModel<Raw>,
 }
 
 fn new() -> App {
-    let asset = Live2dAsset::from_path("Hiyori.model3.json");
-    let hiyori = Live2dModel::<Raw>::new(&asset);
-    App { asset, hiyori }
+    let asset = Live2dAsset::new(
+        "Hiyori.model3.json",
+        AssetOptions { texture_scale: 0.5, scan_sidecars: true },
+    );
+    let hiyori = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
+    App { hiyori }
 }
 
 fn view(app: &App) -> impl iced::Widget<Message> {
@@ -322,6 +326,12 @@ fn view(app: &App) -> impl iced::Widget<Message> {
 The asset/model split is what makes several instances cheap: they share the
 textures and the parsed model, and each keeps its own parameter values, playback
 position and physics state.
+
+Both constructors take their budget explicitly, and there is no variant that
+invents one: whether to spend 592 MB of VRAM on 4096px textures or 37 on
+half-size, and whether a folder of animation files is a loop set, are not things a
+component can guess. `AssetOptions::default()` and `ModelOptions::default()` are a
+starting point to override, not a hidden decision.
 
 ### The modelling: assets, models, views
 
@@ -351,7 +361,7 @@ impl Interface for Face {
     type Parameter = FaceParameter;
     // …Part, Motion, Expression, HitArea
 }
-let hiyori = Live2dModel::<Face>::new(&asset);
+let hiyori = Live2dModel::<Face>::new(&asset, ModelOptions::default());
 ```
 
 - **Validation happens once, at load, before a texel is uploaded.** A model that
@@ -360,7 +370,7 @@ let hiyori = Live2dModel::<Face>::new(&asset);
 - **Keys are typed.** A key can only be produced by the vocabulary that declares
   it, and `play_motion(FaceMotion::TapBody, 0)` cannot be called on a model whose
   interface has no `TapBody`.
-- **`Raw` is the escape hatch.** `Live2dModel::<Raw>::new(&asset)` takes the
+- **`Raw` is the escape hatch.** `Live2dModel::<Raw>::new(&asset, options)` takes the
   model's own `ModelInfo` as the vocabulary; keys come from `raw::parameters(&info)`
   and carry the asset they were minted from, so a key handed to a model of another
   asset is rejected and reported instead of landing on the same index.
@@ -405,7 +415,7 @@ a directory listing and then chosen from it at random.
 
 ### Events
 
-- **Loading is deferred and reported.** `Live2dAsset::from_path` does no IO; the
+- **Loading is deferred and reported.** `Live2dAsset::new` does no IO; the
   first frame that draws a model loads it, and the outcome arrives as
   `Live2dEvent::ModelLoaded { info }` or `ModelFailedToLoad { failure }`. A load
   that failed is not retried, and the widget keeps reserving its space.
