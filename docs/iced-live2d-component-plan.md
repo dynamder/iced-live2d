@@ -440,6 +440,7 @@ crates/iced-live2d/
 
 实测：`app/src/main.rs` 176 行（CLI 分发 + 事件打印 + 两个键，`cli.rs` 未动），依赖里不再有
 `live2d-render`；`--help` / `--list` / 未知参数（exit 2）行为不变；`--track viewer` 生效。
+（`--list` 与按名字查找后来被删除：`app` 现在只接受模型路径，见 README。）
 Hiyori 迁移前 `0.70 steps/帧、delta 均值 23.35 ms、26 个零长度帧`，迁移后 `1.00 steps/帧、16.66 ms、
 0 个零长度帧`——自驱动帧比原来的 `window::frames()` 订阅更稳。同一窗口、同一模型的前后截图取景一致
 （模型上下边与中心位置相同，姿势不同是因为帧不同）。代价：app 不再打印加载期的 rig 绑定表
