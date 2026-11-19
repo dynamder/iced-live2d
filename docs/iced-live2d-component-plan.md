@@ -450,6 +450,9 @@ Hiyori 迁移前 `0.70 steps/帧、delta 均值 23.35 ms、26 个零长度帧`�
 （官方 `CubismLookController` 有 Damping，我们暂缺，扩展点已留）、一个 `Live2dModel` 挂多个控件、
 wasm。
 
+落地后的完整缺口清单与证据见 [`component-gap-audit.md`](component-gap-audit.md)：它确认上述几项仍是缺口，
+并补上这轮没有列出的部分（播放语义、模型数据访问、渲染取景、性能与多实例）。
+
 ---
 
 ## 7. 质量约束（每步都按这个检查）
