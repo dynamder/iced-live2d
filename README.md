@@ -457,6 +457,12 @@ links straight into `Pipeline`. It is pinned by `rev`, and iced pins its own git
 dependencies by `rev` too, so builds are reproducible. When 0.15 ships, switch to the
 crates.io version — the glue should not need changes.
 
+## License
+
+MIT — see [LICENSE](LICENSE). The vendored `mocari` copy in `vendor/mocari` carries the
+same MIT licence from its authors, and the model files used for the captures are not
+part of the repository (see below).
+
 ## Model credits
 
 Every capture in this README is a render of **DeepSeek-chan（大肥鱼）**, a freely
