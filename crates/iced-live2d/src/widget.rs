@@ -61,7 +61,7 @@ pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Messa
 ///
 /// Only the wgpu renderer works: this delegates to iced's `shader` widget, which
 /// the tiny-skia backend cannot draw. Put it into the tree with `column![…]` or
-/// [`container`](iced::widget::container), which box it.
+/// [`container`](iced::widget::container::Container), which box it.
 ///
 /// The widget drives its own frames: while the model is not paused it asks for a
 /// redraw every animation [`STEP`] and advances the model by the time that

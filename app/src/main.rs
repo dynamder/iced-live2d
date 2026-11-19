@@ -69,8 +69,6 @@ fn main() -> iced::Result {
 }
 
 struct App {
-    /// Kept because the model only holds the asset's identity.
-    _asset: Live2dAsset,
     model: Live2dModel<Raw>,
     /// Filled in when the load event arrives; the key bindings need it to know
     /// what the model offers.
@@ -97,7 +95,6 @@ impl App {
         model.set_look_at_mode(look_at_mode);
 
         Self {
-            _asset: asset,
             model,
             info: None,
             next_group: 0,

@@ -50,9 +50,6 @@ fn main() -> iced::Result {
 }
 
 struct Slot {
-    /// Kept because the model holds the asset's identity, not its file: the asset
-    /// itself can be dropped once every model of it is built.
-    _asset: Live2dAsset,
     model: Live2dModel<Raw>,
     /// Filled in when the load event arrives; the key bindings need it to know
     /// what the model offers.
@@ -82,7 +79,6 @@ impl App {
                 let model = Live2dModel::<Raw>::new(&asset);
 
                 Some(Slot {
-                    _asset: asset,
                     model,
                     info: None,
                     next_group: 0,

@@ -102,7 +102,6 @@ fn main() -> iced::Result {
 }
 
 struct App {
-    _asset: Live2dAsset,
     model: Live2dModel<Face>,
     info: Option<Arc<ModelInfo>>,
     mouth_open: bool,
@@ -124,7 +123,6 @@ impl App {
         model.set_idle(Idle::Group(FaceMotion::Idle));
 
         Self {
-            _asset: asset,
             model,
             info: None,
             mouth_open: false,
