@@ -734,10 +734,9 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<Message>> {
-        let now = match event {
-            iced::Event::Window(window::Event::RedrawRequested(at)) => *at,
-            _ => Instant::now(),
-        };
+        // Gesture timing uses one clock only: a redraw's timestamp is the instant it
+        // was asked for, which is not the instant an event arrived.
+        let now = Instant::now();
 
         let interacting = self.queue_input(state, event, bounds, cursor);
 
