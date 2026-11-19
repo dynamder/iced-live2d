@@ -302,7 +302,7 @@ Cubism 的贴图是 4096–8192px，桌面宠物只画几百像素，等于 4–
 
 ## 四、真正会让你卡住的坑（按实测概率重排）
 
-1. **模型数据里的脏值（已踩，必须打补丁）**：本模型有 1 个 drawable 的 mask 列表是 `[-1]`（导出器用它当"无遮罩"哨兵）。mocari 直接 `usize::try_from(-1)` → 报 `invalid mask drawable index -1`，整个模型加载失败。修法：在 `DrawableInfo::from_mesh` 里过滤负值。**见 `patches/mocari-0.4.1-negative-masks.patch`**；另一个必打的补丁是 mipmap（见坑 3）。`scripts/vendor-mocari.ps1` 会把 `patches/` 下所有补丁按文件名顺序加到 `.refs/mocari`。
+1. **模型数据里的脏值（已踩，必须打补丁）**：本模型有 1 个 drawable 的 mask 列表是 `[-1]`（导出器用它当"无遮罩"哨兵）。mocari 直接 `usize::try_from(-1)` → 报 `invalid mask drawable index -1`，整个模型加载失败。修法：在 `DrawableInfo::from_mesh` 里过滤负值。**见 `patches/mocari-0.4.1-negative-masks.patch`**；另一个必打的补丁是 mipmap（见坑 3）。`scripts/vendor-mocari.ps1` 会把 `patches/` 下所有补丁按文件名顺序加到 `vendor/mocari`。
 2. **取景坐标系搞错（已踩）**：用"所有 drawable 的包围盒"去居中会**明显偏掉**——模型有 715 个 drawable，其中大量是隐藏的替换件（钢盆、脱鞋、替换手、替换体型），包围盒被它们拉歪。正确做法是用 `.moc3` 的 **canvas info**（`runtime.canvas()`：`pixels_per_unit` / `origin` / `width` / `height`），这才是美术设定的画面。注意 `reverse_y_coordinate` 为真时要退回包围盒。
 3. **`model3.json` 不声明动作（已踩）**：这个 VTuber 模型的动作/表情文件都在 `Animation/`、`Exp3/` 子目录里，`FileReferences` 里**一个都没注册**。`Live2dScene::load` 会在 `model3.json` 为空时扫描模型目录（深度 2）兜底，并把 `IDLE*` 排到最前面。
 4. **性能（实测数字）**：715 个 drawable、5 张 4096² 级别贴图、1024² mask RT、640² 逻辑窗口（1.5 倍缩放 → 960² 渲染）。
@@ -374,9 +374,9 @@ crates/iced-live2d/            可复用组件：Program + Primitive + Pipeline 
   src/pipeline.rs              Live2dPipeline（按模型 id 建槽位）+ Live2dPrimitive
   src/model.rs                 Live2dModel：设置、look-at、命令队列、RAII 令牌
   src/event.rs / src/look_at.rs 事件载荷 / LookAtSource + look_at::cursor
-.refs/mocari                   mocari 0.4.1 + 四个补丁（Cargo.toml 里 [patch.crates-io] 指过来）
+vendor/mocari                   mocari 0.4.1 + 四个补丁（Cargo.toml 的 workspace 依赖指过来）
 patches/                       负 mask 索引 + mipmap + 物理链路三个修复的 patch 文件
-scripts/vendor-mocari.ps1      一键重建 .refs/mocari
+scripts/vendor-mocari.ps1      一键重建 vendor/mocari
 scripts/shot.ps1               截图（DPI 感知，否则只截到左上角）
 scripts/shot-window.ps1        按标题前缀截任意窗口（用来截官方 Viewer 做对比）
 ```

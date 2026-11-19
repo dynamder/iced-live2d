@@ -284,8 +284,8 @@ app/                           the demo app, now a thin host of the component
   src/main.rs                  CLI dispatch, key bindings, event printing
   src/cli.rs                   --model / --track / --list
 patches/                       the four mocari fixes, as patch files
-scripts/vendor-mocari.ps1      rebuilds .refs/mocari from the registry + patches
-scripts/mocari-patch.py        regenerates a patch body from .refs/mocari (dev tool)
+scripts/vendor-mocari.ps1      rebuilds vendor/mocari from the registry + patches
+scripts/mocari-patch.py        regenerates a patch body from vendor/mocari (dev tool)
 scripts/shot.ps1               DPI-aware window screenshot (dev tool)
 scripts/shot-window.ps1        screenshot any window by title prefix (dev tool)
 docs/                          feasibility write-up, plan, audit, design, defect records
@@ -546,9 +546,10 @@ Not there yet, deliberately: keyboard and focus, pinch, pen pressure, view trans
 
 ## The four patches
 
-All four live in `patches/` and are applied to a vendored copy at `.refs/mocari`
-(wired up through `[patch.crates-io]` in `Cargo.toml`); `scripts/vendor-mocari.ps1`
-rebuilds that copy from the cargo registry.
+All four live in `patches/` and are applied to a vendored copy at `vendor/mocari`,
+which is committed so a fresh clone builds; the workspace dependency in
+`Cargo.toml` points straight at it, and `scripts/vendor-mocari.ps1 -Force`
+rebuilds it from the cargo registry.
 
 **1. Negative mask sentinel.** `mocari 0.4.1` cannot open this model: one of its
 715 drawables carries `masks == [-1]`, a sentinel some exporters write for "not

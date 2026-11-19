@@ -10,7 +10,7 @@
   [`rust-iced-live2d-plan.md`](rust-iced-live2d-plan.md) 与
   [`mocari-upstream-report.md`](mocari-upstream-report.md)。
 - mocari 继续 vendor：
-  `.refs/mocari` = crates.io 0.4.1 + `patches/mocari-0.4.1-*.patch`，`scripts/vendor-mocari.ps1`
+  `vendor/mocari` = crates.io 0.4.1 + `patches/mocari-0.4.1-*.patch`，`scripts/vendor-mocari.ps1`
   重建。本轮不改 vendoring 方式。
 - 目标：把"一个窗口里画一个 Live2D 模型"做成**可复用的 iced 组件**，用法与 iced 原生控件同构；
   现有 `app` 退化为示例宿主。

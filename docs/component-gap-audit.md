@@ -17,7 +17,7 @@ README 的 "Using the component"。讨论结论与实施步骤另起文档，
 本文用来对照「实现是否真的补上了某条能力」。
 
 - 审计对象：`ce8bdae` 工作树（`crates/iced-live2d`、`crates/live2d-render`、`app`）
-- 对照物：`.refs/mocari`（0.4.1 + 本仓库补丁）、`.refs/cubism-framework`（官方 C++ 框架）、
+- 对照物：`vendor/mocari`（0.4.1 + 本仓库补丁）、`.refs/cubism-framework`（官方 C++ 框架）、
   `.refs/iced`（`shader` widget 与 `Program` trait）
 - 方法：逐项读公开面 → 找底层是否已有对应能力 → 用语料实测确认缺口在真实模型上成立
 - 一条判据：**「底层有、渲染层没接、组件没暴露」算接线；「谁都没有」才算造轮子**
@@ -130,7 +130,7 @@ README 的 "Using the component"。讨论结论与实施步骤另起文档，
 | 动作组不可达 | `play_motion(i)` 只在 `Idle` 组（无 Idle 则字母序第一组）取下标，`TapBody` 等组永远播不到 | `scene.rs` 的 `preferred_motions` |
 | 索引与计数不一致 | `motion_count()` 跨组求和，`play_motion` 只认一组 | `scene.rs` 的 `motion_count` / `play_motion` |
 | 无优先级/队列/抢占 | 只有一个 `Option<MotionPlayer>`，后一次点播直接顶掉前一次 | `scene.rs` 的 `simulate` |
-| 无 crossfade | mocari 的 `MotionPlayer::apply` 把动作级 fade 硬写成 `0.0`，文件里声明的 `FadeInTime`/`FadeOutTime` 被丢弃 | `.refs/mocari/src/motion.rs` |
+| 无 crossfade | mocari 的 `MotionPlayer::apply` 把动作级 fade 硬写成 `0.0`，文件里声明的 `FadeInTime`/`FadeOutTime` 被丢弃 | `vendor/mocari/src/motion.rs` |
 | 无 loop 覆盖 / seek / 速度 | 只能跟随文件的 `Loop` 字段 | `MotionPlayer::new/new_once/with_looping` |
 | 自动接续与宿主点播竞态 | 单次动作结束的同一 step 内就自动播下一个，事件晚一帧才到宿主 | `scene.rs` 的 `simulate` |
 | 表情只能按索引 | 无名字、无清除（渲染层有 `clear_expressions`，组件没暴露）、无当前表情、无权重 | `model.rs` 的命令面 |

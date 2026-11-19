@@ -1,14 +1,13 @@
-# Rebuilds .refs/mocari: upstream mocari 0.4.1 plus every patches/mocari-<version>-*.patch.
+# Rebuilds vendor/mocari: upstream mocari 0.4.1 plus every patches/mocari-<version>-*.patch.
 #
-# The workspace `[patch.crates-io]` in Cargo.toml points at .refs/mocari, so a
-# fresh checkout has to run this once before `cargo build` can resolve mocari.
+# The crate is committed, so a fresh clone builds without running this. Run it
+# after bumping -Version, or to prove that the committed copy is exactly the
+# registry release plus `patches/`; the only expected diff is the patches.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vendor-mocari.ps1 [-Version 0.4.1] [-Force]
 #
-# Why a vendored crate instead of a fork on a git remote: the fixes are small and
-# the project should not grow a hard dependency on somebody's fork. The patches
-# are applied in file-name order, so their names must stay sortable.
-# See README.md "The two patches" for what each one fixes.
+# The patches are applied in file-name order, so their names must stay sortable.
+# See README.md "The four patches" for what each one fixes.
 
 param(
     [string]$Version = "0.4.1",
@@ -17,11 +16,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$dest = Join-Path $root ".refs/mocari"
+$dest = Join-Path $root "vendor/mocari"
 $patchDir = Join-Path $root "patches"
 
 if ((Test-Path $dest) -and -not $Force) {
-    Write-Output "$dest already exists (pass -Force to rebuild)"
+    Write-Output "$dest is committed - pass -Force to rebuild it from the registry"
     exit 0
 }
 
@@ -47,11 +46,10 @@ Copy-Item -Recurse $source $dest
 # Files under the registry carry the read-only attribute; clear it before editing.
 Get-ChildItem $dest -Recurse -File | ForEach-Object { $_.IsReadOnly = $false }
 
-Push-Location $dest
+Push-Location $root
 try {
-    git init --quiet .
     Get-ChildItem $patchDir -Filter "mocari-$Version-*.patch" | Sort-Object Name | ForEach-Object {
-        git apply $_.FullName
+        git apply -p1 --directory=vendor/mocari $_.FullName
         if ($LASTEXITCODE -ne 0) { throw "git apply failed for $($_.Name)" }
         Write-Output "patched: $($_.Name)"
     }

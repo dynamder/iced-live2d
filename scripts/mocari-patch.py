@@ -1,7 +1,7 @@
 """Reproduces the diff body of a `patches/mocari-<version>-*.patch` file.
 
 The prose header of a patch is hand-written and stays; only the unified diff
-between the crates.io source and the vendored copy at `.refs/mocari` is
+between the crates.io source and the committed copy at `vendor/mocari` is
 generated. Append the output below a finished header:
 
     python scripts/mocari-patch.py src/render/wgpu/buffers.rs src/render/wgpu/draw.rs
@@ -13,7 +13,7 @@ import pathlib
 import sys
 
 VERSION = "0.4.1"
-VENDORED = pathlib.Path(".refs/mocari")
+VENDORED = pathlib.Path("vendor/mocari")
 
 
 def registry_source(version: str) -> pathlib.Path:

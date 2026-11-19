@@ -13,7 +13,7 @@
 **状态：四个问题都已定位到具体代码行，都打了补丁并在真实模型上验证过。** 这份文档是给上游开
 issue 用的素材：现象、根因（带代码与行号）、上游对照实现、修法、实测数据、复现方式。
 
-- 版本：`mocari 0.4.1`（crates.io 原样，`.refs/mocari` = registry 副本 + 本仓库的补丁）
+- 版本：`mocari 0.4.1`（crates.io 原样，`vendor/mocari` = registry 副本 + 本仓库的补丁）
 - 平台：Windows 11 · NVIDIA RTX 5060 Laptop · `wgpu 30.0.2` · iced `0.15.0-dev`（`e5c350f`）
 - 宿主：iced 的 `shader` widget（自定义 pipeline），渲染目标 `Bgra8Unorm`，离屏验证用 `Rgba8Unorm`
 - 模型：

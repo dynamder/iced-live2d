@@ -3,7 +3,7 @@
 **状态：已定位到具体代码行，已打补丁并验证。** 补丁见
 [`../patches/mocari-0.4.1-chained-physics.patch`](../patches/mocari-0.4.1-chained-physics.patch)。
 
-- 版本：`mocari 0.4.1`（`.refs/mocari`，另含本仓库的负遮罩、mipmap 两个补丁，与本问题无关）
+- 版本：`mocari 0.4.1`（`vendor/mocari`，另含本仓库的负遮罩、mipmap 两个补丁，与本问题无关）
 - 涉及文件：`src/core/physics.rs`（`PhysicsRuntime::evaluate`、`evaluate_setting`）
 - 对照实现：`CubismNativeFramework/src/Physics/CubismPhysics.cpp`
   （`git clone --depth 1 https://github.com/Live2D/CubismNativeFramework .refs/cubism-framework`）

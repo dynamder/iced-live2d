@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/live2d-render", "crates/iced-live2d", "crates/iced-live2d-macros", "app"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,10 +11,7 @@ publish = false
 
 [workspace.dependencies]
 wgpu = "30"
-mocari = "0.4.1"
-
-# mocari 0.4.1 cannot draw this rig unpatched. `.refs/mocari` is upstream 0.4.1
-# plus every `patches/mocari-0.4.1-*.patch`; ./scripts/vendor-mocari.ps1 rebuilds
-# it from the cargo registry.
-[patch.crates-io]
-mocari = { path = ".refs/mocari" }
+# mocari 0.4.1 cannot draw this rig unpatched: `vendor/mocari` is the crates.io
+# release plus every `patches/mocari-0.4.1-*.patch`. It is committed so a fresh
+# clone resolves without a setup step; ./scripts/vendor-mocari.ps1 refreshes it.
+mocari = { path = "vendor/mocari" }
