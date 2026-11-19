@@ -9,10 +9,9 @@
 # default - so the chained half of the rig stays still.
 #
 # Reference implementation, CubismPhysics::Evaluate (CubismNativeFramework,
-# src/Physics/CubismPhysics.cpp): each output is written into the cache, which is
-# what lets a later setting see it in the same substep.
-#
-#     UpdateOutputParameterValue(&_parameterCaches[dest], min, max, outputValue, &output);
+# src/Physics/CubismPhysics.cpp): each output is written into the parameter cache
+# under its destination index, which is what lets a later setting read it in the
+# same substep.
 #
 # mocari's evaluate_setting rebinds `value` to the cache slot and then passes
 # `*value` as the computed result, so the write is `cache = blend(cache, cache)`:
