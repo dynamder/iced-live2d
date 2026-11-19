@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Try it on a model with other conventions
-//! (`.refs/cubism-web-samples/Samples/Resources/Wanko/Wanko.model3.json`) to see
+//! (`.refs/models/Wanko/Wanko.model3.json`) to see
 //! the rejection. Keys: `M` mouth, `C` cheeks, `H` arm, `T` play `TapBody`,
 //! `S` stop, `R` restart `Idle`; clicking the `Body` hit area plays `TapBody`.
 

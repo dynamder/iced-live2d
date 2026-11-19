@@ -10,10 +10,22 @@ is fetched by hand.
 
 ## Where the models come from
 
-`Live2D/CubismWebSamples` ships the official sample characters:
+Every rig is a directory under `.refs/models/`, named after the model, holding the
+`.model3.json` and everything it references:
+
+```
+.refs/models/
+  Haru/  Hiyori/  Mao/  Mark/  Natori/  Ren/  Rice/  Wanko/
+  大肥鱼/
+```
+
+The eight official characters ship with `Live2D/CubismWebSamples`, under
+`Samples/Resources/<name>`; clone it anywhere and copy the character directories into
+`.refs/models/`:
 
 ```bash
-git clone --depth 1 https://github.com/Live2D/CubismWebSamples .refs/cubism-web-samples
+git clone --depth 1 https://github.com/Live2D/CubismWebSamples /tmp/cubism-samples
+cp -r /tmp/cubism-samples/Samples/Resources/{Haru,Hiyori,Mao,Mark,Natori,Ren,Rice,Wanko} .refs/models/
 ```
 
 Terms: the models are part of the Live2D Cubism Components, distributed under the
@@ -59,7 +71,7 @@ cargo run -p live2d-render --example offscreen -- "<model>.model3.json" out.png 
 | Ren | 73 | `Param*` direct | yes | no | 3 | 5 | few motions, no pose |
 | Rice | 96 | `Param*` direct, **no `ParamAngleY`** | yes | no | 4 | 0 | a rig that is missing a slot on purpose |
 | Wanko | 25 | `PARAM_ANGLE_X` style | yes | no | 12 | 0 | old upper-case/underscore naming, no eye-ball parameters |
-| DeepSeek 大肥鱼 | 509 | `AngleX` / `PositionX` (physics inputs) | yes (131 settings) | yes | 8 | 23 | the VTuber convention: look-at inputs feed physics outputs |
+| 大肥鱼 | 509 | `AngleX` / `PositionX` (physics inputs) | yes (131 settings) | yes | 8 | 23 | the VTuber convention: look-at inputs feed physics outputs |
 
 ## What the corpus already caught
 
