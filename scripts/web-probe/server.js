@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const repo = path.resolve(__dirname, '..', '..');
-const sdk = process.env.CUBISM_SDK ?? path.join(repo, '.tmp-web', 'sdk', 'CubismSdkForWeb-5-r.4');
+const sdk = process.env.CUBISM_SDK ?? path.join(repo, '.refs', 'cubism-web-sdk', 'CubismSdkForWeb-5-r.4');
 const port = Number(process.argv[2] ?? 8731);
 
 const routes = [

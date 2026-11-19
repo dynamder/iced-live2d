@@ -123,19 +123,29 @@ The rig looked "lower resolution in the webview" until `canvas.width =
 
 ## Reproducing
 
-```powershell
-# official SDK (not vendored, license): unpack to .refs/cubism-web-sdk
-node -e "require('https').get('https://cubism.live2d.com/sdk-web/bin/CubismSdkForWeb-5-r.4.zip',r=>r.pipe(require('fs').createWriteStream('.refs/cubism-web-sdk.zip')))"
-powershell -NoProfile -Command "Expand-Archive .refs/cubism-web-sdk.zip .refs/cubism-web-sdk"
+The probe page is TypeScript against the official SDK framework sources, so any
+Node and esbuild build it — no platform-specific wrapper in the way:
 
-# probe page: esbuild on PATH + the SDK framework sources (-Sdk / -Esbuild override)
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/web-probe/build.ps1
+```bash
+# official SDK (not vendored, licence-gated): unpack it somewhere ignored
+curl -LO https://cubism.live2d.com/sdk-web/bin/CubismSdkForWeb-5-r.4.zip
+unzip CubismSdkForWeb-5-r.4.zip -d .refs/cubism-web-sdk
 
-# one case per run; -Shot writes a window capture
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory-probe.ps1 -Kind web
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory-probe.ps1 -Kind blank
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/memory-probe.ps1 -Kind native -Model Hiyori
+# bundle the probe against those framework sources
+SDK=.refs/cubism-web-sdk/CubismSdkForWeb-5-r.4
+npx esbuild scripts/web-probe/main.ts --bundle --format=esm --target=es2022 \
+  --alias:@framework="$SDK/Framework/src" --outfile=scripts/web-probe/main.js
+
+# serve the page; ?dir= tells it where the model is
+node scripts/web-probe/server.js 8731
 ```
+
+The sampling itself was a throwaway script written for this one question and is not
+part of the repository. Each case is one process tree — the native app, or a
+Chromium `--app` window showing the probe page or a blank page — sampled for the
+three quantities in the tables after the renderer settles. Sample it the same way
+with whatever the OS offers; the columns above are Windows' private working set,
+working set and commit.
 
 The rig needs the mask fix to render at all:
 
