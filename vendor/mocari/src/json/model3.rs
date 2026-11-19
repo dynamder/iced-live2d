@@ -7,7 +7,7 @@ use crate::{Error, Result};
 const FORMAT: &str = "model3.json";
 const SUPPORTED_VERSION: u32 = 3;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 /// Parsed Cubism `model3.json` data.
 ///
 /// The model file is the manifest for a Live2D model folder. It points to the
@@ -94,7 +94,7 @@ impl Model3 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 struct RawModel3 {
     #[serde(rename = "Version")]
     version: u32,
@@ -106,7 +106,7 @@ struct RawModel3 {
     hit_areas: Vec<HitArea>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 struct FileReferences {
     #[serde(rename = "Moc")]
     moc: String,
@@ -124,17 +124,37 @@ struct FileReferences {
     expressions: Vec<ExpressionReference>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 /// Reference to a motion file from `model3.json`.
+///
+/// A reference may also carry the motion's fade times. Those override the ones in
+/// the motion file itself, which is how most rigs ship them; `None` means the model
+/// file says nothing and the motion file decides.
 pub struct MotionReference {
     #[serde(rename = "File")]
     file: String,
+    #[serde(rename = "FadeInTime", default)]
+    fade_in_time: Option<f32>,
+    #[serde(rename = "FadeOutTime", default)]
+    fade_out_time: Option<f32>,
 }
 
 impl MotionReference {
     /// Returns the motion file path relative to the model file.
     pub fn file(&self) -> &str {
         &self.file
+    }
+
+    /// Returns the fade-in this reference declares, in seconds.
+    ///
+    /// A negative value means "not set", as in the Cubism SDK.
+    pub fn fade_in_time(&self) -> Option<f32> {
+        self.fade_in_time.filter(|seconds| *seconds >= 0.0)
+    }
+
+    /// Returns the fade-out this reference declares, in seconds.
+    pub fn fade_out_time(&self) -> Option<f32> {
+        self.fade_out_time.filter(|seconds| *seconds >= 0.0)
     }
 }
 
@@ -205,5 +225,46 @@ impl HitArea {
     /// Returns the user-facing hit area name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(motions: &str) -> Model3 {
+        let source = format!(
+            r#"{{"Version": 3, "FileReferences": {{"Moc": "m.moc3", "Textures": ["t.png"], "Motions": {motions}}}}}"#
+        );
+
+        Model3::from_json_str(&source).expect("a valid model file")
+    }
+
+    #[test]
+    fn a_motion_reference_carries_its_fade_times() {
+        let model = model(
+            r#"{"Idle": [{"File": "a.motion3.json", "FadeInTime": 0.5, "FadeOutTime": 0.25}]}"#,
+        );
+        let reference = &model.motions()["Idle"][0];
+
+        assert_eq!(reference.fade_in_time(), Some(0.5));
+        assert_eq!(reference.fade_out_time(), Some(0.25));
+    }
+
+    #[test]
+    fn a_reference_without_fades_says_nothing() {
+        let model = model(r#"{"Idle": [{"File": "a.motion3.json"}]}"#);
+        let reference = &model.motions()["Idle"][0];
+
+        assert_eq!(reference.fade_in_time(), None);
+        assert_eq!(reference.fade_out_time(), None);
+    }
+
+    #[test]
+    fn a_negative_fade_means_unset() {
+        let model = model(r#"{"Idle": [{"File": "a.motion3.json", "FadeInTime": -1.0}]}"#);
+        let reference = &model.motions()["Idle"][0];
+
+        assert_eq!(reference.fade_in_time(), None);
     }
 }

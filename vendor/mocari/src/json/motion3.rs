@@ -67,6 +67,10 @@ pub struct MotionMeta {
     fps: f32,
     #[serde(rename = "Loop")]
     loop_motion: bool,
+    #[serde(rename = "FadeInTime", default)]
+    fade_in_time: Option<f32>,
+    #[serde(rename = "FadeOutTime", default)]
+    fade_out_time: Option<f32>,
     #[serde(rename = "AreBeziersRestricted", default)]
     are_beziers_restricted: bool,
     #[serde(rename = "CurveCount", default)]
@@ -95,6 +99,20 @@ impl MotionMeta {
     /// Returns whether the motion should loop.
     pub fn is_looping(&self) -> bool {
         self.loop_motion
+    }
+
+    /// Returns the fade-in the motion declares, in seconds.
+    ///
+    /// `None` when the file says nothing, which is the common case: the values
+    /// usually live in the `model3.json` motion reference instead. A negative value
+    /// means the same, as in the Cubism SDK.
+    pub fn fade_in_time(&self) -> Option<f32> {
+        self.fade_in_time.filter(|seconds| *seconds >= 0.0)
+    }
+
+    /// Returns the fade-out the motion declares, in seconds.
+    pub fn fade_out_time(&self) -> Option<f32> {
+        self.fade_out_time.filter(|seconds| *seconds >= 0.0)
     }
 
     /// Returns whether Bezier control points use restricted Cubism semantics.
@@ -263,7 +281,7 @@ pub fn parameter_curve_fade_weight(
     let curve_fade_out_seconds = curve_fade_out_seconds.filter(|seconds| *seconds >= 0.0);
 
     if curve_fade_in_seconds.is_none() && curve_fade_out_seconds.is_none() {
-        return motion_weight;
+        return motion_weight * motion_fade_in * motion_fade_out;
     }
 
     let fade_in = match curve_fade_in_seconds {
@@ -606,5 +624,32 @@ fn invalid_segments(message: impl Into<String>) -> Error {
     Error::InvalidJson {
         format: FORMAT,
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_curve_without_its_own_fade_uses_the_motion_fade() {
+        let weight = parameter_curve_fade_weight(1.0, 0.25, 1.0, None, None, 0.0, 0.0, 10.0);
+
+        assert_eq!(weight, 0.25);
+    }
+
+    #[test]
+    fn a_curve_with_its_own_fade_ignores_the_motion_one() {
+        let weight =
+            parameter_curve_fade_weight(1.0, 0.0, 0.0, Some(0.0), Some(0.0), 0.0, 0.0, 10.0);
+
+        assert_eq!(weight, 1.0);
+    }
+
+    #[test]
+    fn a_player_weight_scales_the_motion_fade() {
+        let weight = parameter_curve_fade_weight(0.5, 0.5, 1.0, None, None, 0.0, 0.0, 10.0);
+
+        assert_eq!(weight, 0.25);
     }
 }
