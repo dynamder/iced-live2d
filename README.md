@@ -27,7 +27,7 @@ Cubism Core binary, no C++ toolchain, no engine.
 | Parameter / part overrides, replayed every step | ✅ `M` / `C` / `H` |
 | Hit areas, hover/press/drag/wheel events | ✅ |
 | Headless offscreen render to PNG | ✅ `examples/offscreen.rs` |
-| Frame rate (release, 715 drawables) | ✅ ~50 fps, CPU-bound |
+| Frame rate (release, 715 drawables) | ✅ 60 fps pinned: deform 2.5 ms + upload 0.9 ms per frame |
 | Desktop-pet shell (transparent / on-top / click-through / tray) | ❌ not started |
 | Breathing / eye blink / lip-sync | ❌ not started |
 
@@ -536,12 +536,13 @@ this is not a project problem.
 - [`docs/iced-live2d-component-plan.md`](docs/iced-live2d-component-plan.md) —
   the component extraction: terminology, API contract, rejected alternatives,
   step-by-step acceptance criteria
-- [`docs/component-gap-audit.md`](docs/component-gap-audit.md) — what the component
-  exposes today, what is missing (interaction, data access, playback semantics,
-  rendering, lifetime), and which gaps are wiring versus new work
-- [`docs/component-design.md`](docs/component-design.md) — the settled replacement
-  design: immutable assets, interface vocabularies, the `Raw` escape hatch,
-  load-time validation, and the implementation order
+- [`docs/component-gap-audit.md`](docs/component-gap-audit.md) — the pre-refactor
+  audit: what the component exposed then, what was missing (interaction, data
+  access, playback semantics, rendering, lifetime), and which gaps were wiring
+  versus new work
+- [`docs/component-design.md`](docs/component-design.md) — the settled design and
+  its landing record: immutable assets, interface vocabularies, the `Raw` escape
+  hatch, load-time validation, and the evidence each step landed with
 - [`docs/test-models.md`](docs/test-models.md) — the model corpus, where each
   model's terms of use live, and what each rig exercises
 - [`docs/mocari-chained-physics.md`](docs/mocari-chained-physics.md) — confirmed

@@ -11,7 +11,9 @@
 > `on_event` is not set, and a motion index that is validated against every group
 > while it is resolved inside one group.
 
-**状态：只记录现状、缺口与已核实的证据，不含方案定稿。** 讨论结论与实施步骤另起文档，
+**状态：历史记录。** 本文记的是重构前的现状与缺口；它们已按
+[`component-design.md`](component-design.md) 在 `29d9d9d` 落地，读「现在能做什么」请直接看
+README 的 "Using the component"。讨论结论与实施步骤另起文档，
 本文用来对照「实现是否真的补上了某条能力」。
 
 - 审计对象：`ce8bdae` 工作树（`crates/iced-live2d`、`crates/live2d-render`、`app`）
