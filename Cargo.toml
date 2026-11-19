@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/live2d-render", "crates/iced-live2d", "app"]
+members = ["crates/live2d-render", "crates/iced-live2d", "crates/iced-live2d-macros", "app"]
 
 [workspace.package]
 version = "0.1.0"

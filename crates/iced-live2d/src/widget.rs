@@ -1,7 +1,9 @@
 //! The widget.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -12,15 +14,18 @@ use iced::widget::shader;
 use iced::{Length, Rectangle, mouse, window};
 use live2d_render::STEP;
 
-use crate::event::Live2dEvent;
+use crate::event::{Live2dEvent, PointerEvent, Problem};
+use crate::interface::{Interface, KeyId, Vocabulary};
 use crate::look_at::LookAtSource;
-use crate::model::Live2dModel;
-use crate::pipeline::Live2dPrimitive;
+use crate::model::{Command, Idle, Live2dModel, PointerInput, Presence};
+use crate::pipeline::{
+    FrameInputs, IdleInput, Live2dPrimitive, PipelineEvent, PointerEventKind, ViewId,
+};
 
 /// How much of the widget the model's bounds fill by default.
 ///
-/// The sample models were framed at 1.85 out of the 2.0 NDC range, so this is the
-/// framing they were verified against; `.fill(1.0)` touches the edges.
+/// The sample models were framed at 1.85 out of the 2.0 clip-space range, so this
+/// is the framing they were verified against; `.fill(1.0)` touches the edges.
 const DEFAULT_FILL: f32 = 0.925;
 
 /// How far ahead of the current frame to ask for the next one.
@@ -30,6 +35,9 @@ const DEFAULT_FILL: f32 = 0.925;
 /// gets pushed to the frame after it and the model runs at half rate. Half a
 /// period lands inside the next refresh, whatever the refresh rate is.
 const REDRAW_LEAD: Duration = Duration::from_micros(STEP.as_micros() as u64 / 2);
+
+/// Pixels a scroll notch is assumed to carry, when the platform reports pixels.
+const PIXELS_PER_LINE: f32 = 50.0;
 
 /// Starts a model widget.
 ///
@@ -42,8 +50,10 @@ const REDRAW_LEAD: Duration = Duration::from_micros(STEP.as_micros() as u64 / 2)
 /// ```
 ///
 /// The widget borrows the model, so the model has to outlive the UI tree — keep
-/// it in the host's state.
-pub fn live2d<Message>(model: &Live2dModel) -> Live2d<'_, Message> {
+/// it in the host's state. Two widgets may draw one model: both receive its
+/// events, each frames it on its own, and each reports the pointer in its own
+/// space.
+pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Message, I> {
     Live2d::new(model)
 }
 
@@ -58,18 +68,18 @@ pub fn live2d<Message>(model: &Live2dModel) -> Live2d<'_, Message> {
 /// actually passed. A host must therefore **not** also subscribe to
 /// [`window::frames`] — `window::RedrawRequest` holds a single request and the
 /// last writer wins, so the two would fight over the frame rate.
-pub struct Live2d<'a, Message> {
-    model: &'a Live2dModel,
-    on_event: Option<Rc<dyn Fn(Live2dEvent) -> Message + 'a>>,
+pub struct Live2d<'a, Message, I: Interface> {
+    model: &'a Live2dModel<I>,
+    on_event: Option<Rc<dyn Fn(Live2dEvent<I>) -> Message + 'a>>,
     look_at: Option<LookAtSource>,
     fill: f32,
     width: Length,
     height: Length,
 }
 
-impl<'a, Message> Live2d<'a, Message> {
+impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
     /// A widget for `model`, filling its container.
-    pub fn new(model: &'a Live2dModel) -> Self {
+    pub fn new(model: &'a Live2dModel<I>) -> Self {
         Self {
             model,
             on_event: None,
@@ -83,9 +93,12 @@ impl<'a, Message> Live2d<'a, Message> {
     /// Sends a [`Live2dEvent`] to the host as `Message`.
     ///
     /// Without this, events are dropped: the widget still draws the model, but
-    /// load failures and finished motions go nowhere. Events arrive one frame
-    /// after the frame that produced them.
-    pub fn on_event(mut self, on_event: impl Fn(Live2dEvent) -> Message + 'a) -> Self {
+    /// load failures, pointer events and finished motions go nowhere, and the
+    /// render layer never allocates a channel for them.
+    ///
+    /// Events arrive one frame after the frame that produced them, and at most one
+    /// per frame per widget; a burst is queued, not lost.
+    pub fn on_event(mut self, on_event: impl Fn(Live2dEvent<I>) -> Message + 'a) -> Self {
         self.on_event = Some(Rc::new(on_event));
         self
     }
@@ -94,9 +107,9 @@ impl<'a, Message> Live2d<'a, Message> {
     ///
     /// Off by default — pass [`look_at::cursor`](crate::look_at::cursor) for the
     /// usual behaviour, or a function of your own. Once a source is set it owns
-    /// the gaze: while it returns a target that target wins, and while it returns
-    /// `None` (the cursor is elsewhere) the model looks at the point set with
-    /// [`Live2dModel::look_at`], or straight ahead if there is none.
+    /// the gaze **while it has an answer**: while the cursor is over the widget
+    /// that position wins, and while it is not, the model looks at the point set
+    /// with [`Live2dModel::look_at`], or straight ahead if there is none.
     ///
     /// Without a source the model is only driven by its own motion and physics,
     /// unless [`Live2dModel::look_at`] was called.
@@ -108,8 +121,7 @@ impl<'a, Message> Live2d<'a, Message> {
     /// How much of the widget the model's bounds fill.
     ///
     /// `1.0` touches the edges; `0.925` is the default the sample models were
-    /// framed for. Values that are not positive and finite are ignored, and the
-    /// previous framing stays.
+    /// framed for. Values that are not positive and finite fall back to `1.0`.
     pub fn fill(mut self, fill: f32) -> Self {
         self.fill = fill;
         self
@@ -135,19 +147,108 @@ impl<'a, Message> Live2d<'a, Message> {
             .height(self.height)
     }
 
+    /// Queues the input a pointer event carries.
+    fn queue_input(&self, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) {
+        let model = self.model.inner();
+
+        if !cursor.is_over(bounds) {
+            return;
+        }
+
+        match event {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                model.push_pointer(PointerInput::Pressed);
+            }
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                model.push_pointer(PointerInput::Released);
+            }
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let lines = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => *y,
+                    mouse::ScrollDelta::Pixels { y, .. } => *y / PIXELS_PER_LINE,
+                };
+
+                model.push_pointer(PointerInput::Scrolled(lines));
+            }
+            _ => {}
+        }
+    }
+
     /// Takes the next queued event, if the host listens for them.
     fn next_message(&self, state: &mut Live2dState) -> Option<Message> {
         let on_event = self.on_event.as_ref()?;
 
-        while let Ok(event) = state.events.try_recv() {
-            state.pending.push_back(event);
-        }
+        state.drain();
 
-        state.pending.pop_front().map(|event| on_event(event))
+        let event = state.pending.pop_front()?;
+
+        let event = match Self::convert(event) {
+            Ok(event) => event,
+            Err(problem) => Live2dEvent::ModelReportedProblem { problem },
+        };
+
+        Some(on_event(event))
+    }
+
+    /// Turns a render-layer event into the host's, or into a problem when a
+    /// hand-written vocabulary does not cover what the render layer reported.
+    fn convert(event: PipelineEvent) -> Result<Live2dEvent<I>, Problem> {
+        Ok(match event {
+            PipelineEvent::Loaded { info } => Live2dEvent::ModelLoaded { info },
+            PipelineEvent::LoadFailed { failure } => Live2dEvent::ModelFailedToLoad { failure },
+            PipelineEvent::Problem(problem) => Live2dEvent::ModelReportedProblem { problem },
+            PipelineEvent::MotionStarted {
+                group,
+                clip,
+                duration,
+                looping,
+            } => Live2dEvent::MotionStarted {
+                group: key::<I::Motion>(group, "motion")?,
+                clip,
+                duration,
+                looping,
+            },
+            PipelineEvent::MotionFinished { group, clip } => Live2dEvent::MotionFinishedPlaying {
+                group: key::<I::Motion>(group, "motion")?,
+                clip,
+            },
+            PipelineEvent::Pointer(kind) => Live2dEvent::Pointer(match kind {
+                PointerEventKind::Pressed { area, at } => PointerEvent::Pressed {
+                    area: optional_key::<I::HitArea>(area, "hit area")?,
+                    at,
+                },
+                PointerEventKind::Released { area, at } => PointerEvent::Released {
+                    area: optional_key::<I::HitArea>(area, "hit area")?,
+                    at,
+                },
+                PointerEventKind::Entered { area } => PointerEvent::Entered {
+                    area: key::<I::HitArea>(area, "hit area")?,
+                },
+                PointerEventKind::Exited { area } => PointerEvent::Exited {
+                    area: key::<I::HitArea>(area, "hit area")?,
+                },
+                PointerEventKind::Dragged { delta } => PointerEvent::Dragged { delta },
+                PointerEventKind::Scrolled { lines } => PointerEvent::Scrolled { lines },
+            }),
+        })
     }
 }
 
-impl<Message> Clone for Live2d<'_, Message> {
+fn key<V: Vocabulary>(id: KeyId, vocabulary: &'static str) -> Result<V, Problem> {
+    V::from_id(&id).ok_or(Problem::Vocabulary {
+        vocabulary,
+        index: id.index,
+    })
+}
+
+fn optional_key<V: Vocabulary>(
+    id: Option<KeyId>,
+    vocabulary: &'static str,
+) -> Result<Option<V>, Problem> {
+    id.map(|id| key::<V>(id, vocabulary)).transpose()
+}
+
+impl<Message, I: Interface> Clone for Live2d<'_, Message, I> {
     fn clone(&self) -> Self {
         Self {
             model: self.model,
@@ -160,27 +261,82 @@ impl<Message> Clone for Live2d<'_, Message> {
     }
 }
 
-/// The widget's own slot in the UI tree: one event channel per instance.
-#[derive(Debug)]
+/// The widget's own slot in the UI tree: one event channel and one view per
+/// instance.
 pub struct Live2dState {
-    events: Receiver<Live2dEvent>,
-    sender: Sender<Live2dEvent>,
-    pending: VecDeque<Live2dEvent>,
+    events: RefCell<Channel>,
+    pending: VecDeque<PipelineEvent>,
+    view: ViewId,
+    presence: Arc<Presence>,
+    hovered: bool,
+    pressed: bool,
 }
 
-impl Default for Live2dState {
-    fn default() -> Self {
-        let (sender, events) = crossbeam_channel::unbounded();
+/// The events channel, created the first time a widget actually asks for one.
+#[derive(Default)]
+struct Channel {
+    pair: Option<(Sender<PipelineEvent>, Receiver<PipelineEvent>)>,
+}
 
-        Self {
-            events,
-            sender,
-            pending: VecDeque::new(),
+impl Channel {
+    fn pair(&mut self) -> &mut (Sender<PipelineEvent>, Receiver<PipelineEvent>) {
+        self.pair.get_or_insert_with(crossbeam_channel::unbounded)
+    }
+
+    fn sender(&mut self) -> Sender<PipelineEvent> {
+        self.pair().0.clone()
+    }
+
+    fn try_recv(&mut self) -> Option<PipelineEvent> {
+        match &mut self.pair {
+            Some((_, receiver)) => receiver.try_recv().ok(),
+            None => None,
         }
     }
 }
 
-impl<Message> shader::Program<Message> for Live2d<'_, Message> {
+impl Default for Live2dState {
+    fn default() -> Self {
+        Self {
+            events: RefCell::new(Channel::default()),
+            pending: VecDeque::new(),
+            view: ViewId::unique(),
+            presence: Arc::new(Presence),
+            hovered: false,
+            pressed: false,
+        }
+    }
+}
+
+impl Live2dState {
+    fn presence(&self) -> Arc<Presence> {
+        Arc::clone(&self.presence)
+    }
+
+    /// Moves every queued render-layer event into the widget's own queue, keeping
+    /// the hover and press state the cursor shape is derived from.
+    fn drain(&mut self) {
+        loop {
+            let event = self.events.borrow_mut().try_recv();
+
+            let Some(event) = event else {
+                return;
+            };
+
+            match &event {
+                PipelineEvent::Pointer(PointerEventKind::Entered { .. }) => self.hovered = true,
+                PipelineEvent::Pointer(PointerEventKind::Exited { .. }) => self.hovered = false,
+                PipelineEvent::Pointer(PointerEventKind::Pressed { .. }) => self.pressed = true,
+                PipelineEvent::Pointer(PointerEventKind::Released { .. }) => self.pressed = false,
+                _ => {}
+            }
+
+            self.pending.push_back(event);
+        }
+    }
+}
+
+impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> {
     type State = Live2dState;
     type Primitive = Live2dPrimitive;
 
@@ -188,17 +344,22 @@ impl<Message> shader::Program<Message> for Live2d<'_, Message> {
         &self,
         state: &mut Live2dState,
         event: &iced::Event,
-        _bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
     ) -> Option<shader::Action<Message>> {
+        self.queue_input(event, bounds, cursor);
+
+        let message = self.next_message(state);
+        let draining = !state.pending.is_empty();
+
         let next_frame = match event {
             iced::Event::Window(window::Event::RedrawRequested(now)) if !self.model.is_paused() => {
                 Some(*now + REDRAW_LEAD)
             }
+            // A burst of events must not wait for the model to animate.
+            _ if draining => Some(iced::time::Instant::now()),
             _ => None,
         };
-
-        let message = self.next_message(state);
 
         match (message, next_frame) {
             (Some(message), Some(at)) => {
@@ -216,40 +377,82 @@ impl<Message> shader::Program<Message> for Live2d<'_, Message> {
         cursor: mouse::Cursor,
         bounds: Rectangle,
     ) -> Live2dPrimitive {
-        for problem in self.model.take_problems() {
-            let _ = state
-                .sender
-                .send(Live2dEvent::ModelReportedProblem { problem });
-        }
+        let model = self.model.inner();
 
+        let position = crate::look_at::position(cursor, bounds);
         let look_at = match self.look_at {
             Some(source) => Some(
                 source(cursor, bounds)
-                    .or_else(|| self.model.target())
+                    .or_else(|| model.target())
                     .unwrap_or([0.0, 0.0]),
             ),
-            None => self.model.target(),
+            None => model.target(),
+        };
+
+        let events = if self.on_event.is_some() {
+            Some(state.events.borrow_mut().sender())
+        } else {
+            None
         };
 
         Live2dPrimitive {
-            id: self.model.id(),
-            path: self.model.path_arc(),
-            settings: self.model.settings(),
-            look_at,
-            look_at_mode: self.model.look_at_mode(),
-            physics_enabled: self.model.physics_enabled(),
-            paused: self.model.is_paused(),
+            asset: model.asset(),
+            asset_options: model.asset_options(),
+            path: model.path_arc(),
+            model: model.id(),
+            model_options: model.options(),
+            view: state.view,
+            spec: model.spec(),
             fill: self.fill,
-            commands: self.model.drain_commands(),
-            presence: self.model.presence(),
-            events: state.sender.clone(),
+            inputs: FrameInputs {
+                parameters: model.parameter_indices(),
+                parts: model.part_indices(),
+                commands: model
+                    .drain_commands()
+                    .iter()
+                    .map(Command::primitive)
+                    .collect(),
+                problems: model.take_problems(),
+                look_at,
+                look_at_mode: model.look_at_mode(),
+                physics_enabled: model.physics_enabled(),
+                idle: match model.idle() {
+                    Idle::Declared => IdleInput::Declared,
+                    Idle::Group(group) => IdleInput::Group(group.index()),
+                    Idle::Off => IdleInput::Off,
+                },
+                paused: model.paused(),
+                cursor: position,
+                pointer: model.drain_pointer(),
+            },
+            events,
+            asset_presence: model.asset_presence(),
+            model_presence: model.presence(),
+            view_presence: state.presence(),
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Live2dState,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if state.pressed {
+            mouse::Interaction::Grabbing
+        } else if state.hovered {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::Idle
         }
     }
 }
 
-impl<Message> iced::advanced::widget::Meta for Live2d<'_, Message> {}
-impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Live2d<'_, Message>
+impl<Message, I: Interface> iced::advanced::widget::Meta for Live2d<'_, Message, I> {}
+
+impl<Message, I, Theme, Renderer> Widget<Message, Theme, Renderer> for Live2d<'_, Message, I>
 where
+    I: Interface,
     shader::Shader<Message, Self>: Widget<Message, Theme, Renderer>,
 {
     fn tag(&self) -> tree::Tag {

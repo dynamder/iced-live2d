@@ -18,7 +18,7 @@
 //! - `LIVE2D_NO_PHYSICS` — flag, disables physics evaluation
 
 use live2d_render::wgpu;
-use live2d_render::{ClipRect, Live2dScene, SceneOptions};
+use live2d_render::{AssetOptions, ClipRect, ModelOptions};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
@@ -26,8 +26,11 @@ mod gpu;
 mod knobs;
 #[path = "shared/render.rs"]
 mod render;
+#[path = "shared/session.rs"]
+mod session;
 
 use render::Target;
+use session::Session;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -41,39 +44,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (low, high) = env_range("JOLT_RANGE")?.unwrap_or((-0.15, 0.15));
     let settle: usize = env_f32("JOLT_SETTLE")?.unwrap_or(120.0) as usize;
     let size: u32 = env_f32("JOLT_SIZE")?.unwrap_or(640.0) as u32;
+    let look_at_mode = knobs::look_at_mode()?;
 
     let gpu::Gpu { device, queue } = gpu::open()?;
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let mut scene = Live2dScene::load_with_options(
+    let mut session = Session::load(
         &device,
         &queue,
         &model_path,
         format,
-        SceneOptions {
-            texture_scale: 0.5,
-            ..SceneOptions::default()
-        },
+        (size, size),
+        AssetOptions { texture_scale: 0.5 },
+        ModelOptions::default(),
     )?;
-    scene.set_look_at_mode(knobs::look_at_mode()?);
-    scene.resize(&queue, 1.0);
+
+    session.model().set_look_at_mode(look_at_mode);
 
     if !env_flag("JOLT_MOTION") {
-        scene.stop_motion();
+        session.model().stop_motion();
     }
 
     if env_flag("LIVE2D_NO_PHYSICS") {
-        scene.set_physics_enabled(false);
+        session.model().set_physics_enabled(false);
     }
 
     let target = Target::new(&device, size, format);
 
     for _ in 0..settle {
-        scene.look_at([low, 0.0]);
-        scene.advance(&device, &queue, live2d_render::STEP)?;
+        session.model().set_look_at(Some([low, 0.0]));
+        session.advance(&device, &queue, live2d_render::STEP)?;
     }
 
-    report_issues(&mut scene);
+    report_issues(&mut session);
 
     let mut previous: Option<Vec<u8>> = None;
     let mut history = Vec::with_capacity(frames);
@@ -82,10 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = frame as f32 / (frames.max(2) - 1) as f32;
         let x = low + (high - low) * t;
 
-        scene.look_at([x, 0.0]);
-        scene.advance(&device, &queue, live2d_render::STEP)?;
+        session.model().set_look_at(Some([x, 0.0]));
+        session.advance(&device, &queue, live2d_render::STEP)?;
 
-        let rgba = capture(&device, &queue, &mut scene, &target, size)?;
+        let rgba = capture(&device, &queue, &session, &target, size)?;
 
         if let Some(previous) = previous.as_ref() {
             let change = difference(previous, &rgba, size);
@@ -116,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn capture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    scene: &mut Live2dScene,
+    session: &Session,
     target: &Target,
     size: u32,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -143,7 +146,7 @@ fn capture(
         });
     }
 
-    scene.encode(
+    session.encode(
         &mut encoder,
         &target.view,
         ClipRect {
@@ -202,8 +205,8 @@ fn difference(previous: &[u8], current: &[u8], size: u32) -> Change {
     }
 }
 
-fn report_issues(scene: &mut Live2dScene) {
-    for issue in scene.take_issues() {
+fn report_issues(session: &mut Session) {
+    for issue in session.take_issues() {
         eprintln!("{issue}");
     }
 }

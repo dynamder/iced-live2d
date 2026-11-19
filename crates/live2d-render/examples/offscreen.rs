@@ -11,7 +11,7 @@
 //! state is set through the `LIVE2D_*` knobs documented in `README.md`.
 
 use live2d_render::wgpu;
-use live2d_render::{ClipRect, Live2dScene, LookAtMode, SceneOptions};
+use live2d_render::{AssetOptions, ClipRect, LookAtMode};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
@@ -19,6 +19,11 @@ mod gpu;
 mod knobs;
 #[path = "shared/render.rs"]
 mod render;
+#[path = "shared/session.rs"]
+mod session;
+
+use render::Target;
+use session::Session;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -45,36 +50,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gpu::Gpu { device, queue } = gpu::open()?;
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let options = SceneOptions {
-        texture_scale: knobs.texture_scale,
-        mask_size: knobs.mask_size,
-        ..SceneOptions::default()
-    };
+    let mut session = Session::load(
+        &device,
+        &queue,
+        &model_path,
+        format,
+        (size, size),
+        AssetOptions {
+            texture_scale: knobs.texture_scale,
+        },
+        live2d_render::ModelOptions {
+            mask_size: knobs.mask_size,
+        },
+    )?;
 
-    let mut scene = Live2dScene::load_with_options(&device, &queue, &model_path, format, options)?;
-    scene.set_look_at_mode(knobs.look_at_mode);
+    session.model().set_look_at_mode(knobs.look_at_mode);
 
     if let Some(fill) = knobs.fill {
-        scene.set_fill(&queue, fill);
+        session.set_fill(&queue, fill);
     }
 
-    scene.resize(&queue, 1.0);
-
-    knobs.apply(&mut scene);
+    knobs.apply(&mut session);
 
     // Let physics and the first motion settle a little so the frame is
     // representative instead of the rest pose.
     for _ in 0..steps {
-        scene.advance(&device, &queue, frame_time)?;
+        session.advance(&device, &queue, frame_time)?;
 
         if knobs.reclip {
-            scene.force_clipping_rebuild(&device, &queue)?;
+            session.rebuild_clipping(&device, &queue);
         }
     }
 
-    report_issues(&mut scene);
+    report_issues(&mut session);
 
-    let target = render::Target::new(&device, size, format);
+    if let Some(point) = knobs.hit {
+        match session.hit_area_at(point) {
+            Some(name) => println!("hit at {point:?}: {name}"),
+            None => println!("hit at {point:?}: nothing"),
+        }
+    }
+
+    let target = Target::new(&device, size, format);
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("offscreen.encoder"),
@@ -100,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    scene.encode(
+    session.encode(
         &mut encoder,
         &target.view,
         ClipRect {
@@ -119,8 +136,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn report_issues(scene: &mut Live2dScene) {
-    for issue in scene.take_issues() {
+fn report_issues(session: &mut Session) {
+    for issue in session.take_issues() {
         eprintln!("{issue}");
     }
 }
@@ -141,7 +158,7 @@ fn write_png(path: &str, size: u32, rgba: &[u8]) -> Result<(), Box<dyn std::erro
 struct Knobs {
     texture_scale: f32,
     mask_size: u32,
-    motion: Option<usize>,
+    motion: Option<(usize, usize)>,
     expression: Option<usize>,
     clear_expressions: bool,
     no_motion: bool,
@@ -150,6 +167,7 @@ struct Knobs {
     look_at: Option<[f32; 2]>,
     look_at_mode: LookAtMode,
     fill: Option<f32>,
+    hit: Option<[f32; 2]>,
 }
 
 impl Knobs {
@@ -157,7 +175,7 @@ impl Knobs {
         Ok(Self {
             texture_scale: env_f32("LIVE2D_TEXTURE_SCALE")?.unwrap_or(1.0),
             mask_size: env_index("LIVE2D_MASK")?.unwrap_or(1024) as u32,
-            motion: env_index("LIVE2D_MOTION")?,
+            motion: env_pair("LIVE2D_MOTION")?,
             expression: env_index("LIVE2D_EXPR")?,
             clear_expressions: env_flag("LIVE2D_CLEAR_EXPR"),
             no_motion: env_flag("LIVE2D_NO_MOTION"),
@@ -166,32 +184,33 @@ impl Knobs {
             look_at: env_look_at()?,
             look_at_mode: knobs::look_at_mode()?,
             fill: env_f32("LIVE2D_FILL")?,
+            hit: env_pair_f32("LIVE2D_HIT")?,
         })
     }
 
-    fn apply(&self, scene: &mut Live2dScene) {
-        if let Some(index) = self.motion {
-            scene.play_motion(index);
+    fn apply(&self, session: &mut Session) {
+        if let Some((group, clip)) = self.motion {
+            session.model().play_motion(group, clip);
         }
 
-        if let Some(index) = self.expression {
-            scene.play_expression(index);
+        if let Some(expression) = self.expression {
+            session.model().play_expression(expression);
         }
 
         if self.clear_expressions {
-            scene.clear_expressions();
+            session.model().clear_expressions();
         }
 
         if self.no_motion {
-            scene.stop_motion();
+            session.model().stop_motion();
         }
 
         if self.no_physics {
-            scene.set_physics_enabled(false);
+            session.model().set_physics_enabled(false);
         }
 
         if let Some(target) = self.look_at {
-            scene.look_at(target);
+            session.model().set_look_at(Some(target));
         }
     }
 }
@@ -216,6 +235,24 @@ fn env_index(name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
     })?))
 }
 
+/// Two non-negative integers, `group,clip`.
+fn env_pair(name: &str) -> Result<Option<(usize, usize)>, Box<dyn std::error::Error>> {
+    let Some(raw) = env_string(name)? else {
+        return Ok(None);
+    };
+
+    let parts: Vec<usize> = raw
+        .split(',')
+        .map(|part| part.trim().parse())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("{name} must be `group,clip`, got {raw:?}"))?;
+
+    match parts[..] {
+        [group, clip] => Ok(Some((group, clip))),
+        _ => Err(format!("{name} needs exactly two numbers, got {raw:?}").into()),
+    }
+}
+
 /// A flag is on whenever the variable is present, whatever its value.
 fn env_flag(name: &str) -> bool {
     std::env::var_os(name).is_some()
@@ -230,7 +267,12 @@ fn env_string(name: &str) -> Result<Option<String>, Box<dyn std::error::Error>> 
 }
 
 fn env_look_at() -> Result<Option<[f32; 2]>, Box<dyn std::error::Error>> {
-    let Some(raw) = env_string("LIVE2D_LOOK_AT")? else {
+    env_pair_f32("LIVE2D_LOOK_AT")
+}
+
+/// Two floats, `x,y`.
+fn env_pair_f32(name: &str) -> Result<Option<[f32; 2]>, Box<dyn std::error::Error>> {
+    let Some(raw) = env_string(name)? else {
         return Ok(None);
     };
 
@@ -238,10 +280,10 @@ fn env_look_at() -> Result<Option<[f32; 2]>, Box<dyn std::error::Error>> {
         .split(',')
         .map(|part| part.trim().parse())
         .collect::<Result<_, _>>()
-        .map_err(|_| format!("LIVE2D_LOOK_AT must be two numbers, got {raw:?}"))?;
+        .map_err(|_| format!("{name} must be two numbers, got {raw:?}"))?;
 
     match parts[..] {
         [x, y] => Ok(Some([x, y])),
-        _ => Err(format!("LIVE2D_LOOK_AT needs exactly two numbers, got {raw:?}").into()),
+        _ => Err(format!("{name} needs exactly two numbers, got {raw:?}").into()),
     }
 }

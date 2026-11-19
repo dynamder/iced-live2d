@@ -5,8 +5,19 @@ edition.workspace = true
 publish.workspace = true
 description = "Live2D models as an iced widget"
 
+[features]
+default = []
+# The `Vocabulary` derive. Off by default so an interface can be hand-written
+# without pulling a proc-macro crate into the dependency graph.
+macros = ["dep:iced-live2d-macros"]
+
 [dependencies]
 # Same pin as `app`: iced master carries the `shader` widget this crate delegates to.
 iced = { git = "https://github.com/iced-rs/iced", rev = "e5c350f271a8046f875c6662d452fde9e462d486", features = ["advanced"] }
 live2d-render = { path = "../live2d-render" }
 crossbeam-channel = "0.5"
+iced-live2d-macros = { path = "../iced-live2d-macros", optional = true }
+
+[[example]]
+name = "typed"
+required-features = ["macros"]

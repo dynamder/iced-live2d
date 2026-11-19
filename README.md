@@ -18,11 +18,14 @@ Cubism Core binary, no C++ toolchain, no engine.
 | Model + textures load, correct colours | ✅ |
 | Clipping masks (eyes, mouth, hair, body behind tail) | ✅ |
 | Mipmapped textures — thin line art survives minification | ✅ (local patch) |
-| Motion playback, looping, switching | ✅ `R` |
+| Motion playback, looping, switching by `(group, clip)` | ✅ `R` |
 | Expressions (23 scanned from disk) | ✅ `E` |
 | Physics (hair/tail follow) | ✅ |
 | LookAt follows the cursor (head + eyes + torso) | ✅ |
 | Window resize keeps framing | ✅ |
+| Typed interface, validated at load | ✅ `examples/typed.rs` |
+| Parameter / part overrides, replayed every step | ✅ `M` / `C` / `H` |
+| Hit areas, hover/press/drag/wheel events | ✅ |
 | Headless offscreen render to PNG | ✅ `examples/offscreen.rs` |
 | Frame rate (release, 715 drawables) | ✅ ~50 fps, CPU-bound |
 | Desktop-pet shell (transparent / on-top / click-through / tray) | ❌ not started |
@@ -46,7 +49,7 @@ driver writes the rig's *look-at inputs* and lets physics derive `ParamAngle*`.
 Which inputs those are is resolved per rig, so the rig in this repo takes
 `AngleX`/`AngleY`/`PositionX`/`PositionY` while a classic rig takes the
 `ParamAngle*` names; `LIVE2D_TRACK` and `examples/rig` show both tables. See
-`Live2dScene::look_at`.
+`Model::set_look_at` and `Model::set_look_at_mode`.
 
 ![look-at](docs/images/look-at-compare.png)
 
@@ -85,12 +88,13 @@ Use `--release`. A debug build runs at ~5 fps because the per-frame CPU mesh wor
 for hundreds of drawables is unoptimised, which also makes animation look like
 slow motion (the scene drops time it cannot catch up on).
 
-**Controls:** `R` next motion clip · `E` next expression · move the mouse over
-the window to make the model follow it.
+**Controls:** `R` random clip of the next motion group · `E` next expression ·
+`C` clear expressions · `S` stop the motion · `P` pause · move the mouse over the
+window to make the model follow it, and click it to see which hit area it reports.
 
 ## Frame pacing
 
-`Live2dScene::advance` takes whatever interval the host measured and spends it in
+`Model::advance` takes whatever interval the host measured and spends it in
 fixed 1/60 s steps, keeping the rest for the next call. The pose is therefore a
 function of elapsed time alone, not of how the host sliced it.
 
@@ -112,13 +116,14 @@ quarter of its frames zero-length.
 `LIVE2D_PROFILE=1` prints the diagnosis once per 60 frames:
 
 ```
-live2d profile: 60 frames 1.02 steps, rebuild 0.11 ms, upload 0.04 ms (mesh 0.03 over 84 drawables, clip 0.01), delta 16.67..16.7 ms (mean 16.67, 0 zero, 0 under 1 ms)
+live2d profile: 60 frames 1.00 steps, step 0.08 ms, deform 3.40 ms, upload 1.42 ms, delta 15.2..18.4 ms (mean 16.67)
 ```
 
-`steps` above 1 means the host presents slower than 60 Hz and the scene is
-catching up; `zero` counts the zero-length intervals, which now cost nothing.
-`drawables` is how many drawables actually re-uploaded — on a rig with dynamic
-masks it tells a "one buffer was rebuilt" frame from a normal one.
+`steps` above 1 means the host presents slower than 60 Hz and the model is catching
+up; `step` is the motion/expression/physics update for those steps, `deform` the
+CPU mesh rebuild and `upload` the GPU write. They are reported apart on purpose: on
+a 715-drawable rig the split says whether the cost is the simulation or the
+buffers.
 
 ## Framing
 
@@ -147,11 +152,13 @@ cargo run --release -p live2d-render --example offscreen -- \
 |---|---|
 | `LIVE2D_TEXTURE_SCALE` | upload resolution multiplier, default `1.0` |
 | `LIVE2D_MASK` | mask render-target edge in pixels, default `1024` |
-| `LIVE2D_MOTION` / `LIVE2D_EXPR` | motion / expression index to apply before the capture |
+| `LIVE2D_MOTION` | `group,clip` to play before the capture |
+| `LIVE2D_EXPR` | expression index to apply before the capture |
 | `LIVE2D_LOOK_AT` | `x,y` in `-1.0..=1.0`, applied as the cursor position |
-| `LIVE2D_FILL` | how much of the view the model's bounds may occupy, in the unit of `SceneOptions::view_fill` (`2.0` = the whole view, default `1.85`) |
+| `LIVE2D_HIT` | `x,y` in `-1.0..=1.0`: print which hit area a click there would land in |
+| `LIVE2D_FILL` | how much of the widget the model's bounds span (`1.0` touches the edges, default `0.925`) |
 | `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`, `LIVE2D_RECLIP` | flags — active when the variable is present, whatever its value |
-| `LIVE2D_PROFILE` | flag — prints per-frame step count, mesh rebuild and upload cost, and frame-interval statistics |
+| `LIVE2D_PROFILE` | flag — prints per-frame step count, step/deform/upload cost, and frame-interval statistics |
 
 `sweep` and `jolt` take their own knobs, documented in each file's header:
 
@@ -198,13 +205,15 @@ $ cargo run -p live2d-render --example rig -- "…/大肥鱼.model3.json"
 | `rig` | how cursor tracking is routed for a model, in both modes — no GPU needed |
 | `offscreen` | one frame to a PNG, no window |
 
-The component has its own example, which needs a window:
+The component has its own examples, which need a window:
 
 | Example | Answers |
 |---|---|
-| `minimal` | two models in one window, keys `R`/`E`/`P`/`1`/`2`, every component event printed |
+| `minimal` | two models in one window through the `Raw` interface; keys `R`/`E`/`P`/`1`/`2`, every component event printed |
+| `typed` | a host-declared interface: typed keys for parameters, parts, motions and hit areas, and the load failure a model that lacks them produces |
 
 `cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second>]`
+`cargo run -p iced-live2d --features macros --example typed -- <model.model3.json>`
 
 `sweep` is the fastest way to check a tracking bug: it prints the input parameter
 and the physics outputs per frame, and flags any frame-to-frame jump. Prefix it
@@ -242,19 +251,28 @@ traps found on the way: [`docs/web-sdk-benchmark.md`](docs/web-sdk-benchmark.md)
 
 ```
 crates/live2d-render/          engine-agnostic: depends on wgpu + mocari only
+  src/info.rs                  AssetId, ModelInfo: what a model declares
+  src/asset.rs                 Asset/Prepared: parse, validate against nothing, upload
+  src/model.rs                 Model: parameters, player, expressions, physics, idle
+  src/gpu.rs                   ModelGpu: mesh buffers, clipping, mask target
+  src/view.rs                  View: framing + the inverse a hit test needs
   src/bounds.rs                canvas info -> view-fit matrix
   src/rig.rs                   per-model look-at routing (which params a target writes)
-  src/scene.rs                 Live2dScene: load, advance, encode mask+model passes
   src/error.rs                 error taxonomy
   examples/*.rs                the diagnostics listed above
-  examples/shared/gpu.rs       headless GPU bootstrap shared by the examples
+  examples/shared/session.rs   the smallest correct driver, shared by those examples
+  examples/shared/gpu.rs       headless GPU bootstrap
 crates/iced-live2d/            the reusable component: iced + live2d-render
-  src/model.rs                 Live2dModel: settings, look-at, command queue, RAII presence
-  src/widget.rs                Live2d widget + Live2dState (event channel, frame pacing)
-  src/pipeline.rs              per-model GPU slots + the primitive that draws one frame
-  src/event.rs                 Live2dEvent and its payloads
+  src/interface.rs             Interface, Vocabulary, VocabularySpec, KeyId, Mapping
+  src/raw.rs                   Raw: the model's own entries as an interface
+  src/model.rs                 Live2dAsset + Live2dModel<I>: budgets, keys, commands
+  src/widget.rs                Live2d widget + Live2dState (channel, pacing, pointer)
+  src/pipeline.rs              the three tables (asset/model/view) + the primitive
+  src/event.rs                 Live2dEvent<I>, PointerEvent<I>, Problem, LoadFailure
   src/look_at.rs               LookAtSource + look_at::cursor
-  examples/minimal.rs          two models, keys, every event printed
+  examples/minimal.rs          two models through Raw, every event printed
+  examples/typed.rs            a host-declared interface (needs `macros`)
+crates/iced-live2d-macros/     the optional `Vocabulary` derive
 app/                           the demo app, now a thin host of the component
   src/main.rs                  CLI dispatch, key bindings, event printing
   src/cli.rs                   --model / --track / --list
@@ -262,7 +280,7 @@ patches/                       the four mocari fixes, as patch files
 scripts/vendor-mocari.ps1      rebuilds .refs/mocari from the registry + patches
 scripts/shot.ps1               DPI-aware window screenshot (dev tool)
 scripts/shot-window.ps1        screenshot any window by title prefix (dev tool)
-docs/                          feasibility write-up, plan, defect records
+docs/                          feasibility write-up, plan, audit, design, defect records
 ```
 
 The split matters: keeping `live2d-render` free of iced means a `wgpu`/`iced`
@@ -272,50 +290,133 @@ with policy.
 
 ## Using the component
 
-`iced-live2d` draws one model as an ordinary iced widget. The host owns the model,
-the widget borrows it, and everything else — GPU state, frame pacing, look-at
-routing — is behind the component. There is no frame subscription to write and no
-iced plumbing to copy:
+`iced-live2d` draws a model as an ordinary iced widget. The host owns an **asset**
+and one or more **models** built from it; the widget borrows a model, and
+everything else — textures, GPU state, frame pacing, look-at routing, hit testing —
+is behind the component. There is no frame subscription to write and no iced
+plumbing to copy:
 
 ```rust
-use iced::widget::column;
-use iced_live2d::{Live2dModel, RenderSettings, live2d, look_at};
+use iced_live2d::{Live2dAsset, Live2dModel, Raw, live2d, look_at};
 
 struct App {
-    hiyori: Live2dModel,
+    asset: Live2dAsset,     // one file, its textures, shared
+    hiyori: Live2dModel<Raw>,
+}
+
+fn new() -> App {
+    let asset = Live2dAsset::from_path("Hiyori.model3.json");
+    let hiyori = Live2dModel::<Raw>::new(&asset);
+    App { asset, hiyori }
 }
 
 fn view(app: &App) -> impl iced::Widget<Message> {
-    column![
-        live2d(&app.hiyori)
-            .on_event(Message::Live2d)
-            .look_at(look_at::cursor)
-    ]
+    live2d(&app.hiyori)
+        .on_event(Message::Live2d)
+        .look_at(look_at::cursor)
 }
 ```
 
-- **Loading is deferred and reported.** `Live2dModel::from_path` does no IO; the
-  first frame that draws the model loads it, and the outcome arrives as
-  `Live2dEvent::ModelLoaded { summary }` or `ModelFailedToLoad { failure }`. A
-  failed load is not retried, and the widget keeps reserving its space.
-- **The widget drives its own frames.** It asks for a redraw one refresh ahead
-  while the model is not paused, so do **not** also subscribe to
-  `window::frames()` — `RedrawRequest` is a single slot and the last writer wins.
-- **Events are one frame late.** The render layer cannot publish a message while
-  preparing a frame; it hands events to the widget, whose next `update` publishes
-  them.
-- **Cursor look-at is opt-in.** Without `.look_at(..)` the model is driven only by
-  its own motion and physics. With it the source owns the gaze, and the cursor
-  leaving the widget returns the model to `Live2dModel::look_at(..)`, or straight
-  ahead if the host never set one.
+The asset/model split is what makes several instances cheap: they share the
+textures and the parsed model, and each keeps its own parameter values, playback
+position and physics state.
+
+### The modelling: assets, models, views
+
+| Type | Owns | Lifetime |
+|---|---|---|
+| `Live2dAsset` | file path, texture budget (`AssetOptions`) | as long as any model of it, plus itself |
+| `Live2dModel<I>` | parameters, parts, playback, physics, budgets (`ModelOptions`) | the host's |
+| `Live2d<'_, Message, I>` | framing, pointer, event channel | while it is in the UI tree |
+
+Above the component the same split appears as `live2d_render::{Asset, Model,
+ModelGpu, View}`, and `Model` there is pure CPU: it can be stepped, hit-tested and
+read back without a device.
+
+### Declaring what the model must offer
+
+A model is driven through a **vocabulary**: five lists of names the host declares
+in enums and promises the model has. Declaring one is `impl Interface` plus the
+enums; the derive (`--features macros`) writes the four vocabulary items:
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Vocabulary)]
+#[vocabulary(prefix = "Param")]
+enum FaceParameter { AngleX, AngleY, MouthOpenY }
+
+struct Face;
+impl Interface for Face {
+    type Parameter = FaceParameter;
+    // …Part, Motion, Expression, HitArea
+}
+let hiyori = Live2dModel::<Face>::new(&asset);
+```
+
+- **Validation happens once, at load, before a texel is uploaded.** A model that
+  lacks any declared name fails to load with the missing names listed
+  (`LoadFailure::Interface`), instead of silently driving nothing.
+- **Keys are typed.** A key can only be produced by the vocabulary that declares
+  it, and `play_motion(FaceMotion::TapBody, 0)` cannot be called on a model whose
+  interface has no `TapBody`.
+- **`Raw` is the escape hatch.** `Live2dModel::<Raw>::new(&asset)` takes the
+  model's own `ModelInfo` as the vocabulary; keys come from `raw::parameters(&info)`
+  and carry the asset they were minted from, so a key handed to a model of another
+  asset is rejected and reported instead of landing on the same index.
+- **Empty vocabularies are how a host says "not this interface".** An interface
+  whose `Expression` enum has no variants can never be asked for an expression.
+
+### Driving it
+
+```rust
+model.parameters().insert(FaceParameter::MouthOpenY, 0.8);   // raw, see ModelInfo ranges
+model.parts().insert(FacePart::ArmA, 0.0);                   // 0.0..=1.0
+model.play_motion(FaceMotion::TapBody, 0);                   // (group, clip), as Cubism indexes
+model.play_random_motion(FaceMotion::Idle);
+model.stop_motion();
+model.set_idle(Idle::Group(FaceMotion::Idle));               // or Idle::Declared / Idle::Off
+```
+
+Every write is **replayed on every step**, in Cubism's own order (`reset → motion →
+expression → host parameters → look-at → parts → physics → pose`). That is why a
+host value always wins over the motion that drives the same parameter, why physics
+always sees the final input, and why look-at no longer has to reserve a slot in a
+separate override table.
+
+Values are **raw**, in the range the model declares; `ModelInfo` carries
+`minimum`/`maximum`/`default` per parameter (`info.parameter(name)` gives the
+index). Clamping is the render layer's job.
+
+### Events
+
+- **Loading is deferred and reported.** `Live2dAsset::from_path` does no IO; the
+  first frame that draws a model loads it, and the outcome arrives as
+  `Live2dEvent::ModelLoaded { info }` or `ModelFailedToLoad { failure }`. A load
+  that failed is not retried, and the widget keeps reserving its space.
+- **Events are one frame late and per model.** The render layer cannot publish
+  while preparing a frame, so it hands events to the widget, whose next `update`
+  publishes them. Two widgets drawing one model both receive all of them, and the
+  second one to appear is sent the load result it missed.
+- **No listener, no channel.** Without `.on_event(..)` the render layer allocates
+  no channel at all, so events cannot pile up.
+- **`MotionStarted` carries `(group, clip)` plus the clip's duration and loop flag**;
+  `MotionFinishedPlaying` fires for clips that end. The idle policy is
+  `Idle::Declared` by default: a random clip of the interface's `Idle` group,
+  which is what makes an untouched model animate.
+- **Pointer events are model-level and in model space**: `Pressed`/`Released` carry
+  the hit area (if any) and the point, `Entered`/`Exited` the area, `Dragged` the
+  delta in model plane units, `Scrolled` the lines. The widget turns them into
+  `mouse::Interaction::{Pointer, Grabbing}` for the cursor shape.
+- **`pause` is a total freeze**: no time, no frames, and therefore no pointer
+  events either. To stop a motion but keep interacting, use `stop_motion()`.
 - **Only the wgpu renderer.** The widget delegates to iced's `shader` widget,
   which the tiny-skia backend does not have.
-- **Dropping the model frees its GPU state** at the end of the next rendered
-  frame, not immediately.
+- **Dropping an asset or model frees its GPU state** at the end of the next
+  rendered frame, not immediately.
 
 `cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second>]`
-shows two models side by side with keys `R` (motion), `E` (expression), `P`
-(pause) and `1`/`2` (drop that model); every event the component sends is printed.
+shows two models through `Raw`, and
+`cargo run -p iced-live2d --features macros --example typed -- <model>` shows a
+declared interface — including what happens when the model does not declare it.
 
 ## The four patches
 
@@ -389,20 +490,21 @@ not need changes.
 - **mocari's `*_normalized` setters take `0.0..=1.0`, not `-1.0..=1.0`.** They
   clamp silently, so a Cubism-style offset pins every negative value to the
   parameter minimum: the model freezes until the cursor crosses its centre line
-  and then snaps into motion. `write_normalized_override` in `scene.rs` converts once;
-  go through it rather than calling mocari directly.
+  and then snaps into motion. `Model::apply_look_at` converts once; go through it
+  rather than calling mocari directly.
 - **Framing must come from the `.moc3` canvas**, not from a bounding box of all
   drawables. This model has 715 drawables including hidden spares (props, spare
   hands, alternate body types); bounding-box centring visibly offsets the
   character. See `ModelBounds::from_canvas`.
 - **`model3.json` is not always complete.** Here it declares zero motions and
-  zero expressions while the files sit in `Animation/` and `Exp3/`. `Live2dScene`
-  scans the model directory as a fallback and plays `IDLE*` first.
-- **Colour space:** the `format` handed to `Pipeline::new` was `Bgra8Unorm`
-  (non-sRGB), which matches mocari's gamma-space blending. If a platform gives
-  you `*UnormSrgb`, you must render into your own `Rgba8Unorm` target and do
-  gamma→linear when compositing, or the model washes out. The startup line
-  prints the format it got.
+  zero expressions while the files sit in `Animation/` and `Exp3/`. `Asset::parse`
+  scans the model directory as a fallback, names the synthesized group `Scanned`
+  and sorts `IDLE*` files first; that group is also what `Idle::Declared` falls back
+  to when a model declares no `Idle` group.
+- **Colour space:** the `format` handed to `Pipeline::new` is whatever the host
+  surface uses. On a non-sRGB (`Bgra8Unorm`) target the model matches mocari's
+  gamma-space blending; on `*UnormSrgb` you must render into your own `Rgba8Unorm`
+  target and do gamma→linear when compositing, or the model washes out.
 - **The component's primitive must not implement `draw`** — it has to return
   `false` and do the work in `render`, because the mask pass has to be inserted
   between the passes iced controls.

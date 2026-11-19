@@ -18,19 +18,21 @@ use iced::mouse;
 ///
 /// It is a plain function pointer rather than a closure: mapping a cursor position
 /// needs no captured state, and a `fn` keeps the widget `Clone`-able and free of
-/// ownership puzzles. Hosts with more elaborate rules (damping, one axis only, a
-/// scripted timeline) can keep the state on their side and write it with
-/// [`Live2dModel::look_at`](crate::Live2dModel::look_at).
+/// ownership puzzles. A host with more elaborate rules (damping, one axis only, a
+/// scripted timeline) should write the smoothed value into
+/// [`Live2dModel::look_at`](crate::Live2dModel::look_at) as the cursor moves —
+/// there the last write wins over the source only while the cursor is *outside*
+/// the widget, so damping is a host-side state machine, not a source.
 pub type LookAtSource = fn(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]>;
 
-/// The cursor, mapped onto the widget.
+/// The cursor, mapped onto the widget's clip space.
 ///
-/// `None` while the cursor is outside `bounds`, which is what lets the model
-/// return to the target set with [`Live2dModel::look_at`](crate::Live2dModel::look_at)
-/// instead of snapping to the last edge position.
+/// This is the one place the widget turns a window position into `-1.0..=1.0` on
+/// both axes (`+y` up): the same value drives the LookAt target and the hit test,
+/// so a click can never disagree with where the model is looking.
 ///
-/// Pass it straight to the widget: `live2d(&model).look_at(look_at::cursor)`.
-pub fn cursor(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]> {
+/// `None` while the cursor is outside `bounds` or the widget has no area.
+pub fn position(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]> {
     let position = cursor.position_in(bounds)?;
 
     if bounds.width <= 0.0 || bounds.height <= 0.0 {
@@ -41,4 +43,15 @@ pub fn cursor(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]> {
         (position.x / bounds.width) * 2.0 - 1.0,
         1.0 - (position.y / bounds.height) * 2.0,
     ])
+}
+
+/// [`position`] as a [`LookAtSource`].
+///
+/// `None` while the cursor is outside `bounds`, which is what lets the model
+/// return to the target set with [`Live2dModel::look_at`](crate::Live2dModel::look_at)
+/// instead of snapping to the last edge position.
+///
+/// Pass it straight to the widget: `live2d(&model).look_at(look_at::cursor)`.
+pub fn cursor(cursor: mouse::Cursor, bounds: Rectangle) -> Option<[f32; 2]> {
+    position(cursor, bounds)
 }

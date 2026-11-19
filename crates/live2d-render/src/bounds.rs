@@ -13,6 +13,19 @@ pub struct ModelBounds {
 }
 
 impl ModelBounds {
+    /// A box from two opposite corners, in model space.
+    ///
+    /// The corners are taken as given: a host that swaps them gets a box with a
+    /// negative extent, which [`ModelBounds::fit_matrix`] cannot frame.
+    pub fn new(min: [f32; 2], max: [f32; 2]) -> Self {
+        Self {
+            min_x: min[0],
+            min_y: min[1],
+            max_x: max[0],
+            max_y: max[1],
+        }
+    }
+
     /// The artist-authored canvas from the `.moc3` header.
     ///
     /// This is the framing Cubism itself uses, so it is stable across parameter
@@ -78,14 +91,17 @@ impl ModelBounds {
         bounds.filter(|bounds| bounds.width() > 0.0 && bounds.height() > 0.0)
     }
 
+    /// Horizontal extent, in model units.
     pub fn width(&self) -> f32 {
         self.max_x - self.min_x
     }
 
+    /// Vertical extent, in model units.
     pub fn height(&self) -> f32 {
         self.max_y - self.min_y
     }
 
+    /// The centre of the box, in model units.
     pub fn center(&self) -> [f32; 2] {
         [
             (self.min_x + self.max_x) / 2.0,
@@ -116,5 +132,65 @@ impl ModelBounds {
         matrix.scale(scale_x, scale_y);
         matrix.translate(-center_x * scale_x, -center_y * scale_y);
         matrix
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 200x100 box whose centre is not the origin, so a missed translation
+    /// shows up as a wrong inverse.
+    fn box_2x1() -> ModelBounds {
+        ModelBounds {
+            min_x: -80.0,
+            min_y: -20.0,
+            max_x: 120.0,
+            max_y: 80.0,
+        }
+    }
+
+    #[test]
+    fn the_fit_matrix_maps_the_box_centre_to_the_origin() {
+        let bounds = box_2x1();
+        let matrix = bounds.fit_matrix(1.5, 1.85);
+        let [center_x, center_y] = bounds.center();
+
+        assert!(matrix.transform_x(center_x).abs() < 1e-4);
+        assert!(matrix.transform_y(center_y).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_fit_matrix_keeps_the_box_inside_the_fill() {
+        let bounds = box_2x1();
+        let fill = 1.85;
+        let matrix = bounds.fit_matrix(1.5, fill);
+
+        for [x, y] in [
+            [bounds.min_x, bounds.min_y],
+            [bounds.min_x, bounds.max_y],
+            [bounds.max_x, bounds.min_y],
+            [bounds.max_x, bounds.max_y],
+        ] {
+            assert!(matrix.transform_x(x).abs() <= fill + 1e-4);
+            assert!(matrix.transform_y(y).abs() <= fill + 1e-4);
+        }
+    }
+
+    #[test]
+    fn the_fit_matrix_is_invertible() {
+        let bounds = box_2x1();
+        let matrix = bounds.fit_matrix(1.5, 1.85);
+
+        for point in [[0.0, 0.0], [40.0, -20.0], [-30.0, 25.0]] {
+            let clip = [matrix.transform_x(point[0]), matrix.transform_y(point[1])];
+            let back = [
+                matrix.invert_transform_x(clip[0]),
+                matrix.invert_transform_y(clip[1]),
+            ];
+
+            assert!((back[0] - point[0]).abs() < 1e-4, "{back:?} != {point:?}");
+            assert!((back[1] - point[1]).abs() < 1e-4, "{back:?} != {point:?}");
+        }
     }
 }

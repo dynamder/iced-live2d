@@ -1,247 +1,409 @@
-//! The model object a host owns.
+//! The objects a host owns: an asset, and the models driven from it.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use live2d_render::{LookAtMode, SceneOptions};
+use live2d_render::{AssetId, AssetOptions, LookAtMode, ModelOptions};
 
 use crate::event::Problem;
+use crate::interface::{Interface, InterfaceSpec, Vocabulary};
+use crate::pipeline::PrimitiveCommand;
 
 /// How many commands may wait for the render layer before the oldest are dropped.
 const MAX_QUEUED_COMMANDS: usize = 64;
 
-/// Source of [`Live2dModel`] identities. The render layer keys its per-model
-/// state on them, so they must not collide within a process.
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// Source of model identities. The render layer keys its per-model state on them,
+/// so they must not collide within a process.
+static NEXT_MODEL: AtomicU64 = AtomicU64::new(1);
 
-/// What the render layer may spend on one model.
+/// One model file, shared by every instance driven from it.
 ///
-/// This is this component's GPU budget, not the Cubism *model setting* (that is
-/// `model3.json`). Start from the default and override what matters:
-///
-/// ```text
-/// RenderSettings { texture_scale: 1.0, ..RenderSettings::default() }
-/// ```
-///
-/// The default keeps a four-texture, 8192x8192 rig around 200 MB of VRAM, which
-/// is what a desktop pet needs. `texture_scale` must be positive: a zero or
-/// negative scale fails the load instead of guessing.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RenderSettings {
-    /// Texture resolution multiplier applied when uploading.
-    pub texture_scale: f32,
-    /// Edge length of the shared mask render target. Raise it if a complex rig
-    /// shows clipped geometry.
-    pub mask_size: u32,
-}
-
-impl Default for RenderSettings {
-    fn default() -> Self {
-        let options = SceneOptions::default();
-
-        Self {
-            texture_scale: options.texture_scale,
-            mask_size: options.mask_size,
-        }
-    }
-}
-
-impl RenderSettings {
-    pub(crate) fn to_scene_options(self) -> SceneOptions {
-        SceneOptions {
-            texture_scale: self.texture_scale,
-            mask_size: self.mask_size,
-            ..SceneOptions::default()
-        }
-    }
-}
-
-/// One model, owned by the host.
-///
-/// Build it with [`Live2dModel::from_path`] or [`Live2dModel::builder`], keep it
-/// in the host's state and hand a `&Live2dModel` to the `live2d` widget. It is
-/// `!Clone` and `!Send` on purpose: one owner, UI thread only.
-///
-/// Nothing happens at construction — no IO, no GPU. The first frame that draws
-/// the model loads it, and the outcome arrives as
+/// Build it once, keep it in the host's state, and hand it to
+/// [`Live2dModel::new`]. Nothing is read at construction: the first frame that
+/// draws one of its models loads it, and the outcome arrives as
 /// [`Live2dEvent::ModelLoaded`](crate::Live2dEvent::ModelLoaded) or
 /// [`Live2dEvent::ModelFailedToLoad`](crate::Live2dEvent::ModelFailedToLoad).
-/// A host that needs to react before then should track its own "still loading"
-/// flag.
 ///
-/// Dropping the model releases its GPU resources at the end of the next rendered
-/// frame.
-pub struct Live2dModel(Rc<Inner>);
-
-struct Inner {
-    id: u64,
+/// Several models of one asset share the textures and the parsed data; dropping
+/// the asset releases them once the last model that used it is gone, at the end of
+/// the next rendered frame.
+pub struct Live2dAsset {
+    id: AssetId,
     path: Arc<PathBuf>,
-    settings: RenderSettings,
-    look_at: Cell<Option<[f32; 2]>>,
-    look_at_mode: Cell<LookAtMode>,
-    paused: Cell<bool>,
-    physics_enabled: Cell<bool>,
-    commands: RefCell<VecDeque<Command>>,
-    problems: RefCell<Vec<Problem>>,
+    options: AssetOptions,
     presence: Arc<Presence>,
 }
 
-/// Proof that a model is still alive: the render layer holds a `Weak` to this and
-/// frees the model's GPU state once it can no longer be upgraded.
-#[derive(Debug)]
-pub(crate) struct Presence;
-
-/// Something the host asked the render layer to do, queued until it can.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Command {
-    PlayMotion(usize),
-    PlayExpression(usize),
-    StopMotion,
-}
-
-impl Live2dModel {
-    /// A model to load from `path` with `settings`.
+impl Live2dAsset {
+    /// An asset to load from `path` with [`AssetOptions::default`].
     ///
     /// `path` is the `.model3.json`; everything else is found from there. A path
     /// that does not exist is not rejected here — it fails on the first frame and
     /// is reported as a load failure.
-    pub fn from_path(path: impl Into<PathBuf>, settings: RenderSettings) -> Self {
-        Self::new(path, settings)
+    pub fn from_path(path: impl Into<PathBuf>) -> Self {
+        Self::with_options(path, AssetOptions::default())
     }
 
-    /// Names the same model one setting at a time:
-    ///
-    /// ```text
-    /// Live2dModel::builder(path)
-    ///     .settings(RenderSettings::default())
-    ///     .texture_scale(1.0)
-    ///     .build()
-    /// ```
-    ///
-    /// The budget is required: a builder that invented one would hide which
-    /// settings the model actually runs with. To change a single field, start
-    /// from [`RenderSettings::default`] and use struct update syntax.
-    pub fn builder(path: impl Into<PathBuf>) -> Live2dModelBuilder<NoSettings> {
-        Live2dModelBuilder {
-            path: path.into(),
-            stage: NoSettings,
+    /// An asset with an explicit texture budget.
+    pub fn with_options(path: impl Into<PathBuf>, options: AssetOptions) -> Self {
+        Self {
+            id: AssetId::unique(),
+            path: Arc::new(path.into()),
+            options,
+            presence: Arc::new(Presence),
         }
     }
 
-    fn new(path: impl Into<PathBuf>, settings: RenderSettings) -> Self {
-        Self(Rc::new(Inner {
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            path: Arc::new(path.into()),
-            settings,
-            look_at: Cell::new(None),
-            look_at_mode: Cell::new(LookAtMode::default()),
-            paused: Cell::new(false),
-            physics_enabled: Cell::new(true),
-            commands: RefCell::new(VecDeque::new()),
-            problems: RefCell::new(Vec::new()),
-            presence: Arc::new(Presence),
-        }))
+    /// The identity every raw key minted from this asset carries.
+    pub fn id(&self) -> AssetId {
+        self.id
     }
 
-    /// The file this model was created from.
-    pub fn path(&self) -> &PathBuf {
-        &self.0.path
+    /// The file this asset was created from.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
-    /// The budget this model was created with.
-    pub fn settings(&self) -> RenderSettings {
-        self.0.settings
+    /// The budget this asset was created with.
+    pub fn options(&self) -> AssetOptions {
+        self.options
     }
 
-    /// Points head, body and eyes at `target`, given in `-1.0..=1.0` on both
-    /// axes (`-1` = left/top, `+y` = up).
+    pub(crate) fn path_arc(&self) -> Arc<PathBuf> {
+        Arc::clone(&self.path)
+    }
+
+    pub(crate) fn presence(&self) -> Arc<Presence> {
+        Arc::clone(&self.presence)
+    }
+}
+
+impl fmt::Debug for Live2dAsset {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Live2dAsset")
+            .field("id", &self.id)
+            .field("path", &self.path)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One instance of an asset, owned by the host.
+///
+/// An instance keeps its own parameter values, playback position and physics
+/// state, so several of them can show the same asset in different poses. It is
+/// `!Clone` and `!Send` on purpose: one owner, UI thread only.
+///
+/// Every method takes `&self`; the instance is driven through interior mutability
+/// so a host can hold it in immutable state and still command it.
+pub struct Live2dModel<I: Interface> {
+    inner: Rc<Inner<I>>,
+}
+
+pub(crate) struct Inner<I: Interface> {
+    id: ModelId,
+    asset: AssetId,
+    asset_options: AssetOptions,
+    path: Arc<PathBuf>,
+    options: ModelOptions,
+    spec: InterfaceSpec,
+    parameters: RefCell<BTreeMap<I::Parameter, f32>>,
+    parts: RefCell<BTreeMap<I::Part, f32>>,
+    commands: RefCell<VecDeque<Command<I>>>,
+    idle: RefCell<Idle<I::Motion>>,
+    look_at: Cell<Option<[f32; 2]>>,
+    look_at_mode: Cell<LookAtMode>,
+    paused: Cell<bool>,
+    physics_enabled: Cell<bool>,
+    pointer: RefCell<Vec<PointerInput>>,
+    problems: RefCell<Vec<Problem>>,
+    asset_presence: Arc<Presence>,
+    reported: RefCell<BTreeSet<(&'static str, String)>>,
+    presence: Arc<Presence>,
+}
+
+/// Proof that an asset or a model is still alive.
+///
+/// The render layer holds a `Weak` to one of these per slot and frees the slot
+/// once it can no longer be upgraded.
+#[derive(Debug)]
+pub(crate) struct Presence;
+
+/// Identity of one model instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ModelId(u64);
+
+impl ModelId {
+    fn unique() -> Self {
+        Self(NEXT_MODEL.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// What plays when nothing else does.
+///
+/// The default is [`Idle::Declared`], which is what makes an untouched model
+/// animate: it plays a random clip of the interface's `Idle` group whenever the
+/// previous one ends.
+#[derive(Debug, Clone, Default)]
+pub enum Idle<M> {
+    /// The interface's own `Idle` motion group, if it declares one.
     ///
-    /// Which parameters that means is resolved per model. The value persists
-    /// until it is set again, so a host without a cursor can call this once.
+    /// An interface that does not name a group `Idle` gets no automatic playback,
+    /// which is what [`Idle::Off`] would give it anyway.
+    #[default]
+    Declared,
+    /// A specific motion group.
+    Group(M),
+    /// Nothing: the host drives every motion.
+    Off,
+}
+
+/// Something the host asked the model to do, queued until the render layer can.
+pub(crate) enum Command<I: Interface> {
+    PlayMotion { group: I::Motion, clip: usize },
+    PlayRandomMotion { group: I::Motion },
+    PlayExpression { expression: I::Expression },
+    StopMotion,
+    ClearExpressions,
+}
+
+impl<I: Interface> Command<I> {
+    /// Reduces the command to the plain data the render layer takes.
+    pub(crate) fn primitive(&self) -> PrimitiveCommand {
+        match self {
+            Command::PlayMotion { group, clip } => PrimitiveCommand::PlayMotion {
+                group: group.index(),
+                clip: *clip,
+            },
+            Command::PlayRandomMotion { group } => PrimitiveCommand::PlayRandomMotion {
+                group: group.index(),
+            },
+            Command::PlayExpression { expression } => PrimitiveCommand::PlayExpression {
+                expression: expression.index(),
+            },
+            Command::StopMotion => PrimitiveCommand::StopMotion,
+            Command::ClearExpressions => PrimitiveCommand::ClearExpressions,
+        }
+    }
+}
+
+/// One pointer input, queued by the widget and consumed by the render layer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum PointerInput {
+    Pressed,
+    Released,
+    Scrolled(f32),
+}
+
+impl<I: Interface> Live2dModel<I> {
+    /// An instance of `asset` with [`ModelOptions::default`].
+    pub fn new(asset: &Live2dAsset) -> Self {
+        Self::with_options(asset, ModelOptions::default())
+    }
+
+    /// An instance with an explicit GPU budget.
+    pub fn with_options(asset: &Live2dAsset, options: ModelOptions) -> Self {
+        Self {
+            inner: Rc::new(Inner {
+                id: ModelId::unique(),
+                asset: asset.id(),
+                asset_options: asset.options(),
+                path: asset.path_arc(),
+                options,
+                spec: InterfaceSpec::of::<I>(),
+                parameters: RefCell::new(BTreeMap::new()),
+                parts: RefCell::new(BTreeMap::new()),
+                commands: RefCell::new(VecDeque::new()),
+                idle: RefCell::new(Idle::default()),
+                look_at: Cell::new(None),
+                look_at_mode: Cell::new(LookAtMode::default()),
+                paused: Cell::new(false),
+                physics_enabled: Cell::new(true),
+                pointer: RefCell::new(Vec::new()),
+                problems: RefCell::new(Vec::new()),
+                asset_presence: asset.presence(),
+                reported: RefCell::new(BTreeSet::new()),
+                presence: Arc::new(Presence),
+            }),
+        }
+    }
+
+    /// The asset this instance was built from.
+    pub fn asset(&self) -> AssetId {
+        self.inner.asset
+    }
+
+    /// The file this instance was built from.
+    pub fn path(&self) -> &Path {
+        &self.inner.path
+    }
+
+    /// The budget this instance was built with.
+    pub fn options(&self) -> ModelOptions {
+        self.inner.options
+    }
+
+    /// The parameter overrides of this instance.
     ///
-    /// While the widget has a [`LookAtSource`](crate::LookAtSource) and the
-    /// cursor is over it, the source wins; this value is what the model returns
-    /// to when the cursor leaves.
+    /// Values are **raw**, in the range the model declares — see
+    /// [`ParameterRange`](crate::ParameterRange) and
+    /// [`ModelInfo`](crate::ModelInfo). They are replayed every step, after the
+    /// motion and before physics, so a host value wins over whatever the motion
+    /// drives.
+    pub fn parameters(&self) -> Parameters<'_, I> {
+        Parameters { model: &self.inner }
+    }
+
+    /// The part opacities of this instance, replayed every step.
+    pub fn parts(&self) -> Parts<'_, I> {
+        Parts { model: &self.inner }
+    }
+
+    /// Points head, body and eyes at `target`, given in `-1.0..=1.0` on both axes
+    /// (`-1` = left/top, `+y` = up).
+    ///
+    /// Which parameters that means is resolved per model and per
+    /// [`LookAtMode`]. The value persists until it is set again, so a host without
+    /// a cursor can call this once.
+    ///
+    /// While the widget has a [`LookAtSource`](crate::LookAtSource) the source
+    /// wins when it has an answer (the cursor is over the widget); **this value is
+    /// what the model returns to when the cursor leaves**, and what drives the
+    /// model when there is no source at all.
     pub fn look_at(&self, target: [f32; 2]) {
-        self.0.look_at.set(Some(target));
+        self.inner.look_at.set(Some(target));
     }
 
     /// Which parameters a LookAt target is written to.
     pub fn look_at_mode(&self) -> LookAtMode {
-        self.0.look_at_mode.get()
+        self.inner.look_at_mode.get()
     }
 
     /// Switches where a LookAt target lands, from the next frame on.
     ///
-    /// Both modes are resolved from the model's own physics wiring, so switching
-    /// never needs a reload.
+    /// Both tables are resolved at load time, so switching never needs a reload
+    /// and never touches the host's own values: the next step rewrites every
+    /// parameter from scratch.
     pub fn set_look_at_mode(&self, mode: LookAtMode) {
-        self.0.look_at_mode.set(mode);
+        self.inner.look_at_mode.set(mode);
     }
 
-    /// Stops time. The widget stops asking for frames, so the model holds its
-    /// pose until [`Live2dModel::resume`].
+    /// Stops time.
+    ///
+    /// This is a **total freeze**: no motion, no physics, no expression fade, and
+    /// no pointer events — the widget stops asking for frames, so nothing would
+    /// even be drawn. To stop a motion but keep interacting, use
+    /// [`Live2dModel::stop_motion`].
     pub fn pause(&self) {
-        self.0.paused.set(true);
+        self.inner.paused.set(true);
     }
 
     /// Restarts time after [`Live2dModel::pause`].
     pub fn resume(&self) {
-        self.0.paused.set(false);
+        self.inner.paused.set(false);
     }
 
     /// Whether time is stopped.
     pub fn is_paused(&self) -> bool {
-        self.0.paused.get()
+        self.inner.paused.get()
     }
 
     /// Turns physics evaluation on or off, for a still frame or a diagnostic A/B.
     pub fn set_physics_enabled(&self, enabled: bool) {
-        self.0.physics_enabled.set(enabled);
+        self.inner.physics_enabled.set(enabled);
     }
 
     /// Whether physics is evaluated.
     pub fn physics_enabled(&self) -> bool {
-        self.0.physics_enabled.get()
+        self.inner.physics_enabled.get()
     }
 
-    /// Plays the motion at `index`, in the order `motions` reports.
+    /// Sets what plays when nothing else does. [`Idle::Declared`] by default.
+    pub fn set_idle(&self, idle: Idle<I::Motion>) {
+        *self.inner.idle.borrow_mut() = idle;
+    }
+
+    /// Plays `clip` of `group`, stopping whatever was playing.
     ///
-    /// The request is queued and takes effect on the next frame. An index the
-    /// model does not have is reported as a
-    /// [`Problem::Renderer`](crate::Problem::Renderer), not ignored.
-    pub fn play_motion(&self, index: usize) {
-        self.push_command(Command::PlayMotion(index));
+    /// The request is queued and takes effect on the next frame. An out-of-range
+    /// pair is reported as a [`Problem::Renderer`](crate::Problem::Renderer), not
+    /// ignored.
+    pub fn play_motion(&self, group: I::Motion, clip: usize) {
+        self.inner
+            .push_command(Command::PlayMotion { group, clip });
     }
 
-    /// Applies the expression at `index` on top of the motion.
-    pub fn play_expression(&self, index: usize) {
-        self.push_command(Command::PlayExpression(index));
+    /// Plays a random clip of `group`.
+    ///
+    /// Which clip is random is decided by the render layer, because only it knows
+    /// how many the group holds.
+    pub fn play_random_motion(&self, group: I::Motion) {
+        self.inner.push_command(Command::PlayRandomMotion { group });
+    }
+
+    /// Applies an expression on top of the motion.
+    ///
+    /// Fading between expressions is the render layer's business; applying the
+    /// same expression twice restarts it.
+    pub fn play_expression(&self, expression: I::Expression) {
+        self.inner
+            .push_command(Command::PlayExpression { expression });
+    }
+
+    /// Fades out every expression currently applied.
+    pub fn clear_expressions(&self) {
+        self.inner.push_command(Command::ClearExpressions);
     }
 
     /// Stops the current motion, revealing the rest pose.
+    ///
+    /// Unlike [`Live2dModel::pause`] this keeps time running, so physics settles,
+    /// expressions keep fading and pointer events keep arriving.
     pub fn stop_motion(&self) {
-        self.push_command(Command::StopMotion);
+        self.inner.push_command(Command::StopMotion);
     }
+}
 
-    fn push_command(&self, command: Command) {
-        let mut commands = self.0.commands.borrow_mut();
+impl<I: Interface> fmt::Debug for Live2dModel<I> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Live2dModel")
+            .field("id", &self.inner.id)
+            .field("asset", &self.inner.asset)
+            .field("path", &self.inner.path)
+            .field("options", &self.inner.options)
+            .finish_non_exhaustive()
+    }
+}
 
-        if commands.len() >= MAX_QUEUED_COMMANDS {
-            commands.pop_front();
+impl<I: Interface> Inner<I> {
+    fn push_command(&self, command: Command<I>) {
+        let dropped = {
+            let mut commands = self.commands.borrow_mut();
+
+            if commands.len() >= MAX_QUEUED_COMMANDS {
+                commands.pop_front();
+                commands.push_back(command);
+                true
+            } else {
+                commands.push_back(command);
+                false
+            }
+        };
+
+        if dropped {
             self.report_dropped_command();
         }
-
-        commands.push_back(command);
     }
 
     fn report_dropped_command(&self) {
-        let mut problems = self.0.problems.borrow_mut();
+        let mut problems = self.problems.borrow_mut();
 
         for problem in problems.iter_mut() {
             if let Problem::CommandQueueOverflow { dropped } = problem {
@@ -253,169 +415,280 @@ impl Live2dModel {
         problems.push(Problem::CommandQueueOverflow { dropped: 1 });
     }
 
-    pub(crate) fn id(&self) -> u64 {
-        self.0.id
+    /// Records a problem once per distinct cause, so a host that repeats a mistake
+    /// every frame is not buried in copies of it.
+    fn report_foreign(&self, vocabulary: &'static str, name: &str) {
+        let mut reported = self.reported.borrow_mut();
+
+        if !reported.insert((vocabulary, name.to_owned())) {
+            return;
+        }
+
+        drop(reported);
+
+        self.problems.borrow_mut().push(Problem::ForeignKey {
+            vocabulary,
+            name: name.to_owned(),
+        });
+    }
+
+    fn accepts(&self, key: Option<AssetId>, vocabulary: &'static str, name: &str) -> bool {
+        if key.is_some_and(|asset| asset != self.asset) {
+            self.report_foreign(vocabulary, name);
+            return false;
+        }
+
+        true
+    }
+}
+
+/// The parameter overrides of one model, keyed by the interface's vocabulary.
+///
+/// Insertion is checked: a key minted from another asset is rejected and reported
+/// once, instead of landing on the same index of this model.
+pub struct Parameters<'a, I: Interface> {
+    model: &'a Inner<I>,
+}
+
+impl<I: Interface> Parameters<'_, I> {
+    /// Sets an override, returning the value it replaced.
+    ///
+    /// `None` means the key was rejected (it belongs to another asset) or that
+    /// there was no previous value.
+    pub fn insert(&self, key: I::Parameter, value: f32) -> Option<f32> {
+        if !self.model.accepts(key.asset(), "parameter", key.name()) {
+            return None;
+        }
+
+        self.model.parameters.borrow_mut().insert(key, value)
+    }
+
+    /// Removes an override.
+    pub fn remove(&self, key: &I::Parameter) -> Option<f32> {
+        self.model.parameters.borrow_mut().remove(key)
+    }
+
+    /// The override set for one key, if any.
+    pub fn get(&self, key: &I::Parameter) -> Option<f32> {
+        self.model.parameters.borrow().get(key).copied()
+    }
+
+    /// Drops every override.
+    pub fn clear(&self) {
+        self.model.parameters.borrow_mut().clear();
+    }
+
+    /// How many overrides are set.
+    pub fn len(&self) -> usize {
+        self.model.parameters.borrow().len()
+    }
+
+    /// Whether no overrides are set.
+    pub fn is_empty(&self) -> bool {
+        self.model.parameters.borrow().is_empty()
+    }
+}
+
+/// The part opacities of one model, keyed by the interface's vocabulary.
+///
+/// Values are clamped to `0.0..=1.0` by the render layer, and pose fading applies
+/// on top of them.
+pub struct Parts<'a, I: Interface> {
+    model: &'a Inner<I>,
+}
+
+impl<I: Interface> Parts<'_, I> {
+    /// Sets an opacity, returning the value it replaced.
+    pub fn insert(&self, key: I::Part, opacity: f32) -> Option<f32> {
+        if !self.model.accepts(key.asset(), "part", key.name()) {
+            return None;
+        }
+
+        self.model.parts.borrow_mut().insert(key, opacity)
+    }
+
+    /// Removes an override, restoring the part's own opacity.
+    pub fn remove(&self, key: &I::Part) -> Option<f32> {
+        self.model.parts.borrow_mut().remove(key)
+    }
+
+    /// The opacity set for one key, if any.
+    pub fn get(&self, key: &I::Part) -> Option<f32> {
+        self.model.parts.borrow().get(key).copied()
+    }
+
+    /// Drops every override.
+    pub fn clear(&self) {
+        self.model.parts.borrow_mut().clear();
+    }
+
+    /// How many overrides are set.
+    pub fn len(&self) -> usize {
+        self.model.parts.borrow().len()
+    }
+
+    /// Whether no overrides are set.
+    pub fn is_empty(&self) -> bool {
+        self.model.parts.borrow().is_empty()
+    }
+}
+
+impl<I: Interface> Inner<I> {
+    pub(crate) fn id(&self) -> ModelId {
+        self.id
+    }
+
+    pub(crate) fn asset(&self) -> AssetId {
+        self.asset
+    }
+
+    pub(crate) fn asset_options(&self) -> AssetOptions {
+        self.asset_options
     }
 
     pub(crate) fn path_arc(&self) -> Arc<PathBuf> {
-        Arc::clone(&self.0.path)
+        Arc::clone(&self.path)
+    }
+
+    pub(crate) fn options(&self) -> ModelOptions {
+        self.options
+    }
+
+    pub(crate) fn spec(&self) -> InterfaceSpec {
+        self.spec
     }
 
     pub(crate) fn presence(&self) -> Arc<Presence> {
-        Arc::clone(&self.0.presence)
+        Arc::clone(&self.presence)
     }
 
-    /// The target most recently given to [`Live2dModel::look_at`].
+    pub(crate) fn asset_presence(&self) -> Arc<Presence> {
+        Arc::clone(&self.asset_presence)
+    }
+
     pub(crate) fn target(&self) -> Option<[f32; 2]> {
-        self.0.look_at.get()
+        self.look_at.get()
     }
 
-    pub(crate) fn drain_commands(&self) -> Vec<Command> {
-        let mut commands = self.0.commands.borrow_mut();
-        commands.drain(..).collect()
+    pub(crate) fn paused(&self) -> bool {
+        self.paused.get()
+    }
+
+    pub(crate) fn look_at_mode(&self) -> LookAtMode {
+        self.look_at_mode.get()
+    }
+
+    pub(crate) fn physics_enabled(&self) -> bool {
+        self.physics_enabled.get()
+    }
+
+    pub(crate) fn parameter_indices(&self) -> Vec<(usize, f32)> {
+        self.parameters
+            .borrow()
+            .iter()
+            .map(|(key, value)| (key.index(), *value))
+            .collect()
+    }
+
+    pub(crate) fn part_indices(&self) -> Vec<(usize, f32)> {
+        self.parts
+            .borrow()
+            .iter()
+            .map(|(key, value)| (key.index(), *value))
+            .collect()
+    }
+
+    pub(crate) fn idle(&self) -> Idle<I::Motion> {
+        self.idle.borrow().clone()
+    }
+
+    pub(crate) fn drain_commands(&self) -> Vec<Command<I>> {
+        self.commands.borrow_mut().drain(..).collect()
+    }
+
+    pub(crate) fn drain_pointer(&self) -> Vec<PointerInput> {
+        std::mem::take(&mut *self.pointer.borrow_mut())
+    }
+
+    pub(crate) fn push_pointer(&self, input: PointerInput) {
+        self.pointer.borrow_mut().push(input);
     }
 
     pub(crate) fn take_problems(&self) -> Vec<Problem> {
-        let mut problems = self.0.problems.borrow_mut();
-        problems.drain(..).collect()
+        self.problems.borrow_mut().drain(..).collect()
     }
 }
 
-impl fmt::Debug for Live2dModel {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Live2dModel")
-            .field("id", &self.0.id)
-            .field("path", &self.0.path)
-            .field("settings", &self.0.settings)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Names the settings of a model whose budget has not been given yet.
-pub struct NoSettings;
-
-/// Names the settings of a model whose budget has been given.
-pub struct WithSettings(RenderSettings);
-
-/// A model being described setting by setting.
-///
-/// The settings are required for [`Live2dModelBuilder::build`] to exist, so
-/// forgetting them is a compile error rather than a silent default. Note that a
-/// conditional budget (`if wide { .. } else { .. }`) cannot be built up in place:
-/// the two branches have different types. Pass a value either way and override
-/// fields on it.
-pub struct Live2dModelBuilder<Stage> {
-    path: PathBuf,
-    stage: Stage,
-}
-
-impl Live2dModelBuilder<NoSettings> {
-    /// Sets the budget. Every other setting is changed on top of this value.
-    pub fn settings(self, settings: RenderSettings) -> Live2dModelBuilder<WithSettings> {
-        Live2dModelBuilder {
-            path: self.path,
-            stage: WithSettings(settings),
-        }
-    }
-}
-
-impl Live2dModelBuilder<WithSettings> {
-    /// Overrides the texture resolution multiplier.
-    pub fn texture_scale(mut self, scale: f32) -> Self {
-        self.stage.0.texture_scale = scale;
-        self
-    }
-
-    /// Overrides the mask render-target edge length.
-    pub fn mask_size(mut self, size: u32) -> Self {
-        self.stage.0.mask_size = size;
-        self
-    }
-
-    /// Creates the model. Nothing is loaded yet; see [`Live2dModel`].
-    pub fn build(self) -> Live2dModel {
-        Live2dModel::new(self.path, self.stage.0)
+impl<I: Interface> Live2dModel<I> {
+    pub(crate) fn inner(&self) -> &Inner<I> {
+        &self.inner
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raw::{Raw, RawMotion, RawParameter};
 
-    fn model() -> Live2dModel {
-        Live2dModel::from_path("model.model3.json", RenderSettings::default())
+    fn asset() -> Live2dAsset {
+        Live2dAsset::from_path("model.model3.json")
     }
 
     #[test]
     fn the_constructor_touches_no_files() {
-        let missing = Live2dModel::from_path("nowhere/gone.model3.json", RenderSettings::default());
+        let asset = Live2dAsset::from_path("nowhere/gone.model3.json");
 
-        assert_eq!(missing.path(), &PathBuf::from("nowhere/gone.model3.json"));
+        assert_eq!(asset.path(), Path::new("nowhere/gone.model3.json"));
     }
 
     #[test]
-    fn the_builder_produces_the_same_model_as_from_path() {
-        let settings = RenderSettings {
-            texture_scale: 0.25,
-            mask_size: 512,
-        };
-        let direct = Live2dModel::from_path("model.model3.json", settings);
-        let built = Live2dModel::builder("model.model3.json")
-            .settings(settings)
-            .build();
+    fn a_model_inherits_the_asset_identity_and_budget() {
+        let asset = Live2dAsset::with_options(
+            "model.model3.json",
+            AssetOptions {
+                texture_scale: 0.25,
+            },
+        );
+        let model = Live2dModel::<Raw>::new(&asset);
 
-        assert_eq!(direct.path(), built.path());
-        assert_eq!(direct.settings(), built.settings());
+        assert_eq!(model.asset(), asset.id());
+        assert_eq!(model.path(), asset.path());
     }
 
     #[test]
-    fn the_builder_overrides_single_fields() {
-        let settings = RenderSettings {
-            texture_scale: 1.0,
-            mask_size: 512,
-        };
-        let built = Live2dModel::builder("model.model3.json")
-            .settings(RenderSettings::default())
-            .texture_scale(1.0)
-            .mask_size(512)
-            .build();
+    fn commands_keep_their_order_and_are_drained_once() {
+        let model = Live2dModel::<Raw>::new(&asset());
+        let group = RawMotion::from_id(&crate::interface::KeyId {
+            asset: model.asset(),
+            index: 0,
+            name: Arc::from("Idle"),
+        })
+        .expect("a raw key");
 
-        assert_eq!(built.settings(), settings);
-    }
-
-    #[test]
-    fn commands_keep_their_order() {
-        let model = model();
-
-        model.play_motion(1);
-        model.play_expression(2);
+        model.play_motion(group.clone(), 1);
         model.stop_motion();
 
-        assert_eq!(
-            model.drain_commands(),
-            vec![
-                Command::PlayMotion(1),
-                Command::PlayExpression(2),
-                Command::StopMotion
-            ]
-        );
+        assert_eq!(model.inner.drain_commands().len(), 2);
+        assert!(model.inner.drain_commands().is_empty());
     }
 
     #[test]
     fn the_queue_drops_the_oldest_command_and_reports_it_once() {
-        let model = model();
+        let model = Live2dModel::<Raw>::new(&asset());
+        let group = RawMotion::from_id(&crate::interface::KeyId {
+            asset: model.asset(),
+            index: 0,
+            name: Arc::from("Idle"),
+        })
+        .expect("a raw key");
 
-        for index in 0..(MAX_QUEUED_COMMANDS + 6) {
-            model.play_motion(index);
+        for clip in 0..(MAX_QUEUED_COMMANDS + 6) {
+            model.play_motion(group.clone(), clip);
         }
 
-        let drained = model.drain_commands();
+        assert_eq!(model.inner.drain_commands().len(), MAX_QUEUED_COMMANDS);
 
-        assert_eq!(drained.len(), MAX_QUEUED_COMMANDS);
-        assert_eq!(drained.first(), Some(&Command::PlayMotion(6)));
-
-        let problems = model.take_problems();
+        let problems = model.inner.take_problems();
 
         assert_eq!(problems.len(), 1);
         assert!(matches!(
@@ -425,33 +698,51 @@ mod tests {
     }
 
     #[test]
-    fn draining_the_queue_empties_it() {
-        let model = model();
+    fn a_key_from_another_asset_is_rejected_and_reported_once() {
+        let own = asset();
+        let model = Live2dModel::<Raw>::new(&own);
+        let foreign = RawParameter::from_id(&crate::interface::KeyId {
+            asset: AssetId::unique(),
+            index: 0,
+            name: Arc::from("ParamAngleX"),
+        })
+        .expect("a raw key");
 
-        model.play_motion(3);
+        assert_eq!(model.parameters().insert(foreign.clone(), 1.0), None);
+        assert_eq!(model.parameters().insert(foreign, 2.0), None);
+        assert!(model.parameters().is_empty());
 
-        assert_eq!(model.drain_commands(), vec![Command::PlayMotion(3)]);
-        assert!(model.drain_commands().is_empty());
+        let problems = model.inner.take_problems();
+
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            problems.first(),
+            Some(Problem::ForeignKey { vocabulary: "parameter", .. })
+        ));
     }
 
     #[test]
-    fn the_last_look_at_value_wins() {
-        let model = model();
+    fn a_key_from_the_same_asset_is_accepted() {
+        let asset = Live2dAsset::from_path("model.model3.json");
+        let model = Live2dModel::<Raw>::new(&asset);
+        let own = RawParameter::from_id(&crate::interface::KeyId {
+            asset: model.asset(),
+            index: 0,
+            name: Arc::from("ParamAngleX"),
+        })
+        .expect("a raw key");
 
-        model.look_at([0.2, 0.3]);
-        model.look_at([-0.5, 0.75]);
+        assert_eq!(model.parameters().insert(own.clone(), 0.5), None);
+        assert_eq!(model.parameters().get(&own), Some(0.5));
+        assert_eq!(model.parameters().insert(own, 0.75), Some(0.5));
 
-        assert_eq!(model.target(), Some([-0.5, 0.75]));
-    }
-
-    #[test]
-    fn an_untouched_model_has_no_target() {
-        assert_eq!(model().target(), None);
+        let problems = model.inner.take_problems();
+        assert!(problems.is_empty());
     }
 
     #[test]
     fn pause_and_physics_are_readable_back() {
-        let model = model();
+        let model = Live2dModel::<Raw>::new(&asset());
 
         model.pause();
         model.set_physics_enabled(false);
@@ -467,14 +758,30 @@ mod tests {
     }
 
     #[test]
-    fn models_get_distinct_ids_and_presences() {
-        let first = model();
-        let second = model();
+    fn the_last_look_at_value_wins() {
+        let model = Live2dModel::<Raw>::new(&asset());
 
-        assert_ne!(first.0.id, second.0.id);
+        model.look_at([0.2, 0.3]);
+        model.look_at([-0.5, 0.75]);
+
+        assert_eq!(model.inner.target(), Some([-0.5, 0.75]));
+    }
+
+    #[test]
+    fn an_untouched_model_has_no_target() {
+        assert_eq!(Live2dModel::<Raw>::new(&asset()).inner.target(), None);
+    }
+
+    #[test]
+    fn models_get_distinct_ids_and_presences() {
+        let asset = asset();
+        let first = Live2dModel::<Raw>::new(&asset);
+        let second = Live2dModel::<Raw>::new(&asset);
+
+        assert_ne!(first.inner.id(), second.inner.id());
         assert_ne!(
-            Arc::as_ptr(&first.presence()),
-            Arc::as_ptr(&second.presence())
+            Arc::as_ptr(&first.inner.presence()),
+            Arc::as_ptr(&second.inner.presence())
         );
     }
 }

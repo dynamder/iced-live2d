@@ -1,26 +1,32 @@
-//! Two models in one window, drawn by the component.
+//! Two models in one window, driven through the `Raw` interface.
 //!
 //! ```text
 //! cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second.model3.json>]
 //! ```
 //!
-//! Keys: `R` next motion, `E` next expression, `P` pause/resume, `1`/`2` drop that
-//! model. Every event the component sends is printed and echoed in the status
-//! line, so a broken sidecar, an out-of-range motion index or a failed load is
-//! visible instead of silent.
+//! Keys: `R` play a random clip of the next motion group, `E` next expression,
+//! `P` pause/resume, `1`/`2` drop that model. Clicks and hovers are printed too.
 //!
-//! Dropping a model releases its GPU state at the end of the next rendered frame
-//! — watch the process's VRAM in Task Manager / `nvidia-smi` before and after
-//! pressing `1`.
+//! Every event the component sends is printed and echoed in the status line, so a
+//! broken sidecar, an out-of-range motion or a failed load is visible instead of
+//! silent. Dropping a model releases its GPU state at the end of the next rendered
+//! frame — watch VRAM before and after pressing `1`.
 //!
 //! `LIVE2D_PROFILE=1` prints the render layer's per-frame cost breakdown.
+//!
+//! [`Raw`] is the escape hatch: the model's own entries are the vocabulary, so
+//! this example works on any model without declaring an interface first. Keys are
+//! minted from the `ModelInfo` a `ModelLoaded` event carries.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use iced::advanced::Widget as _;
 use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, window};
-use iced_live2d::{Live2dEvent, Live2dModel, ModelSummary, RenderSettings, live2d, look_at};
+use iced_live2d::{
+    Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, Raw, live2d, look_at, raw,
+};
 
 fn main() -> iced::Result {
     let paths: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
@@ -44,11 +50,14 @@ fn main() -> iced::Result {
 }
 
 struct Slot {
-    model: Live2dModel,
+    /// Kept because the model holds the asset's identity, not its file: the asset
+    /// itself can be dropped once every model of it is built.
+    _asset: Live2dAsset,
+    model: Live2dModel<Raw>,
     /// Filled in when the load event arrives; the key bindings need it to know
-    /// how many motions there are.
-    summary: Option<ModelSummary>,
-    next_motion: usize,
+    /// what the model offers.
+    info: Option<Arc<ModelInfo>>,
+    next_group: usize,
     next_expression: usize,
 }
 
@@ -60,7 +69,7 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(usize, Live2dEvent),
+    Live2d(usize, Live2dEvent<Raw>),
     Key(keyboard::Event),
 }
 
@@ -69,10 +78,14 @@ impl App {
         let slots = paths
             .into_iter()
             .map(|path| {
+                let asset = Live2dAsset::from_path(path);
+                let model = Live2dModel::<Raw>::new(&asset);
+
                 Some(Slot {
-                    model: Live2dModel::from_path(path, RenderSettings::default()),
-                    summary: None,
-                    next_motion: 0,
+                    _asset: asset,
+                    model,
+                    info: None,
+                    next_group: 0,
                     next_expression: 0,
                 })
             })
@@ -134,33 +147,47 @@ impl App {
         keyboard::listen().map(Message::Key)
     }
 
-    fn on_event(&mut self, index: usize, event: Live2dEvent) {
+    fn on_event(&mut self, index: usize, event: Live2dEvent<Raw>) {
         let status = match &event {
-            Live2dEvent::ModelLoaded { summary } => {
+            Live2dEvent::ModelLoaded { info } => {
                 if let Some(slot) = self.slots.get_mut(index).and_then(Option::as_mut) {
-                    slot.summary = Some(*summary);
+                    slot.info = Some(Arc::clone(info));
                 }
 
                 format!(
-                    "model {} loaded: {} motions in {} groups, {} expressions",
+                    "model {} loaded: {} motions in {} groups, {} expressions, {} parameters, {} hit areas",
                     index + 1,
-                    summary.motions,
-                    summary.motion_groups,
-                    summary.expressions
+                    info.motion_count(),
+                    info.motions.len(),
+                    info.expressions.len(),
+                    info.parameters.len(),
+                    info.hit_areas.len(),
                 )
             }
-            Live2dEvent::ModelFailedToLoad { failure } => format!(
-                "model {} failed to load {}: {}",
-                index + 1,
-                failure.path.display(),
-                failure.error
-            ),
+            Live2dEvent::ModelFailedToLoad { failure } => {
+                format!("model {} failed to load: {failure}", index + 1)
+            }
             Live2dEvent::ModelReportedProblem { problem } => {
                 format!("model {}: {problem}", index + 1)
             }
-            Live2dEvent::MotionFinishedPlaying { motion } => {
-                format!("model {} finished motion #{}", index + 1, motion.index)
-            }
+            Live2dEvent::MotionStarted {
+                group,
+                clip,
+                duration,
+                looping,
+            } => format!(
+                "model {} started {} #{} ({duration:.2} s, looping: {looping})",
+                index + 1,
+                group.name(),
+                clip
+            ),
+            Live2dEvent::MotionFinishedPlaying { group, clip } => format!(
+                "model {} finished {} #{}",
+                index + 1,
+                group.name(),
+                clip
+            ),
+            Live2dEvent::Pointer(event) => format!("model {} {event:?}", index + 1),
         };
 
         println!("{status}");
@@ -169,31 +196,32 @@ impl App {
 
     fn next_motion(&mut self) {
         for slot in self.slots.iter_mut().flatten() {
-            let Some(summary) = slot.summary else {
+            let Some(info) = slot.info.as_ref() else {
                 continue;
             };
 
-            if summary.motions == 0 {
+            if info.motions.is_empty() {
                 continue;
             }
 
-            slot.model.play_motion(slot.next_motion % summary.motions);
-            slot.next_motion = slot.next_motion.wrapping_add(1);
+            let group = &raw::motions(info)[slot.next_group % info.motions.len()];
+            slot.model.play_random_motion(group.clone());
+            slot.next_group = slot.next_group.wrapping_add(1);
         }
     }
 
     fn next_expression(&mut self) {
         for slot in self.slots.iter_mut().flatten() {
-            let Some(summary) = slot.summary else {
+            let Some(info) = slot.info.as_ref() else {
                 continue;
             };
 
-            if summary.expressions == 0 {
+            if info.expressions.is_empty() {
                 continue;
             }
 
-            slot.model
-                .play_expression(slot.next_expression % summary.expressions);
+            let expression = &raw::expressions(info)[slot.next_expression % info.expressions.len()];
+            slot.model.play_expression(expression.clone());
             slot.next_expression = slot.next_expression.wrapping_add(1);
         }
     }
@@ -210,7 +238,7 @@ impl App {
         }
 
         self.status = if self.paused {
-            "paused".to_owned()
+            "paused (no frames, no pointer events)".to_owned()
         } else {
             "running".to_owned()
         };

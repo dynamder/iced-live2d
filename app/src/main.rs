@@ -1,14 +1,22 @@
 //! The demo app: one model, one window, hosted through `iced-live2d`.
 //!
-//! The app owns exactly one thing the component cannot — the model — and reacts
-//! to the events it sends. There is no frame subscription and no iced/wgpu
-//! plumbing here: the widget drives its own frames and the render layer lives
-//! behind the component.
+//! The app owns exactly two things the component cannot — the asset and the model
+//! built from it — and reacts to the events it sends. There is no frame
+//! subscription and no iced/wgpu plumbing here: the widget drives its own frames
+//! and the render layer lives behind the component.
+//!
+//! Keys: `R` play a random clip of the next motion group, `E` next expression,
+//! `C` clear expressions, `Space` stop the motion, `P` pause/resume. Every pointer
+//! event is printed as it arrives.
 
 mod cli;
 
+use std::sync::Arc;
+
 use iced::{Fill, Subscription, Task, Widget, keyboard, window};
-use iced_live2d::{Live2dEvent, Live2dModel, ModelSummary, RenderSettings, live2d, look_at};
+use iced_live2d::{
+    Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, Raw, live2d, look_at, raw,
+};
 
 fn main() -> iced::Result {
     let args = match cli::parse(std::env::args().skip(1)) {
@@ -61,31 +69,40 @@ fn main() -> iced::Result {
 }
 
 struct App {
-    model: Live2dModel,
+    /// Kept because the model only holds the asset's identity.
+    _asset: Live2dAsset,
+    model: Live2dModel<Raw>,
     /// Filled in when the load event arrives; the key bindings need it to know
-    /// how many motions and expressions there are.
-    summary: Option<ModelSummary>,
-    next_motion: usize,
+    /// what the model offers.
+    info: Option<Arc<ModelInfo>>,
+    next_group: usize,
     next_expression: usize,
+    paused: bool,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(Live2dEvent),
+    Live2d(Live2dEvent<Raw>),
     NextMotion,
     NextExpression,
+    ClearExpressions,
+    StopMotion,
+    TogglePause,
 }
 
 impl App {
     fn new(path: std::path::PathBuf, look_at_mode: iced_live2d::LookAtMode) -> Self {
-        let model = Live2dModel::from_path(path, RenderSettings::default());
+        let asset = Live2dAsset::from_path(path);
+        let model = Live2dModel::<Raw>::new(&asset);
         model.set_look_at_mode(look_at_mode);
 
         Self {
+            _asset: asset,
             model,
-            summary: None,
-            next_motion: 0,
+            info: None,
+            next_group: 0,
             next_expression: 0,
+            paused: false,
         }
     }
 
@@ -94,6 +111,9 @@ impl App {
             Message::Live2d(event) => self.report(event),
             Message::NextMotion => self.next_motion(),
             Message::NextExpression => self.next_expression(),
+            Message::ClearExpressions => self.model.clear_expressions(),
+            Message::StopMotion => self.model.stop_motion(),
+            Message::TogglePause => self.toggle_pause(),
         }
 
         Task::none()
@@ -116,61 +136,88 @@ impl App {
             } => match text.as_str() {
                 "r" => Some(Message::NextMotion),
                 "e" => Some(Message::NextExpression),
+                "c" => Some(Message::ClearExpressions),
+                "s" => Some(Message::StopMotion),
+                "p" => Some(Message::TogglePause),
                 _ => None,
             },
             _ => None,
         })
     }
 
-    fn report(&mut self, event: Live2dEvent) {
+    fn report(&mut self, event: Live2dEvent<Raw>) {
         match &event {
-            Live2dEvent::ModelLoaded { summary } => {
-                self.summary = Some(*summary);
+            Live2dEvent::ModelLoaded { info } => {
+                self.info = Some(Arc::clone(info));
 
                 println!(
-                    "live2d: loaded {} ({} motions in {} groups, {} expressions)",
+                    "live2d: loaded {} — {} motions in {} groups, {} expressions, {} parameters, {} hit areas",
                     self.model.path().display(),
-                    summary.motions,
-                    summary.motion_groups,
-                    summary.expressions
+                    info.motion_count(),
+                    info.motions.len(),
+                    info.expressions.len(),
+                    info.parameters.len(),
+                    info.hit_areas.len(),
                 );
             }
-            Live2dEvent::ModelFailedToLoad { failure } => eprintln!(
-                "live2d: failed to load {}: {}",
-                failure.path.display(),
-                failure.error
-            ),
-            Live2dEvent::ModelReportedProblem { problem } => eprintln!("live2d: {problem}"),
-            Live2dEvent::MotionFinishedPlaying { motion } => {
-                println!("live2d: motion #{} finished", motion.index);
+            Live2dEvent::ModelFailedToLoad { failure } => {
+                eprintln!("live2d: failed to load {failure}");
             }
+            Live2dEvent::ModelReportedProblem { problem } => eprintln!("live2d: {problem}"),
+            Live2dEvent::MotionStarted {
+                group,
+                clip,
+                duration,
+                looping,
+            } => println!(
+                "live2d: started {} #{} ({duration:.2} s, looping: {looping})",
+                group.name(),
+                clip
+            ),
+            Live2dEvent::MotionFinishedPlaying { group, clip } => {
+                println!("live2d: finished {} #{}", group.name(), clip);
+            }
+            Live2dEvent::Pointer(pointer) => println!("live2d: {pointer:?}"),
         }
     }
 
     fn next_motion(&mut self) {
-        let Some(summary) = self.summary else {
+        let Some(info) = self.info.as_ref() else {
             return;
         };
 
-        if summary.motions == 0 {
+        if info.motions.is_empty() {
             return;
         }
 
-        self.model.play_motion(self.next_motion % summary.motions);
-        self.next_motion = self.next_motion.wrapping_add(1);
+        let group = &raw::motions(info)[self.next_group % info.motions.len()];
+        self.model.play_random_motion(group.clone());
+        self.next_group = self.next_group.wrapping_add(1);
     }
 
     fn next_expression(&mut self) {
-        let Some(summary) = self.summary else {
+        let Some(info) = self.info.as_ref() else {
             return;
         };
 
-        if summary.expressions == 0 {
+        if info.expressions.is_empty() {
             return;
         }
 
-        self.model
-            .play_expression(self.next_expression % summary.expressions);
+        let expression = &raw::expressions(info)[self.next_expression % info.expressions.len()];
+        self.model.play_expression(expression.clone());
         self.next_expression = self.next_expression.wrapping_add(1);
+    }
+
+    fn toggle_pause(&mut self) {
+        self.paused = !self.paused;
+
+        if self.paused {
+            self.model.pause();
+            println!("live2d: paused (no frames, no pointer events)");
+        } else {
+            self.model.resume();
+            println!("live2d: running");
+        }
     }
 }

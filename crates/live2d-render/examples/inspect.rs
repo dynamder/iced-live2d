@@ -13,7 +13,7 @@ use live2d_render::mocari::assets::load_model_runtime;
 use live2d_render::mocari::expression::load_expression;
 use live2d_render::mocari::json::{Physics3, PhysicsValueKind};
 use live2d_render::mocari::motion::load_motion;
-use live2d_render::{ModelBounds, SceneOptions};
+use live2d_render::ModelBounds;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
@@ -266,7 +266,8 @@ fn report_framing(runtime: &live2d_render::mocari::ModelRuntime) {
 
     // The scene fits the canvas, not the art, so a canvas with spare room shrinks
     // the model on screen. This is the footprint a square window shows.
-    let view_fill = SceneOptions::default().view_fill;
+    // The framing the widget defaults to: 0.925 of the widget, i.e. 1.85 of NDC.
+    let view_fill = 1.85;
     let scale = (view_fill / frame.width()).min(view_fill / frame.height());
     let screen_width = 100.0 * art.width() * scale * 0.5;
     let screen_height = 100.0 * art.height() * scale * 0.5;

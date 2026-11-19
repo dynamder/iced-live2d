@@ -10,7 +10,7 @@
 //! Knobs, all optional (the full list is in `README.md`):
 //!
 //! - `SWEEP_DIRECT=<ParamId>` write that parameter directly instead of driving
-//!   the look-at target, in `-1.0..=1.0`
+//!   the look-at target, in `-1.0..=1.0` of its declared range
 //! - `SWEEP_RANGE=<lo>,<hi>` input range, default `-1,1`. `lo == hi` holds the
 //!   input still, which separates "jumps with position" from "jumps with time".
 //! - `SWEEP_ALL=1` watch every parameter instead of the six printed by default
@@ -21,12 +21,16 @@
 //!   state; by default the sweep stops it to isolate physics
 
 use live2d_render::wgpu;
-use live2d_render::{Live2dScene, SceneOptions};
+use live2d_render::{AssetOptions, ModelOptions};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
 #[path = "shared/knobs.rs"]
 mod knobs;
+#[path = "shared/session.rs"]
+mod session;
+
+use session::Session;
 
 const TRACKED: &[&str] = &[
     "AngleX",
@@ -38,11 +42,22 @@ const TRACKED: &[&str] = &[
     "FrontHairX1",
 ];
 
-fn drive(scene: &mut Live2dScene, direct: &Option<String>, x: f32) {
-    match direct {
-        Some(id) => scene.set_parameter_offset(id, x),
-        None => scene.look_at([x, 0.0]),
-    }
+fn drive(session: &mut Session, direct: &Option<String>, x: f32) {
+    let Some(id) = direct else {
+        session.model().set_look_at(Some([x, 0.0]));
+        return;
+    };
+
+    let info = session.info();
+    let Some(index) = info.parameter(id) else {
+        return;
+    };
+
+    let range = &info.parameters[index];
+    let amount = (x.clamp(-1.0, 1.0) + 1.0) * 0.5;
+    let raw = range.minimum + amount * (range.maximum - range.minimum);
+
+    session.model().set_parameters(&[(index, raw)]);
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,41 +73,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let watch_all = env_flag("SWEEP_ALL");
     let jump_threshold = env_f32("SWEEP_JUMP")?.unwrap_or(0.02);
     let settle: usize = env_f32("SWEEP_SETTLE")?.unwrap_or(60.0) as usize;
+    let look_at_mode = knobs::look_at_mode()?;
 
     let gpu::Gpu { device, queue } = gpu::open()?;
 
-    let mut scene = Live2dScene::load_with_options(
+    let mut session = Session::load(
         &device,
         &queue,
         &model_path,
         wgpu::TextureFormat::Rgba8Unorm,
-        SceneOptions {
-            texture_scale: 0.25,
-            ..SceneOptions::default()
-        },
+        (1, 1),
+        AssetOptions { texture_scale: 0.25 },
+        ModelOptions::default(),
     )?;
-    scene.set_look_at_mode(knobs::look_at_mode()?);
+
+    session.model().set_look_at_mode(look_at_mode);
 
     let direct = std::env::var("SWEEP_DIRECT").ok();
 
     if !env_flag("SWEEP_MOTION") {
-        scene.stop_motion();
+        session.model().stop_motion();
     }
 
     if env_flag("LIVE2D_NO_PHYSICS") {
-        scene.set_physics_enabled(false);
+        session.model().set_physics_enabled(false);
     }
 
     // Let physics settle at the left end before the first recorded frame.
     for _ in 0..settle {
-        drive(&mut scene, &direct, low);
-        scene.advance(&device, &queue, live2d_render::STEP)?;
+        drive(&mut session, &direct, low);
+        session.advance(&device, &queue, live2d_render::STEP)?;
     }
 
-    report_issues(&mut scene);
+    report_issues(&mut session);
 
     let watched: Vec<String> = if watch_all {
-        scene.parameter_ids().to_vec()
+        session
+            .info()
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.to_string())
+            .collect()
     } else {
         TRACKED.iter().map(|id| (*id).to_owned()).collect()
     };
@@ -107,12 +128,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = frame as f32 / (frames.max(2) - 1) as f32;
         let x = low + (high - low) * t;
 
-        drive(&mut scene, &direct, x);
-        scene.advance(&device, &queue, live2d_render::STEP)?;
+        drive(&mut session, &direct, x);
+        session.advance(&device, &queue, live2d_render::STEP)?;
 
         let values: Vec<f32> = watched
             .iter()
-            .map(|id| scene.parameter_value(id).unwrap_or(f32::NAN))
+            .map(|id| session.model().parameter_value(id).unwrap_or(f32::NAN))
             .collect();
 
         if !watch_all {
@@ -153,8 +174,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn report_issues(scene: &mut Live2dScene) {
-    for issue in scene.take_issues() {
+fn report_issues(session: &mut Session) {
+    for issue in session.take_issues() {
         eprintln!("{issue}");
     }
 }

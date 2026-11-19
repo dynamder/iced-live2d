@@ -70,11 +70,25 @@ live2d_render::View     视图：WgpuTransform + 取景参数 + 坐标反变换
 ## 3. 接口与词汇
 
 ```rust
-pub trait Vocabulary: Clone + Eq + Ord + Hash + Send + Sync + 'static {
+pub trait Vocabulary: Clone + Eq + Ord + Hash + std::fmt::Debug + Send + Sync + 'static {
     const SPEC: VocabularySpec;
 
     fn name(&self) -> &str;
+    /// Position in this vocabulary's own sequence.
     fn index(&self) -> usize;
+    /// Rebuilds the key the render layer means. See [`KeyId`].
+    fn from_id(id: &KeyId) -> Option<Self>;
+    /// The asset a model-scoped key belongs to; `None` for compile-time keys.
+    fn asset(&self) -> Option<AssetId> {
+        None
+    }
+}
+
+/// A vocabulary entry as the render layer identifies it.
+pub struct KeyId {
+    pub asset: AssetId,
+    pub index: usize,
+    pub name: Arc<str>,
 }
 
 pub enum VocabularySpec {
@@ -94,11 +108,23 @@ pub trait Interface: 'static {
 - `SPEC` 是关联常量而不是方法：`Interface` 零方法，pipeline 只需要一份纯数据
   `InterfaceSpec { parameter: VocabularySpec, .. }`，由泛型侧从 `I::*::SPEC` 拼出来放进
   primitive。**没有品牌参数，也没有「在 widget 里盖章」的环节。**
+- `from_id` 是**反向**路径，不是冗余：事件里的键是渲染层发现的——`MotionFinishedPlaying
+  { group }` 的组由播放器选出、`PointerEvent::Pressed { area }` 的命中区由 `hit_test` 选出，
+  渲染层手里只有模型下标。`KeyId` 三个字段各有用途：`index` 是词表下标，`name` 让
+  `Raw` 键能凭空造出来，`asset` 让外来键能被认出。缺了它，事件只能带字符串，类型化就是假的。
+- `from_id` 对 derive 生成的实现恒为 `Some`；对手写实现可能 `None`（`SPEC` 的顺序与
+  `index()`/`from_id()` 不一致）。那种情况发一条 `Problem`，不静默丢事件。
+- `asset()` 只在 `VocabularySpec::Model` 下返回 `Some`，见 §3.2。
 - `VocabularySpec::Static(names)`：加载时按名字解析成映射表，缺名字即失败。
   `VocabularySpec::Model`：映射是恒等（枚举序列就是模型自己的顺序），不可能缺。
 - `index()` 的语义统一为「在该词表枚举序列中的位置」：typed 是 `ALL` 的位置，raw 是模型下标，
   两者在各自的 `SPEC` 下同序。
 - `Vocabulary: Send + Sync` 是因为事件要经通道回到 UI 层；词表本身是纯数据。
+- `Vocabulary: Debug` 是为了 `Live2dEvent<I>` 能 `Debug` 而不逼宿主给「接口标记类型」实现
+  trait：Rust 的 derive 只会给类型参数加界，于是事件的 `Debug`/`Clone` 在组件里手写，界加在
+  `I::Motion` 这些关联类型上；宿主那五个枚举 derive 一次就够，`struct Face;` 不必再 derive。
+- 空词表是合法且有用的：`enum NoExpression {}` 表示「这个接口不提供表情」，derive 生成的
+  `match *self {}` 让任何键都无法存在，正好是模型的能力。Hiyori 就是这种模型。
 
 ### 3.1 词表由宿主声明，宏是可选的糖
 
@@ -123,8 +149,10 @@ impl Interface for Face {
 }
 ```
 
-- derive 生成 `SPEC`、固有 `ALL`、`name()`、`index()`；`prefix` 覆盖 Cubism 的标准前缀，
-  逐变体 `#[name(..)]` 覆盖老 rig 的写法（`PARAM_ANGLE_X` 等），两者都不写就用变体名。
+- derive 生成 `SPEC`、`name()`、`index()`、`from_id()`，以及一个**固有**的
+  `const ALL: &'static [Self]`（宿主枚举用；不进 trait，免得手写实现被迫提供）。
+  `prefix` 覆盖 Cubism 的标准前缀，逐变体 `#[name(..)]` 覆盖老 rig 的写法
+  （`PARAM_ANGLE_X` 等），两者都不写就用变体名。
 - `Interface` 只有五行 associated type，**手写，不另设 derive**；也不提供把五个词表藏进一条
   宏调用的 DSL。
 - **宏糖在 `macros` feature 之后，默认关闭。** 关闭时组件不依赖 proc-macro crate，编译依赖零
@@ -136,11 +164,14 @@ impl Interface for Face {
 | 接口 | 参数键 | 可移植性 | 误用后果 |
 |---|---|---|---|
 | typed（如 `Face`） | 宿主声明的枚举变体 | 同一 `I` 的所有模型 | 编译错误 |
-| `Raw` | `RawParameter { asset: AssetId, name: Arc<str>, index: u16 }` | 仅本 asset | apply 时按 asset id 过滤，丢一次 `Problem` |
+| `Raw` | `RawParameter { asset: AssetId, name: Arc<str>, index: usize }` | 仅本 asset | **插入时**按 asset id 拒绝，丢一次 `Problem` |
 
 typed 的键就是枚举值，没有额外的 `ParameterKey`。`Raw` 是「任意模型 = 它自己给自己声明接口」
-的退化实现：词表从加载出的 `ModelInfo` 枚举，宿主拿到的键带 asset 身份，换模型后旧键会被丢弃
+的退化实现：词表从加载出的 `ModelInfo` 枚举，宿主拿到的键带 asset 身份，换模型后旧键会被拒绝
 并报一次问题，而不是静默写到同名下标。
+
+过滤发生在 `wrap::Parameters::insert` 里（`Vocabulary::asset() != 本模型的 asset`），不是每帧
+apply 时：覆盖表因此永远不可能持有外来键，也不必每帧扫一遍。
 
 ```rust
 let parameters = raw::parameters(&info);
@@ -195,8 +226,14 @@ reset → motion → expression → 宿主参数 → look-at → 部件 → phys
 
 - 索引空间回到官方形状 `(group, clip)`：`play_motion(group, clip)` /
   `play_random_motion(group)`；`MotionFinishedPlaying` 与 `MotionStarted` 也带这一对。
-- 待机是显式策略 `idle_group: Option<I::Motion>`，默认取声明的 `Idle`，组内随机（对齐官方），
-  `None` 即完全由宿主驱动。
+- 待机是显式策略，因为「默认」和「关闭」不能共用一个 `None`：
+
+```rust
+pub enum Idle<M> { Declared, Group(M), Off }
+```
+
+  `Declared`（默认）取模型声明的 `Idle` 组，组内随机（对齐官方）；`Group` 指定另一组；
+  `Off` 即完全由宿主驱动。`Raw` 的 `Declared` 靠名字 `Idle` 解析，解析不到就是 `Off`。
 - `duration` / `looping` 只有解析过动作文件才知道，因此随 `MotionStarted` 到达，不进加载期元数据。
 
 ### 4.3 表情
@@ -216,7 +253,8 @@ Live2dPipeline
 └── views:   ViewId  -> ViewSlot          // WgpuTransform
 ```
 
-- `Primitive` 只携带纯数据 + `Option<Sender>` + `Arc<Presence>`。**不设 `on_event` 时没有通道**，
+- `Primitive` 只携带纯数据 + `Option<Sender>` + 两枚 `Arc<Presence>`（模型一枚、视图一枚，
+  因为模型与视图各有自己的 slot 与回收条件）。**不设 `on_event` 时没有通道**，
   无界增长的问题从结构上消失。
 - 事件走**模型级广播**：pipeline 按模型记 listener，首次注册时补发一次加载结果；`send` 失败即
   剔除（接收端随控件离开树消失），不需要帧计数。
@@ -249,7 +287,9 @@ pub enum Live2dEvent<I: Interface> {
 ```
 
 - `ModelInfo` 是**非泛型**的 asset 视图（canvas、全部名字与范围、命中区列表），用于 UI 展示与
-  `Raw` 枚举，**不签发键**。
+  `Raw` 枚举，**不签发键**。`ModelInfo::bounds` 同时是取景输入。
+- 带键的事件在控件侧用 `I::*::from_id` 还原：渲染层发的是 `KeyId`，控件换成类型化键。还原失败
+  只可能是手写 `Vocabulary` 与 `SPEC` 不一致，报一条 `Problem`。
 - 事件晚一帧：`prepare` 拿不到 `Shell`，只能在下一次 `update` 发布。这是结构性的，不是缺陷。
 - 多模型时宿主用闭包捕获下标区分（`live2d(&model).on_event(move |e| Message::Live2d(index, e))`）。
 
@@ -259,9 +299,14 @@ pub enum Live2dEvent<I: Interface> {
 
 ### 7.1 取景
 
-- 取景是**视图属性**：`View { transform, aspect, fill }`，`View::to_model` 提供命中测试用的
-  反变换。取景逻辑单源，pipeline 不再保存 aspect/fill。
-- 多视图共享一个实例时各视图取景独立——这条依赖「mask 变换是否与视图无关」的像素验证，见 §9。
+- 取景是**视图属性**：`View { transform, aspect, fill, bounds }`，`View::to_model` 提供命中
+  测试用的反变换（由 `fit_matrix` 产出的仿射矩阵解析求逆，不另写一份取景数学）。
+  取景逻辑单源，pipeline 不再保存 aspect/fill。
+- `ModelInfo::bounds` 是模型空间包围盒，宿主用它按模型比例摆控件；`View` 也从这里拿取景输入。
+- 多视图共享一个实例时各视图取景独立，**已核实成立**：mask 的 `mask_transform` /
+  `clip_params` 只由模型空间几何与 mask target 布局决定（mocari 的 `ClippingContext`），
+  与视图变换无关；且每个 primitive 的 mask pass 紧跟自己的 model pass。代价是同一模型 N 个
+  视图时 mask pass 跑 N 次——正确，只是重复，暂不优化。
 
 ### 7.2 指针
 
@@ -306,24 +351,33 @@ PointerEvent<I>::
 |---|---|
 | 命中范围：只认 `model3.json` 的 `HitAreas`，还是加 drawable 轮廓 | 未定；先按前者 + 未命中回传坐标 |
 | look-at 阻尼（官方 `CubismLook` 有 Damping） | 未定；`LookAtSource` 的文档矛盾无论如何都要修 |
-| 多视图取景 | 依赖 mask 变换的像素验证；若与视图相关，需要 mocari 的第 5 个补丁 |
+| 多视图取景 | **已排除**：mask 变换与视图无关（§7.1），不需要 mocari 补丁；像素验证随步骤 5 做 |
 | 动作优先级 / 队列 / crossfade | 推迟（mocari 现在还丢弃动作级 fade） |
 | 呼吸 / 眨眼 / 口型同步 | 推迟（mocari 没有，需要自己写） |
 | 异步加载 / 进度 / 重试 | 推迟 |
 
 ---
 
-## 10. 落地顺序
+## 10. 落地
 
-1. `live2d-render` 拆 `Asset` / `Model` / `ModelGpu` / `View`，删除 `Live2dScene`；用
-   `examples/offscreen` 做像素回归。
-2. 组件层：`Live2dAsset` / `Live2dModel<I>` / pipeline 三张表 / 事件广播 / `Option<Sender>`；
-   `app` 与 `examples/minimal` 同步改。
-3. `Interface` + `Vocabulary` + `VocabularySpec` + `Raw` + 加载校验（含「校验先于贴图上传」）。
-4. 参数 / 部件 / 动作 / 表情 API 与 `step` 重排。
-5. 取景移到视图；验证 mask 变换。
-6. 交互层（指针、命中、光标形状、事件捕获）。
-7. `macros` feature 与 `#[derive(Vocabulary)]`（不影响 1–6 的正确性，随时可插入）。
-8. §9 里推迟的子系统。
+八步全部落地；下面记的是每步的验收证据，不是计划。
 
-每一步都要独立可验证、独立提交；验收标准写在提交说明里，不写「大概能跑」。
+| 步骤 | 状态 | 证据 |
+|---|---|---|
+| 1. `live2d-render` 拆 `Asset`/`Model`/`ModelGpu`/`View`，删 `Live2dScene` | ✅ | 5 张 `examples/offscreen` 帧（Hiyori 静止 / look-at / viewer 模式 / 动作、大肥鱼静止）重构前后 **SHA-256 逐字节相同** |
+| 2. 组件层三张表 / 事件广播 / `Option<Sender>` | ✅ | `examples/minimal` 两个模型各自收到 `ModelLoaded` |
+| 3. `Interface` + `Raw` + 加载校验（校验先于贴图上传） | ✅ | `examples/typed` 在 Hiyori 上通过；在 Wanko 上报 `interface mismatch: missing parameters […]; missing parts […]`，一条而非每帧一条 |
+| 4. 参数 / 部件 / 动作 / 表情 API 与 `step` 重排 | ✅ | look-at 帧与重构前像素相同（那条路径正是重排后的写入点） |
+| 5. 取景移到视图；mask 变换与视图无关 | ✅ | mask 的 `mask_transform`/`clip_params` 只由模型空间几何与 mask target 布局决定；多视图因此不需要 mocari 补丁 |
+| 6. 交互层（指针、命中、光标形状） | ✅ | 滚轮/点击经 `Live2dEvent::Pointer` 到达宿主（`examples/typed` 打印） |
+| 7. `macros` feature 与 `#[derive(Vocabulary)]` | ✅ | 独立 crate `crates/iced-live2d-macros`；默认关闭 |
+| 8. §9 推迟的子系统 | ⏸ | 未开始（见 §9） |
+
+像素回归的命令与基线：
+
+```bash
+LIVE2D_TEXTURE_SCALE=0.5 LIVE2D_NO_MOTION=1 ./target/debug/examples/offscreen.exe <model> out.png 900 30
+```
+
+`LIVE2D_PROFILE=1` 现在把一帧拆成 `step` / `deform` / `upload` 三项；Hiyori（134 drawable）实测
+`step 0.08 ms, deform 3.4 ms, upload 1.4 ms`，60 fps。

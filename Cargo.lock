@@ -1100,7 +1100,17 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "iced",
+ "iced-live2d-macros",
  "live2d-render",
+]
+
+[[package]]
+name = "iced-live2d-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
