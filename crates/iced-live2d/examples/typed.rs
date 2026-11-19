@@ -19,7 +19,7 @@ use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Hover, Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions,
-    PointerEvent, Vocabulary, live2d, look_at,
+    PointerEvent, Pointing, Vocabulary, live2d, look_at,
 };
 
 /// The parameters this interface drives.
@@ -167,7 +167,7 @@ impl App {
 
     fn on_event(&mut self, event: Live2dEvent<Face>) {
         match &event {
-            Live2dEvent::ModelLoaded { info } => {
+            Live2dEvent::ModelLoaded { info, .. } => {
                 self.info = Some(Arc::clone(info));
 
                 // Playing `Idle` is this example's policy, not the component's.
@@ -181,10 +181,10 @@ impl App {
                     info.hit_areas.len(),
                 );
             }
-            Live2dEvent::ModelFailedToLoad { failure } => {
+            Live2dEvent::ModelFailedToLoad { failure, .. } => {
                 self.status = format!("failed to load: {failure}");
             }
-            Live2dEvent::ModelReportedProblem { problem } => {
+            Live2dEvent::ModelReportedProblem { problem, .. } => {
                 self.status = problem.to_string();
             }
             Live2dEvent::MotionStarted {
@@ -192,11 +192,12 @@ impl App {
                 clip,
                 duration,
                 looping,
+                ..
             } => {
                 self.status =
                     format!("started {group:?} #{clip} ({duration:.2} s, looping: {looping})");
             }
-            Live2dEvent::MotionFinishedPlaying { group, clip } => {
+            Live2dEvent::MotionFinishedPlaying { group, clip, .. } => {
                 // Back to the first idle clip, which is this example's policy.
                 if *group == FaceMotion::Idle {
                     self.model.play_motion(FaceMotion::Idle, 0);
@@ -204,15 +205,18 @@ impl App {
 
                 self.status = format!("finished {group:?} #{clip}");
             }
-            Live2dEvent::Pointer(PointerEvent::Pressed {
+            Live2dEvent::Pointer(PointerEvent::Pressed(Pointing {
                 area: Some(FaceHitArea::Body),
                 ..
-            }) => {
+            })) => {
                 self.model.play_motion(FaceMotion::TapBody, 0);
                 self.status = "pressed Body: TapBody".to_owned();
             }
-            Live2dEvent::Pointer(pointer) => {
-                self.status = format!("{pointer:?}");
+            Live2dEvent::Pointer(pointing) => {
+                self.status = format!("{pointing:?}");
+            }
+            Live2dEvent::Gesture(gesture) => {
+                self.status = format!("{gesture:?}");
             }
         }
 
