@@ -7,7 +7,7 @@
 //! from the `LIVE2D_*` knobs in `README.md`.
 
 use live2d_render::wgpu;
-use live2d_render::{AssetOptions, ClipRect, LookAtMode};
+use live2d_render::{AssetOptions, ClipRect, Fade, LookAtMode};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
@@ -157,6 +157,7 @@ struct Knobs {
     expression: Option<usize>,
     clear_expressions: bool,
     no_motion: bool,
+    fade: Option<Fade>,
     no_physics: bool,
     reclip: bool,
     look_at: Option<[f32; 2]>,
@@ -174,6 +175,7 @@ impl Knobs {
             expression: env_index("LIVE2D_EXPR")?,
             clear_expressions: env_flag("LIVE2D_CLEAR_EXPR"),
             no_motion: env_flag("LIVE2D_NO_MOTION"),
+            fade: env_fade()?,
             no_physics: env_flag("LIVE2D_NO_PHYSICS"),
             reclip: env_flag("LIVE2D_RECLIP"),
             look_at: env_look_at()?,
@@ -184,6 +186,11 @@ impl Knobs {
     }
 
     fn apply(&self, session: &mut Session) {
+        // The fade is resolved when a motion starts, so it has to be set first.
+        if let Some(fade) = self.fade {
+            session.model().set_fade(Some(fade));
+        }
+
         if let Some((group, clip)) = self.motion {
             session.model().play_motion(group, clip);
         }
@@ -208,6 +215,25 @@ impl Knobs {
             session.model().set_look_at(Some(target));
         }
     }
+}
+
+/// `LIVE2D_FADE`: seconds, or `cut` for none. Absent leaves the files to decide.
+fn env_fade() -> Result<Option<Fade>, Box<dyn std::error::Error>> {
+    let Some(raw) = env_string("LIVE2D_FADE")? else {
+        return Ok(None);
+    };
+
+    if raw == "cut" {
+        return Ok(Some(Fade::zero()));
+    }
+
+    let seconds: f32 = raw
+        .parse()
+        .map_err(|_| format!("LIVE2D_FADE must be seconds or \"cut\", got {raw:?}"))?;
+
+    Ok(Some(Fade::from(std::time::Duration::from_secs_f32(
+        seconds,
+    ))))
 }
 
 fn env_f32(name: &str) -> Result<Option<f32>, Box<dyn std::error::Error>> {

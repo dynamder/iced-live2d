@@ -19,7 +19,7 @@ use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Gesture, GestureEvent, Gestures, Hover, Interface, Live2dAsset, Live2dEvent,
-    Live2dModel, ModelInfo, ModelOptions, Vocabulary, live2d, look_at,
+    Live2dModel, ModelInfo, ModelOptions, MotionEnd, Vocabulary, live2d, look_at,
 };
 
 /// The parameters this interface drives.
@@ -198,13 +198,21 @@ impl App {
                 self.status =
                     format!("started {group:?} #{clip} ({duration:.2} s, looping: {looping})");
             }
-            Live2dEvent::MotionFinishedPlaying { group, clip, .. } => {
+            Live2dEvent::MotionEnded {
+                group,
+                clip,
+                ended: MotionEnd::Completed,
+                ..
+            } => {
                 // Back to the first idle clip, which is this example's policy.
                 if *group == FaceMotion::Idle {
                     self.model.play_motion(FaceMotion::Idle, 0);
                 }
 
                 self.status = format!("finished {group:?} #{clip}");
+            }
+            Live2dEvent::MotionEnded { group, clip, .. } => {
+                self.status = format!("interrupted {group:?} #{clip}");
             }
             Live2dEvent::Input(Gesture::Clicked(tap)) => {
                 if tap.area == Some(FaceHitArea::Body) {

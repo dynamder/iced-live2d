@@ -455,10 +455,11 @@ impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
                 duration,
                 looping,
             },
-            PipelineEvent::MotionFinished { group, clip } => Live2dEvent::MotionFinishedPlaying {
+            PipelineEvent::MotionEnded { group, clip, ended } => Live2dEvent::MotionEnded {
                 model,
                 group: key::<I::Motion>(group, "motion")?,
                 clip,
+                ended,
             },
             PipelineEvent::Pointer(_) => {
                 unreachable!("pointer events are turned into input before this point")
@@ -1009,6 +1010,8 @@ impl<Message, I: Interface, M: Plumbing> shader::Program<Message> for Live2d<'_,
                 problems: model.take_problems(),
                 look_at,
                 look_at_mode: model.look_at_mode(),
+                fade: model.fade(),
+                fade_limit: model.fade_limit(),
                 physics_enabled: model.physics_enabled(),
                 paused: model.paused(),
                 cursor: inside,

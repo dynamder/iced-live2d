@@ -16,20 +16,6 @@ file is the working list.
 Everything below stops a host from doing something its users expect, and none of
 it can be worked around from the widget's public API.
 
-### Motion transitions
-
-`play_motion` replaces the player and `stop_motion` drops it
-([model.rs](../crates/live2d-render/src/model.rs#L385-L396)), so the outgoing
-pose disappears the instant the next one starts. `mocari`'s `MotionPlayer`
-carries a weight, but `Model` owns exactly one player
-([model.rs](../crates/live2d-render/src/model.rs#L68)), so a host cannot
-cross-fade two motions. Any host that plays more than one clip eventually wants
-this; the demo app already does.
-
-**wire**, medium. Known side effect until it is fixed: part opacities do not
-cross-fade — `mocari` blends them from `1.0` rather than from the outgoing value
-([motion.rs](../vendor/mocari/src/motion.rs#L159)).
-
 ### Host parameter layering
 
 `parameters()` writes absolute overrides

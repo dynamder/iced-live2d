@@ -22,6 +22,7 @@
 mod asset;
 mod bounds;
 mod error;
+mod fade;
 mod gpu;
 mod info;
 mod model;
@@ -31,9 +32,10 @@ mod view;
 pub use asset::{Asset, AssetOptions, IDLE_GROUP, ModelOptions, Prepared, SCANNED_GROUP};
 pub use bounds::ModelBounds;
 pub use error::{Error, Result};
+pub use fade::Fade;
 pub use gpu::ModelGpu;
 pub use info::{AssetId, HitArea, ModelInfo, MotionGroup, ParameterRange};
-pub use model::{Finished, Model, STEP, Started};
+pub use model::{Ended, Model, MotionEnd, STEP, Started};
 pub use rig::{Axis, Binding, LookAtMode, ModelFacts, Rig, Route, Slot, Source, resolve};
 pub use view::{ClipRect, View};
 

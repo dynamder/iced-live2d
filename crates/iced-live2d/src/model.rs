@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use live2d_render::{AssetId, AssetOptions, LookAtMode, ModelOptions};
+use live2d_render::{AssetId, AssetOptions, Fade, LookAtMode, ModelOptions};
 
 use crate::event::Problem;
 use crate::interaction::Pointer;
@@ -107,6 +107,8 @@ pub(crate) struct Inner<I: Interface> {
     commands: RefCell<VecDeque<Command<I>>>,
     look_at: Cell<Option<[f32; 2]>>,
     look_at_mode: Cell<LookAtMode>,
+    fade: Cell<Option<Fade>>,
+    fade_limit: Cell<Option<usize>>,
     paused: Cell<bool>,
     physics_enabled: Cell<bool>,
     pointer: RefCell<Vec<PointerInput>>,
@@ -216,6 +218,8 @@ impl<I: Interface> Live2dModel<I> {
                 commands: RefCell::new(VecDeque::new()),
                 look_at: Cell::new(None),
                 look_at_mode: Cell::new(LookAtMode::default()),
+                fade: Cell::new(None),
+                fade_limit: Cell::new(None),
                 paused: Cell::new(false),
                 physics_enabled: Cell::new(true),
                 pointer: RefCell::new(Vec::new()),
@@ -279,6 +283,34 @@ impl<I: Interface> Live2dModel<I> {
     /// needed; host values are untouched.
     pub fn set_look_at_mode(&self, mode: LookAtMode) {
         self.inner.look_at_mode.set(mode);
+    }
+
+    /// How long a motion fades when nothing in the model folder declares a time.
+    ///
+    /// `None` — the default — leaves the files alone and gives the gap
+    /// [`Fade::default`], Cubism's one second. `Some(fade)` overrides even a value a
+    /// motion file declares, which is how [`Fade::zero`] turns every switch into a
+    /// cut.
+    pub fn set_fade(&self, fade: Option<Fade>) {
+        self.inner.fade.set(fade);
+    }
+
+    /// The fade this host set, if any.
+    pub fn fade(&self) -> Option<Fade> {
+        self.inner.fade.get()
+    }
+
+    /// Caps how many interrupted motions may still be fading at once.
+    ///
+    /// `None`, the default, lets every one of them run to its own end; a number drops
+    /// the oldest, which is the one closest to invisible.
+    pub fn set_fade_limit(&self, limit: Option<usize>) {
+        self.inner.fade_limit.set(limit);
+    }
+
+    /// The cap on concurrent fade-outs, if any.
+    pub fn fade_limit(&self) -> Option<usize> {
+        self.inner.fade_limit.get()
     }
 
     /// Stops time — a **total freeze**: no motion, no physics, no pointer events,
@@ -545,6 +577,14 @@ impl<I: Interface> Inner<I> {
 
     pub(crate) fn look_at_mode(&self) -> LookAtMode {
         self.look_at_mode.get()
+    }
+
+    pub(crate) fn fade(&self) -> Option<Fade> {
+        self.fade.get()
+    }
+
+    pub(crate) fn fade_limit(&self) -> Option<usize> {
+        self.fade_limit.get()
     }
 
     pub(crate) fn physics_enabled(&self) -> bool {

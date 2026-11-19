@@ -74,8 +74,8 @@ impl Default for ModelOptions {
 #[derive(Debug, Clone)]
 pub(crate) struct Shared {
     pub info: Arc<ModelInfo>,
-    /// Motion files per group, in model order.
-    pub motions: Arc<[Arc<[PathBuf]>]>,
+    /// Motion clips per group, in model order.
+    pub motions: Arc<[Arc<[MotionRef]>]>,
     pub expressions: Arc<[ExpressionRef]>,
     pub rigs: Arc<Rigs>,
 }
@@ -84,6 +84,28 @@ pub(crate) struct Shared {
 pub(crate) struct ExpressionRef {
     pub name: Arc<str>,
     pub path: PathBuf,
+}
+
+/// One motion clip as the model file refers to it: the file, plus the fade times the
+/// reference declares.
+#[derive(Debug, Clone)]
+pub(crate) struct MotionRef {
+    pub path: PathBuf,
+    /// `None` when the reference says nothing, leaving it to the motion file or the
+    /// caller's default.
+    pub fade_in: Option<f32>,
+    pub fade_out: Option<f32>,
+}
+
+impl MotionRef {
+    /// A clip found by scanning the model directory: no reference, so no fade.
+    fn scanned(path: PathBuf) -> Self {
+        Self {
+            path,
+            fade_in: None,
+            fade_out: None,
+        }
+    }
 }
 
 /// The look-at table resolved once per mode.
@@ -138,7 +160,7 @@ impl Asset {
             .ok_or(Error::NoDrawables)?;
 
         let mut issues = Vec::new();
-        let mut motion_groups = motion_paths_by_group(runtime, model_dir.as_deref());
+        let mut motion_groups = motions_by_group(runtime, model_dir.as_deref());
         let mut expressions = expression_paths(runtime, model_dir.as_deref());
 
         if options.scan_sidecars
@@ -148,7 +170,14 @@ impl Asset {
             let scanned = scan_sidecars(dir, &mut issues);
 
             if motion_groups.is_empty() && !scanned.motions.is_empty() {
-                motion_groups.insert(SCANNED_GROUP.to_owned(), scanned.motions);
+                motion_groups.insert(
+                    SCANNED_GROUP.to_owned(),
+                    scanned
+                        .motions
+                        .into_iter()
+                        .map(MotionRef::scanned)
+                        .collect(),
+                );
             }
 
             if expressions.is_empty() {
@@ -163,7 +192,7 @@ impl Asset {
             viewer: rig::resolve(LookAtMode::ViewerDefault, &facts),
         };
 
-        let motion_groups: Vec<(String, Vec<PathBuf>)> = motion_groups.into_iter().collect();
+        let motion_groups: Vec<(String, Vec<MotionRef>)> = motion_groups.into_iter().collect();
         let info = Arc::new(ModelInfo {
             asset: id,
             bounds,
@@ -295,10 +324,10 @@ impl Asset {
     }
 }
 
-fn motion_paths_by_group(
+fn motions_by_group(
     runtime: &ModelRuntime,
     model_dir: Option<&Path>,
-) -> BTreeMap<String, Vec<PathBuf>> {
+) -> BTreeMap<String, Vec<MotionRef>> {
     let Some(model_dir) = model_dir else {
         return BTreeMap::new();
     };
@@ -312,7 +341,11 @@ fn motion_paths_by_group(
                 group.clone(),
                 references
                     .iter()
-                    .map(|reference| model_dir.join(reference.file()))
+                    .map(|reference| MotionRef {
+                        path: model_dir.join(reference.file()),
+                        fade_in: reference.fade_in_time(),
+                        fade_out: reference.fade_out_time(),
+                    })
                     .collect(),
             )
         })

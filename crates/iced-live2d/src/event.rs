@@ -10,7 +10,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use live2d_render::{Error, ModelInfo};
+use live2d_render::{Error, ModelInfo, MotionEnd};
 
 use crate::interaction::{Gesture, PointerEvent};
 use crate::interface::{Interface, MissingNames};
@@ -58,18 +58,23 @@ pub enum Live2dEvent<I: Interface, In> {
         clip: usize,
         /// Length of the clip in seconds, as declared by the motion file.
         duration: f32,
-        /// Whether the clip loops. A looping clip never reports
-        /// [`Live2dEvent::MotionFinishedPlaying`].
+        /// Whether the clip loops. A looping clip never completes on its own, so it
+        /// only ever ends as [`MotionEnd::Interrupted`].
         looping: bool,
     },
-    /// A non-looping motion played to its end.
-    MotionFinishedPlaying {
+    /// The motion that was playing stopped, whichever way it ended.
+    ///
+    /// Every motion that starts reports here exactly once, so a host tracks playback
+    /// from this event alone — including the clip that was replaced mid-way.
+    MotionEnded {
         /// Which model.
         model: Live2dId,
         /// The motion group the clip belonged to.
         group: I::Motion,
         /// Index of the clip inside that group.
         clip: usize,
+        /// Whether it reached its own end or was stopped.
+        ended: MotionEnd,
     },
     /// The pointer did something, in the widget's vocabulary.
     Input(In),
@@ -92,7 +97,7 @@ impl<I: Interface, In> Live2dEvent<I, In> {
             | Live2dEvent::ModelFailedToLoad { model, .. }
             | Live2dEvent::ModelReportedProblem { model, .. }
             | Live2dEvent::MotionStarted { model, .. }
-            | Live2dEvent::MotionFinishedPlaying { model, .. } => *model,
+            | Live2dEvent::MotionEnded { model, .. } => *model,
             Live2dEvent::Input(input) => input.model(),
         }
     }
@@ -146,13 +151,17 @@ impl<I: Interface, In: Clone> Clone for Live2dEvent<I, In> {
                 duration: *duration,
                 looping: *looping,
             },
-            Live2dEvent::MotionFinishedPlaying { model, group, clip } => {
-                Live2dEvent::MotionFinishedPlaying {
-                    model: *model,
-                    group: group.clone(),
-                    clip: *clip,
-                }
-            }
+            Live2dEvent::MotionEnded {
+                model,
+                group,
+                clip,
+                ended,
+            } => Live2dEvent::MotionEnded {
+                model: *model,
+                group: group.clone(),
+                clip: *clip,
+                ended: *ended,
+            },
             Live2dEvent::Input(input) => Live2dEvent::Input(input.clone()),
         }
     }
@@ -190,11 +199,17 @@ impl<I: Interface, In: fmt::Debug> fmt::Debug for Live2dEvent<I, In> {
                 .field("duration", duration)
                 .field("looping", looping)
                 .finish(),
-            Live2dEvent::MotionFinishedPlaying { model, group, clip } => formatter
-                .debug_struct("MotionFinishedPlaying")
+            Live2dEvent::MotionEnded {
+                model,
+                group,
+                clip,
+                ended,
+            } => formatter
+                .debug_struct("MotionEnded")
                 .field("model", model)
                 .field("group", group)
                 .field("clip", clip)
+                .field("ended", ended)
                 .finish(),
             Live2dEvent::Input(input) => formatter.debug_tuple("Input").field(input).finish(),
         }

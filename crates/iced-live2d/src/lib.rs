@@ -44,8 +44,8 @@ pub use widget::{GestureMode, Live2d, Live2dState, Mode, RawMode, Unset, live2d}
 pub use iced_live2d_macros::Vocabulary;
 
 pub use live2d_render::{
-    AssetId, AssetOptions, Error, HitArea, LookAtMode, ModelBounds, ModelInfo, ModelOptions,
-    MotionGroup, ParameterRange,
+    AssetId, AssetOptions, Error, Fade, HitArea, LookAtMode, ModelBounds, ModelInfo, ModelOptions,
+    MotionEnd, MotionGroup, ParameterRange,
 };
 
 /// Compile-time check that events may cross the render-to-UI channel.

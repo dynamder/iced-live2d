@@ -25,7 +25,7 @@ use iced::widget::{column, container, row, text};
 use iced::{Element, Fill, Length, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, GestureEvent, GestureMode, Gestures, Hover, Live2d, Live2dAsset, Live2dEvent,
-    Live2dId, Live2dModel, ModelOptions, Raw, live2d, raw,
+    Live2dId, Live2dModel, ModelOptions, MotionEnd, Raw, live2d, raw,
 };
 
 fn main() -> iced::Result {
@@ -235,10 +235,17 @@ impl App {
             Live2dEvent::MotionStarted { group, .. } => {
                 self.last = format!("model {label} started {}", group.name());
             }
-            Live2dEvent::MotionFinishedPlaying { group, .. } => {
+            Live2dEvent::MotionEnded {
+                group,
+                ended: MotionEnd::Completed,
+                ..
+            } => {
                 if let Some(pane) = self.panes.get(&model) {
                     pane.model.play_random_motion(group.clone());
                 }
+            }
+            Live2dEvent::MotionEnded { group, .. } => {
+                self.last = format!("model {label} interrupted {}", group.name());
             }
             Live2dEvent::Input(_) => {}
         }

@@ -27,7 +27,7 @@ use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Hover, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo, ModelOptions,
-    Raw, RawEvent, live2d, look_at, raw,
+    MotionEnd, Raw, RawEvent, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -214,13 +214,21 @@ impl App {
                 group.name(),
                 clip
             ),
-            Live2dEvent::MotionFinishedPlaying { group, clip, .. } => {
+            Live2dEvent::MotionEnded {
+                group,
+                clip,
+                ended: MotionEnd::Completed,
+                ..
+            } => {
                 // A looping idle never ends; a one-shot does, and the host picks.
                 if let Some(slot) = self.slots.get_mut(&id) {
                     slot.model.play_random_motion(group.clone());
                 }
 
                 format!("model {label} finished {} #{}", group.name(), clip)
+            }
+            Live2dEvent::MotionEnded { group, clip, .. } => {
+                format!("model {label} interrupted {} #{}", group.name(), clip)
             }
             Live2dEvent::Input(input) => format!("model {label} pointer {input:?}"),
         };

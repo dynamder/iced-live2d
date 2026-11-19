@@ -16,8 +16,8 @@ use iced::wgpu;
 use iced::widget::shader;
 use iced::{Point, Rectangle};
 use live2d_render::{
-    Asset, AssetId, AssetOptions, ClipRect, Error, LookAtMode, Model, ModelGpu, ModelInfo,
-    ModelOptions, Prepared, View, WgpuLive2dRenderer,
+    Asset, AssetId, AssetOptions, ClipRect, Error, Fade, LookAtMode, Model, ModelGpu, ModelInfo,
+    ModelOptions, MotionEnd, Prepared, View, WgpuLive2dRenderer,
 };
 
 use crate::event::{LoadFailure, Problem};
@@ -103,9 +103,10 @@ pub(crate) enum PipelineEvent {
         duration: f32,
         looping: bool,
     },
-    MotionFinished {
+    MotionEnded {
         group: KeyId,
         clip: usize,
+        ended: MotionEnd,
     },
     Pointer(PointerEventKind),
 }
@@ -147,6 +148,9 @@ pub(crate) struct FrameInputs {
     pub(crate) problems: Vec<Problem>,
     pub(crate) look_at: Option<[f32; 2]>,
     pub(crate) look_at_mode: LookAtMode,
+    /// A host-chosen fade, overriding whatever the model files declare.
+    pub(crate) fade: Option<Fade>,
+    pub(crate) fade_limit: Option<usize>,
     pub(crate) physics_enabled: bool,
     pub(crate) paused: bool,
     /// Where the cursor is, in window pixels, when it is over the widget.
@@ -745,6 +749,8 @@ fn reconcile(
     ready.model.set_look_at(inputs.look_at);
     ready.model.set_look_at_mode(inputs.look_at_mode);
     ready.model.set_physics_enabled(inputs.physics_enabled);
+    ready.model.set_fade(inputs.fade);
+    ready.model.set_fade_limit(inputs.fade_limit);
 
     ready.parameters.clear();
     ready
@@ -849,16 +855,17 @@ fn reconcile(
         }
     }
 
-    for finished in ready.model.take_finished() {
-        match motion_key(primitive.asset, info, &ready.mapping, finished.group) {
+    for ended in ready.model.take_ended() {
+        match motion_key(primitive.asset, info, &ready.mapping, ended.group) {
             Some(group) => broadcast(
                 listeners,
-                PipelineEvent::MotionFinished {
+                PipelineEvent::MotionEnded {
                     group,
-                    clip: finished.clip,
+                    clip: ended.clip,
+                    ended: ended.reason,
                 },
             ),
-            None => vocabulary_problem("motion", finished.group, listeners),
+            None => vocabulary_problem("motion", ended.group, listeners),
         }
     }
 

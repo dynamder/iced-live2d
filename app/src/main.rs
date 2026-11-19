@@ -1,20 +1,22 @@
 //! The demo app: one model, one window, hosted through `iced-live2d`.
 //!
 //! What plays is this app's decision — on load it starts the first clip of the
-//! first group, and on `MotionFinishedPlaying` it advances to the next clip of that
-//! group. There is no frame subscription and no iced/wgpu plumbing here.
+//! first group, and when a clip completes it advances to the next one of that group.
+//! There is no frame subscription and no iced/wgpu plumbing here.
 //!
 //! Keys: `R` random clip of the next group, `E` next expression, `C` clear
-//! expressions, `S` stop the motion, `P` pause/resume.
+//! expressions, `S` stop the motion, `P` pause/resume, `F` cycle the fade: let the
+//! model files decide, cut, 250 ms.
 
 mod cli;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use iced::{Fill, Subscription, Task, Widget, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, GestureEvent, Gestures, Hover, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo,
-    ModelOptions, Raw, live2d, look_at, raw,
+    AssetOptions, Fade, GestureEvent, Gestures, Hover, Live2dAsset, Live2dEvent, Live2dModel,
+    ModelInfo, ModelOptions, MotionEnd, Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -55,6 +57,7 @@ struct App {
     next_group: usize,
     next_expression: usize,
     paused: bool,
+    fade: Option<Fade>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +68,7 @@ enum Message {
     ClearExpressions,
     StopMotion,
     TogglePause,
+    NextFade,
 }
 
 impl App {
@@ -86,6 +90,7 @@ impl App {
             next_group: 0,
             next_expression: 0,
             paused: false,
+            fade: None,
         }
     }
 
@@ -97,6 +102,7 @@ impl App {
             Message::ClearExpressions => self.model.clear_expressions(),
             Message::StopMotion => self.model.stop_motion(),
             Message::TogglePause => self.toggle_pause(),
+            Message::NextFade => self.next_fade(),
         }
 
         Task::none()
@@ -130,6 +136,7 @@ impl App {
                 "c" => Some(Message::ClearExpressions),
                 "s" => Some(Message::StopMotion),
                 "p" => Some(Message::TogglePause),
+                "f" => Some(Message::NextFade),
                 _ => None,
             },
             _ => None,
@@ -171,11 +178,22 @@ impl App {
                 group.name(),
                 clip
             ),
-            Live2dEvent::MotionFinishedPlaying { group, clip, .. } => {
-                println!("live2d: finished {} #{}", group.name(), clip);
+            Live2dEvent::MotionEnded {
+                group, clip, ended, ..
+            } => {
+                println!(
+                    "live2d: {} {} #{}",
+                    match ended {
+                        MotionEnd::Completed => "finished",
+                        MotionEnd::Interrupted => "interrupted",
+                    },
+                    group.name(),
+                    clip
+                );
 
                 // Keep the group running in order; the component stops and waits.
-                if let Some(info) = self.info.as_ref()
+                if *ended == MotionEnd::Completed
+                    && let Some(info) = self.info.as_ref()
                     && let Some(clips) = info.motions.get(group.index()).map(|item| item.clips)
                     && clips > 0
                 {
@@ -212,6 +230,17 @@ impl App {
         let expression = &raw::expressions(info)[self.next_expression % info.expressions.len()];
         self.model.play_expression(expression.clone());
         self.next_expression = self.next_expression.wrapping_add(1);
+    }
+
+    fn next_fade(&mut self) {
+        self.fade = match self.fade {
+            None => Some(Fade::zero()),
+            Some(fade) if fade.is_zero() => Some(Fade::from(Duration::from_millis(250))),
+            Some(_) => None,
+        };
+        self.model.set_fade(self.fade);
+
+        println!("live2d: fade {:?}", self.fade);
     }
 
     fn toggle_pause(&mut self) {

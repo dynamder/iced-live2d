@@ -30,7 +30,7 @@ iced's `shader` primitive, which the tiny-skia backend does not have.
 |---|---|
 | model and textures, correct colours, clipping masks | ✅ |
 | mipmapped textures — thin line art survives minification | ✅ |
-| motions (groups, looping, switching), expressions | ✅ |
+| motions: groups, looping, cross-faded switching, expressions | ✅ |
 | physics, including settings that chain into each other | ✅ |
 | look-at: head, eyes, torso, routed per rig | ✅ |
 | parameter and part overrides, replayed every step | ✅ |
@@ -39,12 +39,12 @@ iced's `shader` primitive, which the tiny-skia backend does not have.
 | headless offscreen render to PNG | ✅ |
 | 60 fps on the 715-drawable reference rig | ✅ |
 
-Not there yet: motion cross-fades and host parameter layering, asynchronous
-loading, idle frames, DPI-aware texture budgets, global opacity, non-rectangular
-clipping, view transforms (pan/zoom of the framing itself), playback control
-(seek, speed, fade-out), physics beyond a switch, loading a model from bytes, and
-a pause that is more than a total freeze. [docs/gaps.md](docs/gaps.md) tracks each
-of them with where it lives and what closing it costs.
+Not there yet: host parameter layering, asynchronous loading, idle frames,
+DPI-aware texture budgets, global opacity, non-rectangular clipping, view
+transforms (pan/zoom of the framing itself), playback control (seek, speed),
+physics beyond a switch, loading a model from bytes, and a pause that is more than
+a total freeze. [docs/gaps.md](docs/gaps.md) tracks each of them with where it
+lives and what closing it costs.
 
 Deliberately out of scope: keyboard and focus, accessibility, pinch, pen pressure,
 inertia and physics drags, breathing/eye-blink/lip-sync helpers, a desktop-pet
@@ -420,6 +420,12 @@ the same model hosted in a Chromium webview running the official Cubism Web SDK 
 
 ## Pitfalls
 
+- **A motion's fade comes from the model folder, not from the call.** A `model3.json`
+  motion reference wins over the motion's own `Meta.FadeInTime` / `FadeOutTime`, and
+  where neither declares one the fade is one second — the Cubism Viewer's default, not
+  zero. `Live2dModel::set_fade` overrides both, and `Fade::zero()` cuts. Every replaced
+  clip keeps fading out on its own, so several can overlap after a burst of switches;
+  `set_fade_limit` caps how many.
 - **Colour space:** the `format` handed to `Pipeline::new` is whatever the host surface
   uses. On a non-sRGB (`Bgra8Unorm`) target the model matches Cubism's gamma-space
   blending; on `*UnormSrgb` you must render into your own `Rgba8Unorm` target and do

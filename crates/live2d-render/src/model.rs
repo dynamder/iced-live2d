@@ -8,11 +8,12 @@ use std::time::Duration;
 
 use mocari::json::Motion3;
 use mocari::moc3::Moc3DrawableMesh;
-use mocari::motion::{MotionPlayer, load_motion};
+use mocari::motion::{DEFAULT_FADE_SECONDS, MotionPlayer, load_motion};
 use mocari::{ExpressionManager, ModelRuntime};
 
-use crate::asset::Shared;
+use crate::asset::{MotionRef, Shared};
 use crate::error::Error;
+use crate::fade::Fade;
 use crate::info::ModelInfo;
 use crate::rig::LookAtMode;
 
@@ -47,13 +48,24 @@ pub struct Started {
     pub looping: bool,
 }
 
-/// A motion that reached its end.
+/// A motion that stopped being the current one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Finished {
+pub struct Ended {
     /// Model index of the motion group.
     pub group: usize,
     /// Index of the clip inside that group.
     pub clip: usize,
+    /// Whether it reached its own end or was stopped.
+    pub reason: MotionEnd,
+}
+
+/// Why a motion stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionEnd {
+    /// It reached its own end.
+    Completed,
+    /// It was replaced or stopped before that.
+    Interrupted,
 }
 
 /// One model instance, built with [`Asset::model`](crate::Asset::model).
@@ -66,6 +78,9 @@ pub struct Model {
     shared: Shared,
     runtime: ModelRuntime,
     player: Option<MotionPlayer>,
+    /// Motions that were interrupted and are still fading out, oldest first — the
+    /// order they applied in while they were live.
+    fading: Vec<MotionPlayer>,
     current: Option<(usize, usize)>,
     expressions: ExpressionManager,
     parameters: Vec<(usize, f32)>,
@@ -77,7 +92,11 @@ pub struct Model {
     dirty: bool,
     stepper: Stepper,
     started: Vec<Started>,
-    finished: Vec<Finished>,
+    ended: Vec<Ended>,
+    /// `None` leaves the fade to the files.
+    fade: Option<Fade>,
+    /// `None` lets every interrupted motion fade out fully.
+    fade_limit: Option<usize>,
     issues: Vec<Error>,
 }
 
@@ -87,6 +106,7 @@ impl Model {
             shared,
             runtime,
             player: None,
+            fading: Vec::new(),
             current: None,
             expressions: ExpressionManager::new(),
             parameters: Vec::new(),
@@ -98,7 +118,9 @@ impl Model {
             dirty: true,
             stepper: Stepper::new(),
             started: Vec::new(),
-            finished: Vec::new(),
+            ended: Vec::new(),
+            fade: None,
+            fade_limit: None,
             issues: Vec::new(),
         }
     }
@@ -212,8 +234,12 @@ impl Model {
 
     /// Plays `clip` of `group`, loading the clip now — the only file read this call
     /// can cause. An out-of-range pair becomes an issue, not a silent no-op.
+    ///
+    /// Whatever was playing fades out over its own fade-out time while this one fades
+    /// in, which is what the Cubism viewer does; [`Model::set_fade`] sets the value
+    /// used when nothing in the model folder declares one.
     pub fn play_motion(&mut self, group: usize, clip: usize) {
-        let Some(path) = self
+        let Some(reference) = self
             .shared
             .motions
             .get(group)
@@ -229,9 +255,12 @@ impl Model {
             return;
         };
 
-        match load_motion(&path) {
-            Ok(motion) => self.start(group, clip, motion),
-            Err(source) => self.issues.push(Error::Motion { path, source }),
+        match load_motion(&reference.path) {
+            Ok(motion) => self.start(group, clip, motion, &reference),
+            Err(source) => self.issues.push(Error::Motion {
+                path: reference.path,
+                source,
+            }),
         }
     }
 
@@ -285,16 +314,62 @@ impl Model {
         self.dirty = true;
     }
 
-    /// Stops the current motion so the model shows its rest pose. Nothing plays
-    /// afterwards until the host asks: there is no idle policy here.
+    /// Stops the current motion, revealing the rest pose over its own fade-out time.
+    /// Nothing plays afterwards until the host asks: there is no idle policy here.
     pub fn stop_motion(&mut self) {
-        if self.player.is_none() {
+        let Some((group, clip)) = self.current.take() else {
+            return;
+        };
+
+        if let Some(mut player) = self.player.take()
+            && player.fade_out()
+        {
+            self.fading.push(player);
+        }
+
+        self.ended.push(Ended {
+            group,
+            clip,
+            reason: MotionEnd::Interrupted,
+        });
+        self.dirty = true;
+    }
+
+    /// How long a motion fades when nothing in the model folder declares a time.
+    ///
+    /// A motion that declares `FadeInTime` / `FadeOutTime`, or whose `model3.json`
+    /// reference does, keeps that value: the files are the artist's decision. `None`
+    /// — the default — leaves the files alone and gives the gap
+    /// [`Fade::default`], Cubism's one second.
+    pub fn set_fade(&mut self, fade: Option<Fade>) {
+        if self.fade == fade {
             return;
         }
 
-        self.player = None;
-        self.current = None;
+        self.fade = fade;
         self.dirty = true;
+    }
+
+    /// The fade a host set, if any.
+    pub fn fade(&self) -> Option<Fade> {
+        self.fade
+    }
+
+    /// Caps how many interrupted motions may still be fading at once.
+    ///
+    /// `None`, the default, lets every one of them run to its own end; a number drops
+    /// the oldest, which is the one closest to invisible.
+    pub fn set_fade_limit(&mut self, limit: Option<usize>) {
+        self.fade_limit = limit;
+
+        if let Some(limit) = limit {
+            self.trim_fading(limit);
+        }
+    }
+
+    /// The cap on concurrent fade-outs, if any.
+    pub fn fade_limit(&self) -> Option<usize> {
+        self.fade_limit
     }
 
     /// Motions that started since the last call, in the order they started.
@@ -302,10 +377,10 @@ impl Model {
         std::mem::take(&mut self.started)
     }
 
-    /// Motions that ended since the last call, in order. Playback stops there; this
-    /// is how a host learns to ask for the next one.
-    pub fn take_finished(&mut self) -> Vec<Finished> {
-        std::mem::take(&mut self.finished)
+    /// Motions that stopped since the last call, in order, with the reason. This is
+    /// how a host learns to ask for the next one, or that its clip was replaced.
+    pub fn take_ended(&mut self) -> Vec<Ended> {
+        std::mem::take(&mut self.ended)
     }
 
     /// Problems that did not stop playback, such as a broken sidecar file.
@@ -322,8 +397,16 @@ impl Model {
     fn is_animating(&self) -> bool {
         self.dirty
             || self.player.is_some()
+            || !self.fading.is_empty()
             || !self.expressions.is_empty()
             || (self.physics_enabled && self.runtime.physics().is_some())
+    }
+
+    /// Drops the oldest fade-outs past `limit`.
+    fn trim_fading(&mut self, limit: usize) {
+        if self.fading.len() > limit {
+            self.fading.drain(..self.fading.len() - limit);
+        }
     }
 
     /// One fixed-length step through the update order.
@@ -332,6 +415,8 @@ impl Model {
 
         self.runtime.reset_parameters();
         self.runtime.reset_part_opacities();
+
+        self.play_hand_overs(seconds);
 
         if let Some(player) = self.player.as_mut() {
             player.tick(seconds);
@@ -359,11 +444,33 @@ impl Model {
 
         if self.player.as_ref().is_some_and(MotionPlayer::is_finished) {
             if let Some((group, clip)) = self.current.take() {
-                self.finished.push(Finished { group, clip });
+                self.ended.push(Ended {
+                    group,
+                    clip,
+                    reason: MotionEnd::Completed,
+                });
             }
 
             self.player = None;
         }
+    }
+
+    /// Plays every interrupted motion for one more step, oldest first, and drops the
+    /// ones that have finished fading.
+    ///
+    /// Oldest first is the order they applied in while they were live, so a burst of
+    /// switches layers the way the Cubism viewer does.
+    fn play_hand_overs(&mut self, seconds: f32) {
+        if self.fading.is_empty() {
+            return;
+        }
+
+        for player in &mut self.fading {
+            player.tick(seconds);
+            player.apply(&mut self.runtime);
+        }
+
+        self.fading.retain(|player| !player.is_finished());
     }
 
     fn apply_look_at(&mut self) {
@@ -382,7 +489,7 @@ impl Model {
         }
     }
 
-    fn start(&mut self, group: usize, clip: usize, motion: Motion3) {
+    fn start(&mut self, group: usize, clip: usize, motion: Motion3, reference: &MotionRef) {
         self.started.push(Started {
             group,
             clip,
@@ -390,7 +497,29 @@ impl Model {
             looping: motion.meta().is_looping(),
         });
 
-        self.player = Some(MotionPlayer::new(motion));
+        if let Some(mut player) = self.player.take() {
+            if let Some((was, was_clip)) = self.current.take() {
+                self.ended.push(Ended {
+                    group: was,
+                    clip: was_clip,
+                    reason: MotionEnd::Interrupted,
+                });
+            }
+
+            if player.fade_out() {
+                self.fading.push(player);
+
+                if let Some(limit) = self.fade_limit {
+                    self.trim_fading(limit);
+                }
+            }
+        }
+
+        let meta = motion.meta();
+        let fade_in = resolve_fade(self.fade, reference.fade_in, meta.fade_in_time());
+        let fade_out = resolve_fade(self.fade, reference.fade_out, meta.fade_out_time());
+
+        self.player = Some(MotionPlayer::with_fade(motion, fade_in, fade_out));
         self.current = Some((group, clip));
         self.dirty = true;
     }
@@ -423,6 +552,16 @@ impl Model {
     pub fn set_parameter_raw(&mut self, index: usize, value: f32) -> bool {
         self.runtime.set_parameter_by_index(index, value)
     }
+}
+
+/// Explicit setting, then the `.model3.json` reference, then the motion's own `Meta`,
+/// then Cubism's one-second default.
+fn resolve_fade(explicit: Option<Fade>, reference: Option<f32>, declared: Option<f32>) -> f32 {
+    explicit
+        .map(Fade::seconds)
+        .or(reference)
+        .or(declared)
+        .unwrap_or(DEFAULT_FADE_SECONDS)
 }
 
 /// Fixed-timestep accumulator between the host's frame pacing and the model.
@@ -531,5 +670,38 @@ mod tests {
         }
 
         assert!(picks.iter().any(|pick| *pick != picks[0]));
+    }
+}
+
+#[cfg(test)]
+mod fade_tests {
+    use super::*;
+
+    #[test]
+    fn the_motion_file_decides_when_nothing_overrides_it() {
+        assert_eq!(resolve_fade(None, None, Some(0.25)), 0.25);
+    }
+
+    #[test]
+    fn the_model_file_reference_beats_the_motion_file() {
+        assert_eq!(resolve_fade(None, Some(0.5), Some(0.25)), 0.5);
+    }
+
+    #[test]
+    fn an_explicit_fade_beats_both_files() {
+        let explicit = Fade::from(Duration::from_millis(120));
+
+        assert_eq!(resolve_fade(Some(explicit), Some(0.5), Some(0.25)), 0.12);
+    }
+
+    #[test]
+    fn a_declared_zero_survives_the_chain() {
+        assert_eq!(resolve_fade(None, None, Some(0.0)), 0.0);
+        assert_eq!(resolve_fade(Some(Fade::zero()), Some(0.5), None), 0.0);
+    }
+
+    #[test]
+    fn nothing_declared_means_the_sdk_default() {
+        assert_eq!(resolve_fade(None, None, None), DEFAULT_FADE_SECONDS);
     }
 }
