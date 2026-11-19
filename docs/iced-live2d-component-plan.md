@@ -1,7 +1,10 @@
 # iced 组件化计划（`iced-live2d`）
 
-**状态：设计已定，待批准后开工。** 这份文档是设计决策的完整记录，用来核对：术语、API 契约、
-被否决的方案、分步验收。任何与本文冲突的实现都算偏离，先改文档再改代码。
+> **状态：API 契约已被 [`component-design.md`](component-design.md) 取代。**
+> 本文保留为 v1 的历史记录：术语、被否决的方案、逐步验收的写法仍然有效，
+> 但 `Live2dEvent` / `RenderSettings` / `ModelSummary` 等具体形状以新文档为准。
+
+这份文档原本是 v1 的设计决策完整记录：术语、API 契约、被否决的方案、分步验收。
 
 - 前情：spike 阶段的可行性、性能与 mocari 缺陷见
   [`rust-iced-live2d-plan.md`](rust-iced-live2d-plan.md) 与

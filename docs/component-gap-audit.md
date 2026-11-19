@@ -289,4 +289,4 @@ Hiyori 打出 `Idle: 9`、`TapBody: 1`；大肥鱼什么都不打（未声明，
   并补上它们之外的部分（播放语义、数据访问、渲染取景、性能）。
 - `docs/rust-iced-live2d-plan.md` 已记「mocari 没有 breath / eye blink / lip sync，得自己写」，
   本文把它从「计划备注」变成「组件缺口」。
-- 本文只记现状与证据；修哪些、按什么顺序修，由后续的讨论文档决定。
+- 本文只记现状与证据；改哪些、按什么顺序改，见 [`component-design.md`](component-design.md)。

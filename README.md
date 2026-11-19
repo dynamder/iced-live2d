@@ -437,6 +437,9 @@ this is not a project problem.
 - [`docs/component-gap-audit.md`](docs/component-gap-audit.md) — what the component
   exposes today, what is missing (interaction, data access, playback semantics,
   rendering, lifetime), and which gaps are wiring versus new work
+- [`docs/component-design.md`](docs/component-design.md) — the settled replacement
+  design: immutable assets, interface vocabularies, the `Raw` escape hatch,
+  load-time validation, and the implementation order
 - [`docs/test-models.md`](docs/test-models.md) — the model corpus, where each
   model's terms of use live, and what each rig exercises
 - [`docs/mocari-chained-physics.md`](docs/mocari-chained-physics.md) — confirmed
