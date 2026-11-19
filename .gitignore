@@ -5,5 +5,19 @@
 
 # Model assets are copyrighted by the artist and Live2D Inc.; never commit them.
 /DeepSeek-fish-live2d
+models/
 *.moc3
+*.model3.json
+*.motion3.json
+*.expression3.json
+*.physics3.json
+*.pose3.json
+*.cdi3.json
+*.userdata3.json
+
+# The official SDKs are licence-gated; local checkouts belong under .refs only.
+CubismSdkForWeb*/
+CubismSdkForNative*/
+Live2DCubismCore*
+
 scripts/web-probe/main.js

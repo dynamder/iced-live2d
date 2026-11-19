@@ -33,8 +33,12 @@ load, which the licence explicitly allows.
 Community models published on Booth or shipped inside VTube Studio come with the
 artist's own written terms rather than a license file. We do not add those to the
 corpus automatically: someone has to read the statement and say yes. The rig used
-during development (`DeepSeek 大肥鱼`) is such a case — it was supplied locally for
-testing, and its assets stay out of git for that reason.
+during development (`DeepSeek 大肥鱼`) is such a case, and it was read: the notice
+allows streaming, video, social posting and derivative works with credit, forbids
+re-uploading the model files, and asks for a conversation before commercial projects
+where the model is the subject. Documentation renders are therefore allowed, the
+files stay out of git, and the credit lives in the README. Author: 原画及拆分
+神宫凉子, Live2D 建模 霓虹猫_NeonNeko, distributed free by 神宫凉子.
 
 ## What each model exercises
 

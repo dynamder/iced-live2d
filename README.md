@@ -53,6 +53,14 @@ Which inputs those are is resolved per rig, so the rig in this repo takes
 
 ![look-at](docs/images/look-at-compare.png)
 
+Every capture above is a render of **DeepSeek-chan（大肥鱼）**, a freely distributed
+model drawn and separated by 神宫凉子 and rigged by 霓虹猫_NeonNeko. Its notice
+allows publishing content made with it — including documentation — as long as the
+model is credited and the model files themselves are not redistributed. **No model
+file is part of this repository**; the sample characters used for comparisons come
+from the official Cubism samples and are used under their own terms. See
+[docs/test-models.md](docs/test-models.md) for provenance and licences.
+
 ## Requirements
 
 - Rust **1.93+** (iced master's MSRV; edition 2024)
@@ -63,9 +71,6 @@ Which inputs those are is resolved per rig, so the rig in this repo takes
 ## Quick start
 
 ```bash
-# one-time: vendor the patched mocari (see "The two patches" below)
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vendor-mocari.ps1
-
 # open the default rig
 cargo run --release -p app
 
