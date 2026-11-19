@@ -19,11 +19,13 @@
 
 ---
 
-## 1. 三条总原则
+## 1. 四条总原则
 
 1. **非法状态不可表达。** 名字只在边界出现一次（加载时），内部全是类型化词汇；错误在加载时暴露，不在每帧。
 2. **线程安全只花在必须的地方。** iced 的 `Primitive` 在 native 上要求 `Send + Sync`（`MaybeSend`/`MaybeSync` 的 native 实现就是 `Send`/`Sync`），因此只有每帧快照需要跨线程；模型、视图、覆盖表都是单线程普通结构，不用 `Arc`。
 3. **单源。** 取景只有视图算，参数写入只有一个点，动作索引只有一个空间，贴图与元信息只有一个 owner。
+4. **不替宿主组装。** 库只给零件和 helper，不替宿主做决定：不扫目录（要扫得显式打开）、
+   不挑待机、不自动开始播放。凡是「模型自己动起来」的行为，都必须能在宿主代码里找到那一行。
 
 ---
 
@@ -37,7 +39,7 @@ Live2dAsset               素材，加载后不可变
        ├── Live2dModel<I: Interface>        实例，一个可独立驱动的状态机
        │     · ModelRuntime（参数值、部件、物理、pose）
        │     · 参数/部件覆盖表（键是 I 的词汇）
-       │     · 播放器 / 表情 / Stepper / 命令队列 / idle 策略
+       │     · 播放器 / 表情 / Stepper / 命令队列
        │
        └── Live2d<'a, Message, I>           视图，一个控件
              · 取景（fill / aspect → WgpuTransform）
@@ -226,17 +228,16 @@ reset → motion → expression → 宿主参数 → look-at → 部件 → phys
 
 - 索引空间回到官方形状 `(group, clip)`：`play_motion(group, clip)` /
   `play_random_motion(group)`；`MotionFinishedPlaying` 与 `MotionStarted` 也带这一对。
-- 待机是显式策略，因为「默认」和「关闭」不能共用一个 `None`：
+- **库不提供待机策略。** 早先设想的 `Idle` 三态是错的方向：它会替宿主挑「该播什么」，而且一旦
+  挑错（例如把目录扫描出来的一组「切手」片段当成待机随机循环）就是库的错。现在库只做两件事：
+  按 `(group, clip)` 播，和在动作结束时报告 `MotionFinishedPlaying`。待机由宿主从事件里排队，
+  `play_random_motion(group)` 就是那一行 helper：
 
-```rust
-pub enum Idle<M> { Declared, Group(M), Off }
+```text
+Live2dEvent::MotionFinishedPlaying { group, clip } => model.play_random_motion(group),
 ```
 
-  `Declared`（默认）取模型声明的 `Idle` 组，组内随机（对齐官方）；`Group` 指定另一组；
-  `Off` 即完全由宿主驱动。`Raw` 的 `Declared` 靠名字 `Idle` 解析，解析不到就是 `Off`，
-  声明里没有 `Idle` 组、靠目录扫描出来的模型则落到 `Scanned` 组。
-- 模型自己开始播放一次：第一步若还没有任何动作，就按策略起一个待机动作；`stop_motion()`
-  会把这次「隐式开始」消费掉，之后完全由宿主决定。
+  同理，`stop_motion()` 之后不会有任何东西自己重新开始播放。
 - `duration` / `looping` 只有解析过动作文件才知道，因此随 `MotionStarted` 到达，不进加载期元数据。
 
 ### 4.3 表情
@@ -266,7 +267,7 @@ Live2dPipeline
 | 阶段 | 职责 |
 |---|---|
 | `update` | drain 通道并发布事件；未暂停时排下一帧 |
-| `draw` | 从 `&Live2dModel<I>` 生成 `FrameInputs`（覆盖表、look-at、暂停、物理、idle、命令、光标） |
+| `draw` | 从 `&Live2dModel<I>` 生成 `FrameInputs`（覆盖表、look-at、暂停、物理、命令、光标） |
 | `prepare` | 加载/校验 asset；建 slot；reconcile 期望状态；step；上传；命中测试；发事件 |
 | `render` | mask pass + model pass，使用该视图的 transform |
 | `trim` | 回收失去 Presence 的 slot |
@@ -342,7 +343,7 @@ PointerEvent<I>::
 | 一模型挂多控件事件只到第一个 | 模型级 listener 广播 + 首注册补发加载结果 |
 | `look_at` 文档与实现矛盾 | 文档写死「视图提供的源优先，宿主值只在光标离开时生效」；标量策略留在模型 |
 | `pause` 冻结 look-at | 保持「pause = 全部」，写进文档；交互式停止用 `stop_motion` |
-| 自动接续与宿主点播差一帧 | 待机显式化（`idle_group`），需要精确调度时设 `None` 由宿主驱动；新增 `MotionStarted` |
+| 自动接续与宿主点播差一帧 | 待机完全归宿主：`MotionStarted`/`MotionFinishedPlaying` 报 `(group, clip)`，下一个播什么由宿主决定 |
 | 参数/部件无写入路径 | 覆盖表 + 单点写入，raw 单位 |
 | `set_look_at_mode` 清空宿主 override | look-at 改为每步重算，不再占用 override 表 |
 

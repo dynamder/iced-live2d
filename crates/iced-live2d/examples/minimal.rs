@@ -25,7 +25,7 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, window};
 use iced_live2d::{
-    Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, Raw, live2d, look_at, raw,
+    AssetOptions, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -75,7 +75,14 @@ impl App {
         let slots = paths
             .into_iter()
             .map(|path| {
-                let asset = Live2dAsset::from_path(path);
+                // Opting into the sidecar scan is the host's call.
+                let asset = Live2dAsset::with_options(
+                    path,
+                    AssetOptions {
+                        texture_scale: 0.5,
+                        scan_sidecars: true,
+                    },
+                );
                 let model = Live2dModel::<Raw>::new(&asset);
 
                 Some(Slot {
@@ -124,6 +131,7 @@ impl App {
                     live2d(&slot.model)
                         .on_event(move |event| Message::Live2d(index, event))
                         .look_at(look_at::cursor)
+                        .profile(std::env::var_os("LIVE2D_PROFILE").is_some())
                         .width(Fill)
                         .height(Fill)
                         ._boxed(),
@@ -146,8 +154,15 @@ impl App {
     fn on_event(&mut self, index: usize, event: Live2dEvent<Raw>) {
         let status = match &event {
             Live2dEvent::ModelLoaded { info } => {
+                let start = raw::motions(info).into_iter().next();
+
                 if let Some(slot) = self.slots.get_mut(index).and_then(Option::as_mut) {
                     slot.info = Some(Arc::clone(info));
+
+                    // Nothing plays until the host says so.
+                    if let Some(group) = start {
+                        slot.model.play_motion(group, 0);
+                    }
                 }
 
                 format!(
@@ -177,12 +192,20 @@ impl App {
                 group.name(),
                 clip
             ),
-            Live2dEvent::MotionFinishedPlaying { group, clip } => format!(
-                "model {} finished {} #{}",
-                index + 1,
-                group.name(),
-                clip
-            ),
+            Live2dEvent::MotionFinishedPlaying { group, clip } => {
+                // The first clip of a looping idle never ends; a one-shot does,
+                // and the host picks the next one.
+                if let Some(slot) = self.slots.get_mut(index).and_then(Option::as_mut) {
+                    slot.model.play_random_motion(group.clone());
+                }
+
+                format!(
+                    "model {} finished {} #{}",
+                    index + 1,
+                    group.name(),
+                    clip
+                )
+            }
             Live2dEvent::Pointer(event) => format!("model {} {event:?}", index + 1),
         };
 

@@ -40,7 +40,7 @@ impl Session {
         model_options: ModelOptions,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let renderer = WgpuLive2dRenderer::new(device, format);
-        let prepared = Asset::parse(AssetId::unique(), path)?;
+        let prepared = Asset::parse(AssetId::unique(), path, options)?;
         let mut asset = prepared.upload(&renderer, device, queue, options)?;
         let issues = asset.take_issues();
         let model = asset.model();

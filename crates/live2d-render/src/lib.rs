@@ -37,7 +37,7 @@ mod rig;
 mod view;
 
 pub use asset::{
-    Asset, AssetOptions, IDLE_GROUP, ModelOptions, Prepared, SCANNED_GROUP, declared_idle,
+    Asset, AssetOptions, IDLE_GROUP, ModelOptions, Prepared, SCANNED_GROUP,
 };
 pub use bounds::ModelBounds;
 pub use error::{Error, Result};

@@ -19,7 +19,7 @@ Cubism Core binary, no C++ toolchain, no engine.
 | Clipping masks (eyes, mouth, hair, body behind tail) | ✅ |
 | Mipmapped textures — thin line art survives minification | ✅ (local patch) |
 | Motion playback, looping, switching by `(group, clip)` | ✅ `R` |
-| Expressions (23 scanned from disk) | ✅ `E` |
+| Expressions (23 scanned from disk, host opts in) | ✅ `E` |
 | Physics (hair/tail follow) | ✅ |
 | LookAt follows the cursor (head + eyes + torso) | ✅ |
 | Window resize keeps framing | ✅ |
@@ -113,7 +113,9 @@ The component that ships here drives its own frames and runs at a steady 16.7 ms
 even on the models where the old subscription-based loop averaged 23 ms with a
 quarter of its frames zero-length.
 
-`LIVE2D_PROFILE=1` prints the diagnosis once per 60 frames:
+`LIVE2D_PROFILE=1` makes the app ask the widget for its diagnosis, printed once
+per 60 frames. The component never prints on its own; `.profile(true)` is what
+turns it on:
 
 ```
 live2d profile: 60 frames 1.00 steps, step 0.08 ms, deform 3.40 ms, upload 1.42 ms, delta 15.2..18.4 ms (mean 16.67)
@@ -158,7 +160,7 @@ cargo run --release -p live2d-render --example offscreen -- \
 | `LIVE2D_HIT` | `x,y` in `-1.0..=1.0`: print which hit area a click there would land in |
 | `LIVE2D_FILL` | how much of the widget the model's bounds span (`1.0` touches the edges, default `0.925`) |
 | `LIVE2D_CLEAR_EXPR`, `LIVE2D_NO_MOTION`, `LIVE2D_NO_PHYSICS`, `LIVE2D_RECLIP` | flags — active when the variable is present, whatever its value |
-| `LIVE2D_PROFILE` | flag — prints per-frame step count, step/deform/upload cost, and frame-interval statistics |
+| `LIVE2D_PROFILE` | flag, read by the app — asks the widget for the per-frame step count, step/deform/upload cost and frame-interval statistics |
 
 `sweep` and `jolt` take their own knobs, documented in each file's header:
 
@@ -252,8 +254,8 @@ traps found on the way: [`docs/web-sdk-benchmark.md`](docs/web-sdk-benchmark.md)
 ```
 crates/live2d-render/          engine-agnostic: depends on wgpu + mocari only
   src/info.rs                  AssetId, ModelInfo: what a model declares
-  src/asset.rs                 Asset/Prepared: parse, validate against nothing, upload
-  src/model.rs                 Model: parameters, player, expressions, physics, idle
+  src/asset.rs                 Asset/Prepared: parse, upload, scan when asked
+  src/model.rs                 Model: parameters, player, expressions, physics
   src/gpu.rs                   ModelGpu: mesh buffers, clipping, mask target
   src/view.rs                  View: framing + the inverse a hit test needs
   src/bounds.rs                canvas info -> view-fit matrix
@@ -373,7 +375,6 @@ model.parts().insert(FacePart::ArmA, 0.0);                   // 0.0..=1.0
 model.play_motion(FaceMotion::TapBody, 0);                   // (group, clip), as Cubism indexes
 model.play_random_motion(FaceMotion::Idle);
 model.stop_motion();
-model.set_idle(Idle::Group(FaceMotion::Idle));               // or Idle::Declared / Idle::Off
 ```
 
 Every write is **replayed on every step**, in Cubism's own order (`reset → motion →
@@ -385,6 +386,22 @@ separate override table.
 Values are **raw**, in the range the model declares; `ModelInfo` carries
 `minimum`/`maximum`/`default` per parameter (`info.parameter(name)` gives the
 index). Clamping is the render layer's job.
+
+**The library does not decide what plays.** There is no idle policy, no automatic
+first motion, and no directory scan unless it is asked for: a model that nobody
+tells to play stays in its rest pose. "Idle" is the host's five lines:
+
+```rust
+// on load: start something
+Live2dEvent::ModelLoaded { .. } => model.play_motion(FaceMotion::Idle, 0),
+// and when a one-shot ends: start the next one
+Live2dEvent::MotionFinishedPlaying { .. } => model.play_random_motion(FaceMotion::Idle),
+```
+
+That is deliberate. A component that picks for the host also picks *wrong*: this
+repo's own demo once looped a rig's "switch to the hand holding a foxtail" clips as
+if they were idle animations, because the library had invented a motion group from
+a directory listing and then chosen from it at random.
 
 ### Events
 
@@ -399,9 +416,9 @@ index). Clamping is the render layer's job.
 - **No listener, no channel.** Without `.on_event(..)` the render layer allocates
   no channel at all, so events cannot pile up.
 - **`MotionStarted` carries `(group, clip)` plus the clip's duration and loop flag**;
-  `MotionFinishedPlaying` fires for clips that end. The idle policy is
-  `Idle::Declared` by default: a random clip of the interface's `Idle` group,
-  which is what makes an untouched model animate.
+  `MotionFinishedPlaying` fires for clips that end, and playback then stops until
+  the host asks again. A looping clip never finishes, which is why an idle clip
+  that loops needs no scheduler at all.
 - **Pointer events are model-level and in model space**: `Pressed`/`Released` carry
   the hit area (if any) and the point, `Entered`/`Exited` the area, `Dragged` the
   delta in model plane units, `Scrolled` the lines. The widget turns them into
@@ -496,11 +513,13 @@ not need changes.
   drawables. This model has 715 drawables including hidden spares (props, spare
   hands, alternate body types); bounding-box centring visibly offsets the
   character. See `ModelBounds::from_canvas`.
-- **`model3.json` is not always complete.** Here it declares zero motions and
-  zero expressions while the files sit in `Animation/` and `Exp3/`. `Asset::parse`
-  scans the model directory as a fallback, names the synthesized group `Scanned`
-  and sorts `IDLE*` files first; that group is also what `Idle::Declared` falls back
-  to when a model declares no `Idle` group.
+- **`model3.json` is not always complete.** The default rig here declares zero
+  motions and zero expressions while the files sit in `Animation/` and `Exp3/`.
+  `AssetOptions::scan_sidecars` asks for a directory scan; what it finds lands in
+  one synthesized group named `Scanned`, in the alphabetical order of the files.
+  It is off by default because a folder of files is not an animation set: this
+  rig's `Animation/` holds one idle loop and seven one-shot "switch the hand"
+  transitions, and only the host can tell them apart.
 - **Colour space:** the `format` handed to `Pipeline::new` is whatever the host
   surface uses. On a non-sRGB (`Bgra8Unorm`) target the model matches mocari's
   gamma-space blending; on `*UnormSrgb` you must render into your own `Rgba8Unorm`

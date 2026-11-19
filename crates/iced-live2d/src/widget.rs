@@ -17,9 +17,9 @@ use live2d_render::STEP;
 use crate::event::{Live2dEvent, PointerEvent, Problem};
 use crate::interface::{Interface, KeyId, Vocabulary};
 use crate::look_at::LookAtSource;
-use crate::model::{Command, Idle, Live2dModel, PointerInput, Presence};
+use crate::model::{Command, Live2dModel, PointerInput, Presence};
 use crate::pipeline::{
-    FrameInputs, IdleInput, Live2dPrimitive, PipelineEvent, PointerEventKind, ViewId,
+    FrameInputs, Live2dPrimitive, PipelineEvent, PointerEventKind, ViewId,
 };
 
 /// How much of the widget the model's bounds fill by default.
@@ -73,6 +73,7 @@ pub struct Live2d<'a, Message, I: Interface> {
     on_event: Option<Rc<dyn Fn(Live2dEvent<I>) -> Message + 'a>>,
     look_at: Option<LookAtSource>,
     fill: f32,
+    profile: bool,
     width: Length,
     height: Length,
 }
@@ -85,6 +86,7 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
             on_event: None,
             look_at: None,
             fill: DEFAULT_FILL,
+            profile: false,
             width: Length::Fill,
             height: Length::Fill,
         }
@@ -124,6 +126,15 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
     /// framed for. Values that are not positive and finite fall back to `1.0`.
     pub fn fill(mut self, fill: f32) -> Self {
         self.fill = fill;
+        self
+    }
+
+    /// Prints this widget's per-frame cost every 60 frames.
+    ///
+    /// Off by default, and the only thing in this crate that prints: whether a
+    /// host wants the numbers is the host's decision.
+    pub fn profile(mut self, profile: bool) -> Self {
+        self.profile = profile;
         self
     }
 
@@ -266,6 +277,7 @@ impl<Message, I: Interface> Clone for Live2d<'_, Message, I> {
             on_event: self.on_event.clone(),
             look_at: self.look_at,
             fill: self.fill,
+            profile: self.profile,
             width: self.width,
             height: self.height,
         }
@@ -425,14 +437,10 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
                 look_at,
                 look_at_mode: model.look_at_mode(),
                 physics_enabled: model.physics_enabled(),
-                idle: match model.idle() {
-                    Idle::Declared => IdleInput::Declared,
-                    Idle::Group(group) => IdleInput::Group(group.index()),
-                    Idle::Off => IdleInput::Off,
-                },
                 paused: model.paused(),
                 cursor: position,
                 pointer: model.drain_pointer(),
+                profile: self.profile,
             },
             events,
             asset_presence: model.asset_presence(),

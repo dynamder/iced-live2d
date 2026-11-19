@@ -23,12 +23,12 @@ use iced::Rectangle;
 use iced::widget::shader;
 use iced::wgpu;
 use live2d_render::{
-    Asset, AssetId, AssetOptions, ClipRect, Error, IDLE_GROUP, LookAtMode, Model, ModelGpu,
-    ModelInfo, ModelOptions, Prepared, View, WgpuLive2dRenderer, declared_idle,
+    Asset, AssetId, AssetOptions, ClipRect, Error, LookAtMode, Model, ModelGpu,
+    ModelInfo, ModelOptions, Prepared, View, WgpuLive2dRenderer,
 };
 
 use crate::event::{LoadFailure, Problem};
-use crate::interface::{InterfaceSpec, KeyId, Mapping, VocabularySpec};
+use crate::interface::{InterfaceSpec, KeyId, Mapping};
 use crate::model::{ModelId, PointerInput, Presence};
 
 /// Source of view identities, one per widget slot in the UI tree.
@@ -93,14 +93,6 @@ pub(crate) enum PrimitiveCommand {
     ClearExpressions,
 }
 
-/// What plays when nothing else does, already reduced to a vocabulary index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IdleInput {
-    Declared,
-    Group(usize),
-    Off,
-}
-
 /// One frame of one model's inputs.
 ///
 /// Rebuilt by the widget on every frame and dropped after it is rendered, so it
@@ -132,11 +124,12 @@ pub(crate) struct FrameInputs {
     pub(crate) look_at: Option<[f32; 2]>,
     pub(crate) look_at_mode: LookAtMode,
     pub(crate) physics_enabled: bool,
-    pub(crate) idle: IdleInput,
     pub(crate) paused: bool,
     /// Where the cursor is, in clip space (`-1.0..=1.0`, `+y` up).
     pub(crate) cursor: Option<[f32; 2]>,
     pub(crate) pointer: Vec<PointerInput>,
+    /// Whether this widget asked for the per-frame cost line.
+    pub(crate) profile: bool,
 }
 
 impl shader::Primitive for Live2dPrimitive {
@@ -184,7 +177,7 @@ impl shader::Pipeline for Live2dPipeline {
             models: HashMap::new(),
             views: HashMap::new(),
             pending: Mutex::new(Pending::default()),
-            profile: std::env::var_os("LIVE2D_PROFILE").map(|_| Profile::default()),
+            profile: None,
         }
     }
 
@@ -280,8 +273,8 @@ impl Live2dPipeline {
 
         let cost = reconcile(primitive, asset.info(), &view.view, ready, listeners, &gpu);
 
-        if let Some(profile) = profile.as_mut()
-            && let Some(line) = profile.record(cost)
+        if primitive.inputs.profile
+            && let Some(line) = profile.get_or_insert_with(Profile::default).record(cost)
         {
             println!("{line}");
         }
@@ -378,7 +371,7 @@ impl AssetSlot {
     fn from_parse(primitive: &Live2dPrimitive) -> Self {
         let presence = Arc::downgrade(&primitive.asset_presence);
 
-        let state = match Asset::parse(primitive.asset, primitive.path.as_path()) {
+        let state = match Asset::parse(primitive.asset, primitive.path.as_path(), primitive.asset_options) {
             Ok(prepared) => AssetState::Parsed(Box::new(prepared)),
             Err(error) => AssetState::Failed(Arc::new(error)),
         };
@@ -664,9 +657,6 @@ fn reconcile(
     ready.model.set_look_at(inputs.look_at);
     ready.model.set_look_at_mode(inputs.look_at_mode);
     ready.model.set_physics_enabled(inputs.physics_enabled);
-    ready
-        .model
-        .set_idle(idle_group(inputs.idle, &primitive.spec, &ready.mapping, info));
 
     ready.parameters.clear();
     ready
@@ -938,26 +928,6 @@ fn area_key(
     Some(KeyId { asset, index, name })
 }
 
-/// Resolves what the idle policy means for this interface and this model.
-fn idle_group(
-    idle: IdleInput,
-    spec: &InterfaceSpec,
-    mapping: &Mapping,
-    info: &ModelInfo,
-) -> Option<usize> {
-    match idle {
-        IdleInput::Off => None,
-        IdleInput::Group(vocabulary) => mapping.motion(vocabulary),
-        IdleInput::Declared => match spec.motion {
-            VocabularySpec::Static(names) => names
-                .iter()
-                .position(|name| *name == IDLE_GROUP)
-                .and_then(|vocabulary| mapping.motion(vocabulary)),
-            VocabularySpec::Model => declared_idle(info),
-        },
-    }
-}
-
 fn aspect_of(bounds: &Rectangle) -> f32 {
     if bounds.height > 0.0 {
         bounds.width / bounds.height
@@ -973,7 +943,7 @@ struct Gpu<'a> {
     queue: &'a wgpu::Queue,
 }
 
-/// What one model's frame cost, for `LIVE2D_PROFILE`.
+/// What one model's frame cost, when a widget asks to be profiled.
 #[derive(Debug, Clone, Copy, Default)]
 struct Cost {
     steps: u32,
@@ -983,7 +953,7 @@ struct Cost {
     delta: Duration,
 }
 
-/// Printed once every [`Profile::REPORT_EVERY`] frames when `LIVE2D_PROFILE` is set.
+/// Printed once every [`Profile::REPORT_EVERY`] frames while a widget asks for it.
 ///
 /// `steps / frames` well above 1 means the host presents slower than the model
 /// steps and is paying for catch-up work. Cost is per frame, which is what a frame

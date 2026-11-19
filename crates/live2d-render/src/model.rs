@@ -1,4 +1,4 @@
-//! One instance: its parameters, player, expressions, physics and idle policy.
+//! One instance: its parameters, player, expressions and physics.
 //!
 //! Everything here is CPU state. There is no GPU handle and no `wgpu` call, so the
 //! whole update order can be driven — and asserted on — without a device.
@@ -35,7 +35,7 @@ const MAX_CALL: Duration = Duration::from_millis(100);
 /// before it starts dropping time instead of catching up.
 const MAX_CARRY: Duration = STEP.saturating_mul(4);
 
-/// The seed of the per-model idle picker.
+/// The seed of the per-model random clip picker.
 const RANDOM_SEED: u64 = 0x2545_F491_4F6C_DD1D;
 
 /// A motion that has just started playing.
@@ -82,12 +82,6 @@ pub struct Model {
     look_at: Option<[f32; 2]>,
     look_at_mode: LookAtMode,
     physics_enabled: bool,
-    idle: Option<usize>,
-    /// Whether the implicit first idle has already been offered.
-    ///
-    /// A fresh model starts playing by itself, but only once: after the host asks
-    /// for a motion or stops one, the choice is theirs.
-    auto_idle: bool,
     random: u64,
     dirty: bool,
     stepper: Stepper,
@@ -109,8 +103,6 @@ impl Model {
             look_at: None,
             look_at_mode: LookAtMode::default(),
             physics_enabled: true,
-            idle: None,
-            auto_idle: false,
             random: RANDOM_SEED,
             dirty: true,
             stepper: Stepper::new(),
@@ -237,13 +229,6 @@ impl Model {
         self.dirty = true;
     }
 
-    /// Which motion group plays when nothing else does, by model group index.
-    ///
-    /// `None` leaves playback entirely to the host.
-    pub fn set_idle(&mut self, group: Option<usize>) {
-        self.idle = group;
-    }
-
     /// Plays `clip` of `group`.
     ///
     /// The clip is loaded now, which is the only file read this call can cause.
@@ -323,13 +308,9 @@ impl Model {
 
     /// Stops the current motion so the model shows its rest pose.
     ///
-    /// Unlike [`Model::set_idle`] this does not start another one: nothing plays
-    /// until the host or the idle policy asks for a motion.
+    /// Nothing plays afterwards until the host asks again: there is no idle policy
+    /// in this crate to restart it.
     pub fn stop_motion(&mut self) {
-        // A host that stops before anything started has said what it wants: the
-        // implicit first idle must not override that.
-        self.auto_idle = true;
-
         if self.player.is_none() {
             return;
         }
@@ -346,8 +327,8 @@ impl Model {
 
     /// Motions that ended since the last call, in the order they ended.
     ///
-    /// A finished motion is replaced by the idle policy in the same step, so this
-    /// is the only way to observe the transition.
+    /// Playback stops at a finished motion unless the host asks for another one;
+    /// this is how it learns to.
     pub fn take_finished(&mut self) -> Vec<Finished> {
         std::mem::take(&mut self.finished)
     }
@@ -375,14 +356,6 @@ impl Model {
     /// frame renders them.
     fn step(&mut self) {
         let seconds = STEP.as_secs_f32();
-
-        if !self.auto_idle {
-            self.auto_idle = true;
-
-            if self.player.is_none() {
-                self.play_idle();
-            }
-        }
 
         self.runtime.reset_parameters();
         self.runtime.reset_part_opacities();
@@ -417,7 +390,6 @@ impl Model {
             }
 
             self.player = None;
-            self.play_idle();
         }
     }
 
@@ -437,14 +409,6 @@ impl Model {
         }
     }
 
-    fn play_idle(&mut self) {
-        let Some(group) = self.idle else {
-            return;
-        };
-
-        self.play_random_motion(group);
-    }
-
     fn start(&mut self, group: usize, clip: usize, motion: Motion3) {
         self.started.push(Started {
             group,
@@ -459,7 +423,7 @@ impl Model {
     }
 
     /// xorshift64: deterministic per model, no dependency, good enough to pick a
-    /// different idle clip each time.
+    /// different clip each time.
     fn next_random(&mut self) -> u32 {
         self.random ^= self.random << 13;
         self.random ^= self.random >> 7;

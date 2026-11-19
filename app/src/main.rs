@@ -6,8 +6,13 @@
 //! and the render layer lives behind the component.
 //!
 //! Keys: `R` play a random clip of the next motion group, `E` next expression,
-//! `C` clear expressions, `Space` stop the motion, `P` pause/resume. Every pointer
+//! `C` clear expressions, `S` stop the motion, `P` pause/resume. Every pointer
 //! event is printed as it arrives.
+//!
+//! What plays, and what plays next, is this app's decision: the component plays
+//! what it is told and reports when a motion ends. On load the app starts the
+//! first clip of the first group, and on `MotionFinishedPlaying` it advances to
+//! the next clip of that group.
 
 mod cli;
 
@@ -15,7 +20,7 @@ use std::sync::Arc;
 
 use iced::{Fill, Subscription, Task, Widget, keyboard, window};
 use iced_live2d::{
-    Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, Raw, live2d, look_at, raw,
+    AssetOptions, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -90,7 +95,15 @@ enum Message {
 
 impl App {
     fn new(path: std::path::PathBuf, look_at_mode: iced_live2d::LookAtMode) -> Self {
-        let asset = Live2dAsset::from_path(path);
+        // Scanning is the app's decision: this rig ships its motion files without
+        // listing them, and only the app knows whether that folder is a loop set.
+        let asset = Live2dAsset::with_options(
+            path,
+            AssetOptions {
+                texture_scale: 0.5,
+                scan_sidecars: true,
+            },
+        );
         let model = Live2dModel::<Raw>::new(&asset);
         model.set_look_at_mode(look_at_mode);
 
@@ -120,6 +133,7 @@ impl App {
         live2d(&self.model)
             .on_event(Message::Live2d)
             .look_at(look_at::cursor)
+            .profile(std::env::var_os("LIVE2D_PROFILE").is_some())
             .width(Fill)
             .height(Fill)
     }
@@ -156,6 +170,11 @@ impl App {
                     info.parameters.len(),
                     info.hit_areas.len(),
                 );
+
+                // The app — not the component — decides what plays first.
+                if let Some(group) = raw::motions(info).into_iter().next() {
+                    self.model.play_motion(group, 0);
+                }
             }
             Live2dEvent::ModelFailedToLoad { failure } => {
                 eprintln!("live2d: failed to load {failure}");
@@ -173,6 +192,15 @@ impl App {
             ),
             Live2dEvent::MotionFinishedPlaying { group, clip } => {
                 println!("live2d: finished {} #{}", group.name(), clip);
+
+                // Keep the group running, in order: the component stops at a
+                // finished motion and waits to be told what is next.
+                if let Some(info) = self.info.as_ref()
+                    && let Some(clips) = info.motions.get(group.index()).map(|item| item.clips)
+                    && clips > 0
+                {
+                    self.model.play_motion(group.clone(), (*clip + 1) % clips);
+                }
             }
             Live2dEvent::Pointer(pointer) => println!("live2d: {pointer:?}"),
         }

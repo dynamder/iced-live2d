@@ -83,7 +83,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &model_path,
         wgpu::TextureFormat::Rgba8Unorm,
         (1, 1),
-        AssetOptions { texture_scale: 0.25 },
+        AssetOptions {
+            texture_scale: 0.25,
+            scan_sidecars: true,
+        },
         ModelOptions::default(),
     )?;
 

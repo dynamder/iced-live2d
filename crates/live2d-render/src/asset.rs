@@ -24,10 +24,14 @@ use crate::model::Model;
 use crate::rig::{self, LookAtMode, ModelFacts, Rig};
 
 /// The group name a model's own idle motions conventionally live in.
+///
+/// A constant, not a policy: this crate never picks a group to play.
 pub const IDLE_GROUP: &str = "Idle";
 
-/// Group name given to motions discovered by scanning the model directory when
-/// `model3.json` declares none.
+/// Group name given to motions discovered by scanning the model directory.
+///
+/// Only used when [`AssetOptions::scan_sidecars`] is set; the clips keep the
+/// alphabetical order of their files.
 pub const SCANNED_GROUP: &str = "Scanned";
 
 /// Longest directory scan, in levels below the model file.
@@ -42,11 +46,21 @@ pub struct AssetOptions {
     /// atlas costs ~592 MB of VRAM). 0.5 quarters that, which is plenty for a
     /// few-hundred-pixel desktop pet.
     pub texture_scale: f32,
+    /// Whether to look for `.motion3.json` / `.exp3.json` files next to the model
+    /// when `model3.json` declares none of its own.
+    ///
+    /// Off by default: a directory full of files is not the same thing as an
+    /// animation set, and only the host knows what the files are. What is found
+    /// lands in [`SCANNED_GROUP`], in the alphabetical order of the files.
+    pub scan_sidecars: bool,
 }
 
 impl Default for AssetOptions {
     fn default() -> Self {
-        Self { texture_scale: 0.5 }
+        Self {
+            texture_scale: 0.5,
+            scan_sidecars: false,
+        }
     }
 }
 
@@ -122,8 +136,9 @@ impl Asset {
     /// Reads and parses `path` (a `.model3.json`) without touching the GPU.
     ///
     /// `id` is the identity every key minted from this asset will carry; derive
-    /// it with [`AssetId::unique`].
-    pub fn parse(id: AssetId, path: impl AsRef<Path>) -> Result<Prepared> {
+    /// it with [`AssetId::unique`]. Only [`AssetOptions::scan_sidecars`] is read
+    /// here; the texture budget is used when the asset is uploaded.
+    pub fn parse(id: AssetId, path: impl AsRef<Path>, options: AssetOptions) -> Result<Prepared> {
         let loaded = load_model_runtime(path.as_ref())?;
         let model_dir = loaded.model_dir().map(Path::to_path_buf);
         let runtime = loaded.runtime();
@@ -136,10 +151,10 @@ impl Asset {
         let mut motion_groups = motion_paths_by_group(runtime, model_dir.as_deref());
         let mut expressions = expression_paths(runtime, model_dir.as_deref());
 
-        // Plenty of exported models (VTuber rigs in particular) ship their motion
-        // and expression files next to the model without listing them in
-        // `model3.json`. Fall back to scanning the model directory.
-        if let Some(dir) = model_dir.as_deref()
+        // A directory full of files is not an animation set: what a clip means is
+        // the host's judgement, so it has to ask for the scan.
+        if options.scan_sidecars
+            && let Some(dir) = model_dir.as_deref()
             && (motion_groups.is_empty() || expressions.is_empty())
         {
             let scanned = scan_sidecars(dir, &mut issues);
@@ -293,12 +308,6 @@ impl Asset {
     }
 }
 
-/// The group [`Idle::Declared`](crate::ModelInfo) resolves to: the model's own
-/// `Idle` group, or the group this crate synthesized from a directory scan.
-pub fn declared_idle(info: &ModelInfo) -> Option<usize> {
-    info.motion(IDLE_GROUP).or_else(|| info.motion(SCANNED_GROUP))
-}
-
 fn motion_paths_by_group(
     runtime: &ModelRuntime,
     model_dir: Option<&Path>,
@@ -394,9 +403,6 @@ fn scan_sidecars(dir: &Path, issues: &mut Vec<Error>) -> ScannedSidecars {
     collect_sidecars(dir, 0, &mut motions, &mut expressions, issues);
 
     motions.sort();
-    // Stable sort keyed on "not an idle clip", so an `IDLE.motion3.json` style
-    // file plays first while everything else keeps alphabetical order.
-    motions.sort_by_key(|path| !is_idle_clip(path));
     expressions.sort();
 
     ScannedSidecars {
@@ -458,13 +464,6 @@ fn collect_sidecars(
             expressions.push(path);
         }
     }
-}
-
-fn is_idle_clip(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_ascii_lowercase().contains("idle"))
-        .unwrap_or(false)
 }
 
 /// Integer box-filter factor derived from a `0..1` texture scale.

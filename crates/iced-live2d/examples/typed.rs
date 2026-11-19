@@ -24,7 +24,7 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, window};
 use iced_live2d::{
-    Idle, Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, PointerEvent, Vocabulary,
+    Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, PointerEvent, Vocabulary,
     live2d, look_at,
 };
 
@@ -120,7 +120,6 @@ impl App {
     fn new(path: PathBuf) -> Self {
         let asset = Live2dAsset::from_path(path);
         let model = Live2dModel::<Face>::new(&asset);
-        model.set_idle(Idle::Group(FaceMotion::Idle));
 
         Self {
             model,
@@ -158,6 +157,7 @@ impl App {
         let pane: Element<'_, Message> = live2d(&self.model)
             .on_event(Message::Live2d)
             .look_at(look_at::cursor)
+            .profile(std::env::var_os("LIVE2D_PROFILE").is_some())
             .width(Fill)
             .height(Fill)
             ._boxed();
@@ -173,6 +173,10 @@ impl App {
         match &event {
             Live2dEvent::ModelLoaded { info } => {
                 self.info = Some(Arc::clone(info));
+
+                // The interface promised an `Idle` group; playing it is this
+                // example's policy, not the component's.
+                self.model.play_motion(FaceMotion::Idle, 0);
                 self.status = format!(
                     "loaded: {} parameters, {} parts, {} motion groups, {} expressions, {} hit areas",
                     info.parameters.len(),
@@ -199,6 +203,11 @@ impl App {
                 );
             }
             Live2dEvent::MotionFinishedPlaying { group, clip } => {
+                // Back to the first idle clip, which is this example's policy.
+                if *group == FaceMotion::Idle {
+                    self.model.play_motion(FaceMotion::Idle, 0);
+                }
+
                 self.status = format!("finished {group:?} #{clip}");
             }
             Live2dEvent::Pointer(PointerEvent::Pressed {

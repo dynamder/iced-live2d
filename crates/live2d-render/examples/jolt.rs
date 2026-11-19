@@ -55,7 +55,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &model_path,
         format,
         (size, size),
-        AssetOptions { texture_scale: 0.5 },
+        AssetOptions {
+            texture_scale: 0.5,
+            scan_sidecars: true,
+        },
         ModelOptions::default(),
     )?;
 

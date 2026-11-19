@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (size, size),
         AssetOptions {
             texture_scale: knobs.texture_scale,
+            scan_sidecars: true,
         },
         live2d_render::ModelOptions {
             mask_size: knobs.mask_size,

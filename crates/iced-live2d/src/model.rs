@@ -116,7 +116,6 @@ pub(crate) struct Inner<I: Interface> {
     parameters: RefCell<BTreeMap<I::Parameter, f32>>,
     parts: RefCell<BTreeMap<I::Part, f32>>,
     commands: RefCell<VecDeque<Command<I>>>,
-    idle: RefCell<Idle<I::Motion>>,
     look_at: Cell<Option<[f32; 2]>>,
     look_at_mode: Cell<LookAtMode>,
     paused: Cell<bool>,
@@ -143,25 +142,6 @@ impl ModelId {
     fn unique() -> Self {
         Self(NEXT_MODEL.fetch_add(1, Ordering::Relaxed))
     }
-}
-
-/// What plays when nothing else does.
-///
-/// The default is [`Idle::Declared`], which is what makes an untouched model
-/// animate: it plays a random clip of the interface's `Idle` group whenever the
-/// previous one ends.
-#[derive(Debug, Clone, Default)]
-pub enum Idle<M> {
-    /// The interface's own `Idle` motion group, if it declares one.
-    ///
-    /// An interface that does not name a group `Idle` gets no automatic playback,
-    /// which is what [`Idle::Off`] would give it anyway.
-    #[default]
-    Declared,
-    /// A specific motion group.
-    Group(M),
-    /// Nothing: the host drives every motion.
-    Off,
 }
 
 /// Something the host asked the model to do, queued until the render layer can.
@@ -220,7 +200,6 @@ impl<I: Interface> Live2dModel<I> {
                 parameters: RefCell::new(BTreeMap::new()),
                 parts: RefCell::new(BTreeMap::new()),
                 commands: RefCell::new(VecDeque::new()),
-                idle: RefCell::new(Idle::default()),
                 look_at: Cell::new(None),
                 look_at_mode: Cell::new(LookAtMode::default()),
                 paused: Cell::new(false),
@@ -324,11 +303,6 @@ impl<I: Interface> Live2dModel<I> {
         self.inner.physics_enabled.get()
     }
 
-    /// Sets what plays when nothing else does. [`Idle::Declared`] by default.
-    pub fn set_idle(&self, idle: Idle<I::Motion>) {
-        *self.inner.idle.borrow_mut() = idle;
-    }
-
     /// Plays `clip` of `group`, stopping whatever was playing.
     ///
     /// The request is queued and takes effect on the next frame. An out-of-range
@@ -342,7 +316,8 @@ impl<I: Interface> Live2dModel<I> {
     /// Plays a random clip of `group`.
     ///
     /// Which clip is random is decided by the render layer, because only it knows
-    /// how many the group holds.
+    /// how many the group holds. This is the usual way for a host to pick an idle
+    /// clip when one finishes — the component has no idle policy of its own.
     pub fn play_random_motion(&self, group: I::Motion) {
         self.inner.push_command(Command::PlayRandomMotion { group });
     }
@@ -598,10 +573,6 @@ impl<I: Interface> Inner<I> {
             .collect()
     }
 
-    pub(crate) fn idle(&self) -> Idle<I::Motion> {
-        self.idle.borrow().clone()
-    }
-
     pub(crate) fn drain_commands(&self) -> Vec<Command<I>> {
         self.commands.borrow_mut().drain(..).collect()
     }
@@ -647,6 +618,7 @@ mod tests {
             "model.model3.json",
             AssetOptions {
                 texture_scale: 0.25,
+                scan_sidecars: false,
             },
         );
         let model = Live2dModel::<Raw>::new(&asset);
