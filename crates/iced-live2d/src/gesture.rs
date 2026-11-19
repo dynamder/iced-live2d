@@ -279,6 +279,7 @@ mod tests {
             pointer: Pointer::Mouse(mouse::Button::Left),
             area,
             at: sample(x),
+            when: Instant::now(),
         })
     }
 
@@ -288,6 +289,7 @@ mod tests {
             pointer: Pointer::Mouse(mouse::Button::Left),
             area,
             at: sample(x),
+            when: Instant::now(),
         })
     }
 
@@ -298,6 +300,7 @@ mod tests {
             area: Some("Body"),
             origin: sample(0.0),
             at: sample(x),
+            when: Instant::now(),
         })
     }
 
@@ -536,6 +539,7 @@ mod tests {
             &PointerEvent::Cancelled(Cancelled {
                 model: model(),
                 pointer: Pointer::Mouse(mouse::Button::Left),
+                when: Instant::now(),
             }),
             start + Duration::from_millis(10),
             &mut out,
@@ -561,6 +565,7 @@ mod tests {
                 model: model(),
                 area: "Body",
                 at: sample(0.0),
+                when: Instant::now(),
             }),
             start,
             &mut out,
@@ -569,6 +574,7 @@ mod tests {
             &PointerEvent::Moved(Moving {
                 model: model(),
                 at: sample(10.0),
+                when: Instant::now(),
             }),
             start,
             &mut out,

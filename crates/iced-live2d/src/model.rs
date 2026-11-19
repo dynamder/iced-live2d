@@ -15,6 +15,7 @@ use crate::interaction::Pointer;
 use crate::interface::{Interface, InterfaceSpec, Vocabulary};
 use crate::pipeline::PrimitiveCommand;
 use iced::Point;
+use std::time::Instant;
 
 /// How many commands may wait for the render layer before the oldest are dropped.
 const MAX_QUEUED_COMMANDS: usize = 64;
@@ -170,11 +171,28 @@ impl<I: Interface> Command<I> {
 /// not queued: it is ambient state the render layer reads each frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PointerInput {
-    Pressed { pointer: Pointer, at: Point },
-    Released { pointer: Pointer, at: Point },
-    Moved { pointer: Pointer, at: Point },
-    Scrolled { lines: [f32; 2], at: Point },
-    Cancelled { pointer: Pointer },
+    Pressed {
+        pointer: Pointer,
+        at: Point,
+        when: Instant,
+    },
+    Released {
+        pointer: Pointer,
+        at: Point,
+        when: Instant,
+    },
+    Moved {
+        pointer: Pointer,
+        at: Point,
+    },
+    Scrolled {
+        lines: [f32; 2],
+        at: Point,
+        when: Instant,
+    },
+    Cancelled {
+        pointer: Pointer,
+    },
     CancelAll,
 }
 

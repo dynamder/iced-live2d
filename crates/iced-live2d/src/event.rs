@@ -276,6 +276,7 @@ mod tests {
     use crate::interaction::{Moving, Sample};
     use crate::interface::{KeyId, Vocabulary};
     use crate::raw::{Raw, RawMotion};
+    use std::time::Instant;
 
     fn motion(asset: live2d_render::AssetId) -> RawMotion {
         RawMotion::from_id(&KeyId {
@@ -298,6 +299,7 @@ mod tests {
                 clip: [0.0, 0.0],
                 model: [0.0, 0.0],
             },
+            when: Instant::now(),
         }));
         let started = Live2dEvent::<Raw>::MotionStarted {
             model,

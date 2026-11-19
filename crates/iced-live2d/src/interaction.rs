@@ -5,7 +5,7 @@
 //! interface's hit-area type — `Pointing<FaceHitArea>` — which is the only part of
 //! a vocabulary that input mentions.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::Point;
 use iced::mouse;
@@ -48,6 +48,9 @@ pub struct Pointing<A> {
     pub area: Option<A>,
     /// Where it happened.
     pub at: Sample,
+    /// When it happened. Raw input carries the clock, so a host that classifies
+    /// clicks and holds itself can measure them.
+    pub when: Instant,
 }
 
 /// The pointer entering or leaving a hit area.
@@ -59,6 +62,8 @@ pub struct Hovering<A> {
     pub area: A,
     /// Where the pointer was.
     pub at: Sample,
+    /// When it happened.
+    pub when: Instant,
 }
 
 /// The pointer moving over the widget.
@@ -68,6 +73,8 @@ pub struct Moving {
     pub model: Live2dId,
     /// Where the pointer is.
     pub at: Sample,
+    /// When it happened.
+    pub when: Instant,
 }
 
 /// A pointer moving while held down.
@@ -83,6 +90,8 @@ pub struct Dragging<A> {
     pub origin: Sample,
     /// Where the pointer is now.
     pub at: Sample,
+    /// When this frame's position was seen.
+    pub when: Instant,
 }
 
 impl<A> Dragging<A> {
@@ -104,6 +113,8 @@ pub struct Scrolling {
     pub lines: [f32; 2],
     /// Where the pointer was.
     pub at: Sample,
+    /// When it happened.
+    pub when: Instant,
 }
 
 /// A press that will never be released: the window lost focus, or the touch was
@@ -114,6 +125,8 @@ pub struct Cancelled {
     pub model: Live2dId,
     /// Which pointer.
     pub pointer: Pointer,
+    /// When the press was lost.
+    pub when: Instant,
 }
 
 /// What a pointer did, as the widget saw it.

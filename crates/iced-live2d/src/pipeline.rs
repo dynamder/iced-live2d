@@ -46,35 +46,43 @@ pub(crate) enum PointerEventKind {
         pointer: Pointer,
         area: Option<KeyId>,
         at: Sample,
+        when: Instant,
     },
     Released {
         pointer: Pointer,
         area: Option<KeyId>,
         at: Sample,
+        when: Instant,
     },
     Cancelled {
         pointer: Pointer,
+        when: Instant,
     },
     Moved {
         at: Sample,
+        when: Instant,
     },
     Entered {
         area: KeyId,
         at: Sample,
+        when: Instant,
     },
     Exited {
         area: KeyId,
         at: Sample,
+        when: Instant,
     },
     Dragged {
         pointer: Pointer,
         area: Option<KeyId>,
         origin: Sample,
         at: Sample,
+        when: Instant,
     },
     Scrolled {
         lines: [f32; 2],
         at: Sample,
+        when: Instant,
     },
 }
 
@@ -903,7 +911,10 @@ fn pointer(
         if let Some(at) = sample(position) {
             send(
                 listener,
-                PipelineEvent::Pointer(PointerEventKind::Moved { at }),
+                PipelineEvent::Pointer(PointerEventKind::Moved {
+                    at,
+                    when: Instant::now(),
+                }),
             );
         }
     }
@@ -928,7 +939,11 @@ fn pointer(
         {
             send(
                 listener,
-                PipelineEvent::Pointer(PointerEventKind::Exited { area, at }),
+                PipelineEvent::Pointer(PointerEventKind::Exited {
+                    area,
+                    at,
+                    when: Instant::now(),
+                }),
             );
         }
 
@@ -938,7 +953,11 @@ fn pointer(
         {
             send(
                 listener,
-                PipelineEvent::Pointer(PointerEventKind::Entered { area, at }),
+                PipelineEvent::Pointer(PointerEventKind::Entered {
+                    area,
+                    at,
+                    when: Instant::now(),
+                }),
             );
         }
 
@@ -947,7 +966,7 @@ fn pointer(
 
     for input in &primitive.inputs.pointer {
         match *input {
-            PointerInput::Pressed { pointer, at } => {
+            PointerInput::Pressed { pointer, at, when } => {
                 let Some(pressed) = sample(at) else {
                     continue;
                 };
@@ -970,10 +989,11 @@ fn pointer(
                         area: area
                             .and_then(|area| area_key(primitive.asset, info, &ready.mapping, area)),
                         at: pressed,
+                        when,
                     }),
                 );
             }
-            PointerInput::Released { pointer, at } => {
+            PointerInput::Released { pointer, at, when } => {
                 let Some(released) = sample(at) else {
                     continue;
                 };
@@ -997,6 +1017,7 @@ fn pointer(
                         area: area
                             .and_then(|area| area_key(primitive.asset, info, &ready.mapping, area)),
                         at: released,
+                        when,
                     }),
                 );
             }
@@ -1009,11 +1030,11 @@ fn pointer(
                     down.current = at;
                 }
             }
-            PointerInput::Scrolled { lines, at } => {
+            PointerInput::Scrolled { lines, at, when } => {
                 if let Some(at) = sample(at) {
                     send(
                         listener,
-                        PipelineEvent::Pointer(PointerEventKind::Scrolled { lines, at }),
+                        PipelineEvent::Pointer(PointerEventKind::Scrolled { lines, at, when }),
                     );
                 }
             }
@@ -1022,7 +1043,10 @@ fn pointer(
 
                 send(
                     listener,
-                    PipelineEvent::Pointer(PointerEventKind::Cancelled { pointer }),
+                    PipelineEvent::Pointer(PointerEventKind::Cancelled {
+                        pointer,
+                        when: Instant::now(),
+                    }),
                 );
             }
             PointerInput::CancelAll => {
@@ -1031,6 +1055,7 @@ fn pointer(
                         listener,
                         PipelineEvent::Pointer(PointerEventKind::Cancelled {
                             pointer: down.pointer,
+                            when: Instant::now(),
                         }),
                     );
                 }
@@ -1066,6 +1091,7 @@ fn pointer(
                     .and_then(|area| area_key(primitive.asset, info, &ready.mapping, area)),
                 origin,
                 at,
+                when: Instant::now(),
             }),
         );
     }

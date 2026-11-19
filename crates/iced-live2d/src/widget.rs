@@ -375,6 +375,7 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
+        when: Instant,
     ) -> bool {
         let model = self.model.inner();
 
@@ -386,6 +387,7 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
                     model.push_pointer(PointerInput::Pressed {
                         pointer: Pointer::Mouse(*button),
                         at,
+                        when,
                     });
                 }
             }
@@ -396,6 +398,7 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
                     model.push_pointer(PointerInput::Released {
                         pointer: Pointer::Mouse(*button),
                         at,
+                        when,
                     });
                 }
             }
@@ -408,13 +411,14 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
                 };
 
                 if let Some(at) = cursor.position() {
-                    model.push_pointer(PointerInput::Scrolled { lines, at });
+                    model.push_pointer(PointerInput::Scrolled { lines, at, when });
                 }
             }
             iced::Event::Touch(touch::Event::FingerPressed { id, position }) => {
                 model.push_pointer(PointerInput::Pressed {
                     pointer: Pointer::Touch(*id),
                     at: *position,
+                    when,
                 });
             }
             iced::Event::Touch(touch::Event::FingerMoved { id, position }) => {
@@ -427,6 +431,7 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
                 model.push_pointer(PointerInput::Released {
                     pointer: Pointer::Touch(*id),
                     at: *position,
+                    when,
                 });
             }
             iced::Event::Touch(touch::Event::FingerLost { id, .. }) => {
@@ -586,50 +591,73 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
                 clip,
             },
             PipelineEvent::Pointer(kind) => Live2dEvent::Pointer(match kind {
-                PointerEventKind::Pressed { pointer, area, at } => {
-                    PointerEvent::Pressed(Pointing {
-                        model,
-                        pointer,
-                        area: optional_key::<I::HitArea>(area, "hit area")?,
-                        at,
-                    })
-                }
-                PointerEventKind::Released { pointer, area, at } => {
-                    PointerEvent::Released(Pointing {
-                        model,
-                        pointer,
-                        area: optional_key::<I::HitArea>(area, "hit area")?,
-                        at,
-                    })
-                }
-                PointerEventKind::Cancelled { pointer } => {
-                    PointerEvent::Cancelled(Cancelled { model, pointer })
-                }
-                PointerEventKind::Moved { at } => PointerEvent::Moved(Moving { model, at }),
-                PointerEventKind::Entered { area, at } => PointerEvent::Entered(Hovering {
-                    model,
-                    area: key::<I::HitArea>(area, "hit area")?,
+                PointerEventKind::Pressed {
+                    pointer,
+                    area,
                     at,
+                    when,
+                } => PointerEvent::Pressed(Pointing {
+                    model,
+                    pointer,
+                    area: optional_key::<I::HitArea>(area, "hit area")?,
+                    at,
+                    when,
                 }),
-                PointerEventKind::Exited { area, at } => PointerEvent::Exited(Hovering {
+                PointerEventKind::Released {
+                    pointer,
+                    area,
+                    at,
+                    when,
+                } => PointerEvent::Released(Pointing {
+                    model,
+                    pointer,
+                    area: optional_key::<I::HitArea>(area, "hit area")?,
+                    at,
+                    when,
+                }),
+                PointerEventKind::Cancelled { pointer, when } => {
+                    PointerEvent::Cancelled(Cancelled {
+                        model,
+                        pointer,
+                        when,
+                    })
+                }
+                PointerEventKind::Moved { at, when } => {
+                    PointerEvent::Moved(Moving { model, at, when })
+                }
+                PointerEventKind::Entered { area, at, when } => PointerEvent::Entered(Hovering {
                     model,
                     area: key::<I::HitArea>(area, "hit area")?,
                     at,
+                    when,
+                }),
+                PointerEventKind::Exited { area, at, when } => PointerEvent::Exited(Hovering {
+                    model,
+                    area: key::<I::HitArea>(area, "hit area")?,
+                    at,
+                    when,
                 }),
                 PointerEventKind::Dragged {
                     pointer,
                     area,
                     origin,
                     at,
+                    when,
                 } => PointerEvent::Dragged(Dragging {
                     model,
                     pointer,
                     area: optional_key::<I::HitArea>(area, "hit area")?,
                     origin,
                     at,
+                    when,
                 }),
-                PointerEventKind::Scrolled { lines, at } => {
-                    PointerEvent::Scrolled(Scrolling { model, lines, at })
+                PointerEventKind::Scrolled { lines, at, when } => {
+                    PointerEvent::Scrolled(Scrolling {
+                        model,
+                        lines,
+                        at,
+                        when,
+                    })
                 }
             }),
         })
@@ -738,7 +766,7 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
         // was asked for, which is not the instant an event arrived.
         let now = Instant::now();
 
-        let interacting = self.queue_input(state, event, bounds, cursor);
+        let interacting = self.queue_input(state, event, bounds, cursor, now);
 
         state.recognizer.configure(self.gestures);
         state.recognizer.tick(now, &mut state.produced);
