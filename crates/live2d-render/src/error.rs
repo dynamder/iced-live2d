@@ -14,9 +14,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Everything the render layer can fail at.
 ///
-/// [`Asset::parse`](crate::Asset::parse) and
-/// [`Prepared::upload`](crate::Prepared::upload) report a load failure; the rest
-/// are runtime problems a host is expected to surface without stopping playback.
+/// [`Asset::parse`](crate::Asset::parse) and [`Prepared::upload`](crate::Prepared::upload)
+/// report load failures; the rest are runtime problems worth surfacing without
+/// stopping playback.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A model file, its `.moc3`, or one of its textures could not be read.
@@ -114,11 +114,8 @@ pub enum Error {
     #[error("failed to rebuild Live2D meshes")]
     MeshUpdate,
 
-    /// A drawable changed shape in a way the GPU buffers cannot absorb, so the
-    /// whole set was rebuilt.
-    ///
-    /// Worth reporting once: a model that does this every frame is otherwise
-    /// indistinguishable from a slow one.
+    /// A drawable changed shape in a way the buffers cannot absorb, so the whole set
+    /// was rebuilt. Worth reporting once: per-frame rebuilds look like a slow model.
     #[error("Live2D geometry changed shape, rebuilding every buffer: {0}")]
     MeshTopology(#[from] WgpuMeshUpdateError),
 

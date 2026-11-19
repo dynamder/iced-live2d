@@ -17,21 +17,15 @@ use crate::pipeline::PrimitiveCommand;
 /// How many commands may wait for the render layer before the oldest are dropped.
 const MAX_QUEUED_COMMANDS: usize = 64;
 
-/// Source of model identities. The render layer keys its per-model state on them,
-/// so they must not collide within a process.
+/// Model identities. The render layer keys its per-model state on them.
 static NEXT_MODEL: AtomicU64 = AtomicU64::new(1);
 
 /// One model file, shared by every instance driven from it.
 ///
-/// Build it once, keep it in the host's state, and hand it to
-/// [`Live2dModel::new`]. Nothing is read at construction: the first frame that
-/// draws one of its models loads it, and the outcome arrives as
-/// [`Live2dEvent::ModelLoaded`](crate::Live2dEvent::ModelLoaded) or
-/// [`Live2dEvent::ModelFailedToLoad`](crate::Live2dEvent::ModelFailedToLoad).
-///
-/// Several models of one asset share the textures and the parsed data; dropping
-/// the asset releases them once the last model that used it is gone, at the end of
-/// the next rendered frame.
+/// Nothing is read at construction: the first frame that draws one of its models
+/// loads it and reports [`Live2dEvent::ModelLoaded`](crate::Live2dEvent::ModelLoaded)
+/// or [`Live2dEvent::ModelFailedToLoad`](crate::Live2dEvent::ModelFailedToLoad).
+/// The textures go away one frame after the last model using them is dropped.
 pub struct Live2dAsset {
     id: AssetId,
     path: Arc<PathBuf>,
@@ -40,16 +34,12 @@ pub struct Live2dAsset {
 }
 
 impl Live2dAsset {
-    /// An asset to load from `path`, with an explicit budget.
+    /// An asset to load from `path`, the `.model3.json`; everything else is found
+    /// from there.
     ///
-    /// `path` is the `.model3.json`; everything else is found from there. A path
-    /// that does not exist is not rejected here — it fails on the first frame and
-    /// is reported as a load failure.
-    ///
-    /// There is deliberately no constructor that invents the options: whether to
-    /// spend 592 MB of VRAM or 37, and whether to scan a folder for animation
-    /// files, is not something this crate can guess. Start from
-    /// [`AssetOptions::default`] and override what matters.
+    /// A missing path is not rejected here — it fails on the first frame, as a load
+    /// failure. Start from [`AssetOptions::default`] and override what matters: the
+    /// texture scale alone decides whether a rig costs 592 MB of VRAM or a fraction.
     pub fn new(path: impl Into<PathBuf>, options: AssetOptions) -> Self {
         Self {
             id: AssetId::unique(),
@@ -94,14 +84,10 @@ impl fmt::Debug for Live2dAsset {
     }
 }
 
-/// One instance of an asset, owned by the host.
+/// One instance of an asset: its own parameters, playback and physics.
 ///
-/// An instance keeps its own parameter values, playback position and physics
-/// state, so several of them can show the same asset in different poses. It is
-/// `!Clone` and `!Send` on purpose: one owner, UI thread only.
-///
-/// Every method takes `&self`; the instance is driven through interior mutability
-/// so a host can hold it in immutable state and still command it.
+/// `!Clone` and `!Send` on purpose — one owner, UI thread only. Every method takes
+/// `&self`, so a host can command it from immutable state.
 pub struct Live2dModel<I: Interface> {
     inner: Rc<Inner<I>>,
 }
@@ -127,10 +113,8 @@ pub(crate) struct Inner<I: Interface> {
     presence: Arc<Presence>,
 }
 
-/// Proof that an asset or a model is still alive.
-///
-/// The render layer holds a `Weak` to one of these per slot and frees the slot
-/// once it can no longer be upgraded.
+/// Proof that an asset or a model is still alive: the render layer holds a `Weak`
+/// and frees the slot once it cannot upgrade it.
 #[derive(Debug)]
 pub(crate) struct Presence;
 
@@ -184,9 +168,9 @@ pub(crate) enum PointerInput {
 impl<I: Interface> Live2dModel<I> {
     /// An instance of `asset`, with an explicit GPU budget.
     ///
-    /// The mask render target is per instance, so this is the one budget that is
-    /// not shared: start from [`ModelOptions::default`] and raise `mask_size` for a
-    /// rig whose packed mask contexts run out of atlas space.
+    /// The mask render target is per instance, so [`ModelOptions`] is the one budget
+    /// an asset cannot share: raise `mask_size` for a rig whose masks run out of
+    /// atlas space.
     pub fn new(asset: &Live2dAsset, options: ModelOptions) -> Self {
         Self {
             inner: Rc::new(Inner {
@@ -230,10 +214,8 @@ impl<I: Interface> Live2dModel<I> {
     /// The parameter overrides of this instance.
     ///
     /// Values are **raw**, in the range the model declares — see
-    /// [`ParameterRange`](crate::ParameterRange) and
-    /// [`ModelInfo`](crate::ModelInfo). They are replayed every step, after the
-    /// motion and before physics, so a host value wins over whatever the motion
-    /// drives.
+    /// [`ParameterRange`](crate::ParameterRange). They are replayed every step after
+    /// the motion, so a host value wins over what the motion drives.
     pub fn parameters(&self) -> Parameters<'_, I> {
         Parameters { model: &self.inner }
     }
@@ -243,17 +225,11 @@ impl<I: Interface> Live2dModel<I> {
         Parts { model: &self.inner }
     }
 
-    /// Points head, body and eyes at `target`, given in `-1.0..=1.0` on both axes
-    /// (`-1` = left/top, `+y` = up).
+    /// Points head, body and eyes at `target`: `-1.0..=1.0` on both axes, `+y` up.
     ///
-    /// Which parameters that means is resolved per model and per
-    /// [`LookAtMode`]. The value persists until it is set again, so a host without
-    /// a cursor can call this once.
-    ///
-    /// While the widget has a [`LookAtSource`](crate::LookAtSource) the source
-    /// wins when it has an answer (the cursor is over the widget); **this value is
-    /// what the model returns to when the cursor leaves**, and what drives the
-    /// model when there is no source at all.
+    /// The value persists, so a host without a cursor can call it once. A widget
+    /// [`LookAtSource`](crate::LookAtSource) overrides it while the cursor is over
+    /// the widget; this is where the model returns to afterwards.
     pub fn look_at(&self, target: [f32; 2]) {
         self.inner.look_at.set(Some(target));
     }
@@ -263,20 +239,14 @@ impl<I: Interface> Live2dModel<I> {
         self.inner.look_at_mode.get()
     }
 
-    /// Switches where a LookAt target lands, from the next frame on.
-    ///
-    /// Both tables are resolved at load time, so switching never needs a reload
-    /// and never touches the host's own values: the next step rewrites every
-    /// parameter from scratch.
+    /// Switches where a LookAt target lands, from the next frame on. No reload
+    /// needed; host values are untouched.
     pub fn set_look_at_mode(&self, mode: LookAtMode) {
         self.inner.look_at_mode.set(mode);
     }
 
-    /// Stops time.
-    ///
-    /// This is a **total freeze**: no motion, no physics, no expression fade, and
-    /// no pointer events — the widget stops asking for frames, so nothing would
-    /// even be drawn. To stop a motion but keep interacting, use
+    /// Stops time — a **total freeze**: no motion, no physics, no pointer events,
+    /// and the widget stops asking for frames. To stop only the motion, use
     /// [`Live2dModel::stop_motion`].
     pub fn pause(&self) {
         self.inner.paused.set(true);
@@ -302,29 +272,23 @@ impl<I: Interface> Live2dModel<I> {
         self.inner.physics_enabled.get()
     }
 
-    /// Plays `clip` of `group`, stopping whatever was playing.
+    /// Plays `clip` of `group` from the next frame, stopping whatever was playing.
     ///
-    /// The request is queued and takes effect on the next frame. An out-of-range
-    /// pair is reported as a [`Problem::Renderer`](crate::Problem::Renderer), not
-    /// ignored.
+    /// An out-of-range pair is reported as a
+    /// [`Problem::Renderer`](crate::Problem::Renderer), not ignored.
     pub fn play_motion(&self, group: I::Motion, clip: usize) {
         self.inner
             .push_command(Command::PlayMotion { group, clip });
     }
 
-    /// Plays a random clip of `group`.
-    ///
-    /// Which clip is random is decided by the render layer, because only it knows
-    /// how many the group holds. This is the usual way for a host to pick an idle
-    /// clip when one finishes — the component has no idle policy of its own.
+    /// Plays a random clip of `group` — the usual way to pick an idle clip when one
+    /// finishes. The component has no idle policy of its own.
     pub fn play_random_motion(&self, group: I::Motion) {
         self.inner.push_command(Command::PlayRandomMotion { group });
     }
 
-    /// Applies an expression on top of the motion.
-    ///
-    /// Fading between expressions is the render layer's business; applying the
-    /// same expression twice restarts it.
+    /// Applies an expression on top of the motion. Applying the same one twice
+    /// restarts it.
     pub fn play_expression(&self, expression: I::Expression) {
         self.inner
             .push_command(Command::PlayExpression { expression });
@@ -335,10 +299,8 @@ impl<I: Interface> Live2dModel<I> {
         self.inner.push_command(Command::ClearExpressions);
     }
 
-    /// Stops the current motion, revealing the rest pose.
-    ///
-    /// Unlike [`Live2dModel::pause`] this keeps time running, so physics settles,
-    /// expressions keep fading and pointer events keep arriving.
+    /// Stops the current motion, revealing the rest pose. Time keeps running, so
+    /// physics settles and pointer events keep arriving.
     pub fn stop_motion(&self) {
         self.inner.push_command(Command::StopMotion);
     }
@@ -389,8 +351,8 @@ impl<I: Interface> Inner<I> {
         problems.push(Problem::CommandQueueOverflow { dropped: 1 });
     }
 
-    /// Records a problem once per distinct cause, so a host that repeats a mistake
-    /// every frame is not buried in copies of it.
+    /// Reports once per distinct cause, so a mistake repeated every frame is not
+    /// buried in copies of itself.
     fn report_foreign(&self, vocabulary: &'static str, name: &str) {
         let mut reported = self.reported.borrow_mut();
 
@@ -418,8 +380,8 @@ impl<I: Interface> Inner<I> {
 
 /// The parameter overrides of one model, keyed by the interface's vocabulary.
 ///
-/// Insertion is checked: a key minted from another asset is rejected and reported
-/// once, instead of landing on the same index of this model.
+/// A key minted from another asset is rejected and reported once, instead of
+/// landing on the same index of this model.
 pub struct Parameters<'a, I: Interface> {
     model: &'a Inner<I>,
 }
@@ -427,8 +389,8 @@ pub struct Parameters<'a, I: Interface> {
 impl<I: Interface> Parameters<'_, I> {
     /// Sets an override, returning the value it replaced.
     ///
-    /// `None` means the key was rejected (it belongs to another asset) or that
-    /// there was no previous value.
+    /// `None` means there was no previous value — or that the key belongs to
+    /// another asset and was rejected.
     pub fn insert(&self, key: I::Parameter, value: f32) -> Option<f32> {
         if !self.model.accepts(key.asset(), "parameter", key.name()) {
             return None;
@@ -463,10 +425,8 @@ impl<I: Interface> Parameters<'_, I> {
     }
 }
 
-/// The part opacities of one model, keyed by the interface's vocabulary.
-///
-/// Values are clamped to `0.0..=1.0` by the render layer, and pose fading applies
-/// on top of them.
+/// The part opacities of one model, keyed by the interface's vocabulary. Clamped to
+/// `0.0..=1.0`; pose fading applies on top.
 pub struct Parts<'a, I: Interface> {
     model: &'a Inner<I>,
 }

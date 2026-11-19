@@ -1,7 +1,5 @@
 //! The `Vocabulary` derive behind `iced-live2d`'s optional `macros` feature.
 //!
-//! Declaring a vocabulary by hand is four small items per enum; this writes them:
-//!
 //! ```text
 //! #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Vocabulary)]
 //! #[vocabulary(prefix = "Param")]
@@ -13,8 +11,8 @@
 //! }
 //! ```
 //!
-//! The derive also emits an inherent `const ALL: &'static [Self]`, so hosts can
-//! enumerate their own vocabulary without asking the model.
+//! It also emits `const ALL: &'static [Self]`, so a host can enumerate its own
+//! vocabulary without asking the model.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -24,9 +22,8 @@ use syn::{Attribute, Data, DeriveInput, Error, Fields, LitStr, Result, parse_mac
 
 /// Derives `Vocabulary` for a fieldless enum.
 ///
-/// `#[vocabulary(prefix = "Param")]` prepends a prefix to every variant name;
-/// `#[name("...")]` overrides one variant. Neither given, the variant name is the
-/// model name.
+/// `#[vocabulary(prefix = "Param")]` prefixes every variant name, `#[name("...")]`
+/// overrides one. Without either, the variant name is the model name.
 #[proc_macro_derive(Vocabulary, attributes(vocabulary, name))]
 pub fn derive_vocabulary(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

@@ -1,31 +1,17 @@
 //! Live2D models as an iced widget.
 //!
-//! The widget owns no state a host has to thread through its update loop: build a
-//! [`Live2dAsset`], make one or more [`Live2dModel`]s from it, hand a reference to
-//! [`live2d`], and react to [`Live2dEvent`]s.
-//!
-//! The pieces:
-//!
-//! - [`Live2dAsset`] — one model file. Loaded on the first frame that draws a
-//!   model of it, shared by every model, immutable afterwards.
-//! - [`Live2dModel`] — one instance: its own parameters, playback and physics.
-//! - [`Interface`] — the vocabulary the host drives the model through, or
-//!   [`raw::Raw`] for "whatever this model declares".
-//! - [`AssetOptions`] / [`ModelOptions`] — the texture and mask budgets.
-//! - [`look_at::cursor`] — turns the cursor into a LookAt target.
-//! - [`Live2dEvent`] — load outcome, problems, motion transitions, pointer input.
+//! One [`Live2dAsset`] per file, one [`Live2dModel`] per instance, and a
+//! [`live2d`] widget that borrows the model. The host decides what plays and reacts
+//! to [`Live2dEvent`]s; the component has no policy of its own.
 //!
 //! ```text
 //! let asset = Live2dAsset::new("Hiyori.model3.json", AssetOptions::default());
 //! let model = Live2dModel::<Face>::new(&asset, ModelOptions::default());
-//! // ... in the host's view, and the host decides what plays:
-//! live2d(&model)
-//!     .on_event(Message::Live2d)
-//!     .look_at(look_at::cursor)
+//! live2d(&model).on_event(Message::Live2d).look_at(look_at::cursor)
 //! ```
 //!
-//! Only the wgpu renderer works: the widget delegates to iced's `shader` widget,
-//! which the tiny-skia backend does not have.
+//! [`Interface`] is the vocabulary the host drives the model through, or
+//! [`Raw`] for whatever the model declares. wgpu only.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -46,11 +32,8 @@ pub use model::{Live2dAsset, Live2dModel, Parameters, Parts};
 pub use raw::{Raw, RawExpression, RawHitArea, RawKey, RawMotion, RawParameter, RawPart};
 pub use widget::{Live2d, Live2dState, live2d};
 
-/// Derives [`Vocabulary`] for a fieldless enum.
-///
-/// Behind the `macros` feature, which is off by default: the component itself
-/// never needs the derive, and a host that prefers to write the four items by hand
-/// pays nothing for it. See [`Vocabulary`] for what is generated.
+/// Derives [`Vocabulary`] for a fieldless enum. Behind the `macros` feature, off by
+/// default. See [`Vocabulary`] for what is generated.
 #[cfg(feature = "macros")]
 pub use iced_live2d_macros::Vocabulary;
 

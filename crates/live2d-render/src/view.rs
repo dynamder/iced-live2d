@@ -32,12 +32,10 @@ impl ClipRect {
     }
 }
 
-/// The framing of one model in one widget.
+/// The framing of one model in one widget: bounds, aspect and fill.
 ///
-/// A view owns the only copy of the framing math in this crate: the model-space
-/// bounds, the aspect ratio the widget has, and how much of it the model fills.
-/// The same matrix is uploaded to the GPU and inverted for hit testing, so a click
-/// can never disagree with the pixels under it.
+/// The same matrix goes to the GPU and is inverted for hit testing, so a click
+/// cannot disagree with the pixels under it.
 #[derive(Debug)]
 pub struct View {
     bounds: ModelBounds,
@@ -48,11 +46,10 @@ pub struct View {
 }
 
 impl View {
-    /// Frames `bounds` inside a widget of the given `aspect` (width / height).
+    /// Frames `bounds` in a widget of the given `aspect` (width / height), with the
+    /// model spanning `fill` of it (`1.0` touches the edges).
     ///
-    /// `fill` is the fraction of the widget the model's bounds span: `1.0`
-    /// touches the edges. A value that is not positive and finite falls back to
-    /// `1.0`, and so does a non-positive aspect.
+    /// A non-positive or non-finite value of either falls back to `1.0`.
     pub fn new(
         renderer: &WgpuLive2dRenderer,
         device: &Device,
@@ -74,7 +71,7 @@ impl View {
         }
     }
 
-    /// Updates the aspect ratio. Returns whether the framing changed.
+    /// Updates the aspect ratio; returns whether the framing changed.
     pub fn set_aspect(&mut self, queue: &Queue, aspect: f32) -> bool {
         let aspect = sane_aspect(aspect);
 
@@ -87,8 +84,8 @@ impl View {
         true
     }
 
-    /// Updates how much of the widget the model fills. Returns whether the
-    /// framing changed.
+    /// Updates how much of the widget the model fills; returns whether the framing
+    /// changed.
     pub fn set_fill(&mut self, queue: &Queue, fill: f32) -> bool {
         let fill = sane_fill(fill);
 
@@ -126,10 +123,8 @@ impl View {
         &self.transform
     }
 
-    /// Maps a clip-space point (`-1.0..=1.0`, `+y` up) back to model space.
-    ///
-    /// This is what turns a cursor position into a hit-test input; it is the
-    /// exact inverse of the matrix the vertex shader applies.
+    /// Maps a clip-space point (`-1.0..=1.0`, `+y` up) back to model space — the
+    /// exact inverse of what the vertex shader applies.
     pub fn to_model(&self, point: [f32; 2]) -> [f32; 2] {
         [
             self.matrix.invert_transform_x(point[0]),

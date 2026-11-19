@@ -8,46 +8,33 @@ use live2d_render::{Error, ModelInfo};
 
 use crate::interface::{Interface, MissingNames};
 
-/// Something the component wants the host to know.
-///
-/// Delivered one frame late: the render layer cannot publish a message while it
-/// is preparing a frame, so it hands events to the widget and the next `update`
-/// publishes them.
+/// Something the component wants the host to know, delivered one frame late.
 ///
 /// Events are **per model**, not per widget: two widgets drawing one model both
-/// receive all of them, and the second one to appear still receives the load
-/// result.
+/// receive all of them, and the second still receives the load result.
 pub enum Live2dEvent<I: Interface> {
-    /// The model is loaded, validated against the interface, and drawn from this
-    /// frame on.
+    /// The model is loaded, its interface validated, and drawn from this frame on.
     ///
-    /// The `info` is the model's own description: every name, range and hit area
-    /// it declares, and the asset identity that raw keys are minted with. It does
-    /// not hand out typed keys.
+    /// `info` is the asset's own description, and the identity raw keys are minted
+    /// with.
     ModelLoaded {
         /// What the model exposes.
         info: Arc<ModelInfo>,
     },
-    /// The model could not be loaded, or does not declare what the interface
-    /// names, and will not be retried.
-    ///
-    /// The widget keeps reserving its space and draws nothing, so a host that
-    /// wants the layout to collapse has to stop showing it itself.
+    /// The model could not be loaded, or lacks what the interface names. It is not
+    /// retried; the widget keeps reserving its space, so a host that wants the
+    /// layout to collapse has to stop showing it.
     ModelFailedToLoad {
         /// Which path failed, and why.
         failure: LoadFailure,
     },
-    /// Playback continues, but not the way the model file asked for.
-    ///
-    /// A cause that repeats every frame is reported once.
+    /// Playback continues, but not the way the model file asked for. A cause that
+    /// repeats every frame is reported once.
     ModelReportedProblem {
         /// What went wrong.
         problem: Problem,
     },
     /// A motion started playing.
-    ///
-    /// Includes the idle motions the model plays by itself, so a host that shows
-    /// "now playing" stays in step with it.
     MotionStarted {
         /// The motion group the clip belongs to.
         group: I::Motion,
@@ -59,8 +46,7 @@ pub enum Live2dEvent<I: Interface> {
         /// [`Live2dEvent::MotionFinishedPlaying`].
         looping: bool,
     },
-    /// A motion played to its end and was replaced by whatever the idle policy
-    /// chose next.
+    /// A non-looping motion played to its end.
     MotionFinishedPlaying {
         /// The motion group the clip belonged to.
         group: I::Motion,
@@ -73,10 +59,8 @@ pub enum Live2dEvent<I: Interface> {
 
 /// A pointer interaction, in the terms a Live2D model speaks.
 ///
-/// Every coordinate is in **model space** — the same space the model's own hit
-/// areas are tested in — so it can be compared against
-/// [`ModelInfo::bounds`] and fed back into hit testing without another
-/// conversion. Use [`View`](live2d_render::View) semantics if you need clip space.
+/// Coordinates are in **model space**, the space hit areas are tested in, so they
+/// compare against [`ModelInfo::bounds`] directly.
 pub enum PointerEvent<I: Interface> {
     /// A button went down inside the widget.
     Pressed {
@@ -102,18 +86,14 @@ pub enum PointerEvent<I: Interface> {
         /// The area the cursor left.
         area: I::HitArea,
     },
-    /// The cursor moved while a button was down.
-    ///
-    /// Only this is sent: whether a drag moves the window, turns the head or
-    /// drives physics is the host's decision.
+    /// The cursor moved while a button was down. What that does — move the window,
+    /// turn the head — is the host's decision.
     Dragged {
         /// Movement since the previous frame, in model plane units.
         delta: [f32; 2],
     },
-    /// The wheel turned inside the widget.
-    ///
-    /// Zooming, scrolling a list or nothing at all is the host's decision; pixel
-    /// deltas are converted to lines by the widget.
+    /// The wheel turned inside the widget. The widget converts pixel deltas to
+    /// lines; zooming or scrolling is the host's decision.
     Scrolled {
         /// Vertical lines scrolled; positive is away from the user.
         lines: f32,
@@ -255,9 +235,7 @@ pub enum LoadFailure {
         error: Arc<Error>,
     },
     /// The model loaded, but does not declare everything the interface names.
-    ///
-    /// Nothing was uploaded for it: validation happens before the textures go to
-    /// the GPU, so a mismatched interface costs no VRAM.
+    /// Validation happens before any upload, so this costs no VRAM.
     Interface {
         /// The `.model3.json` that was asked for.
         path: PathBuf,
@@ -287,29 +265,22 @@ pub enum Problem {
         /// What went wrong. Shared so events stay cloneable.
         error: Arc<Error>,
     },
-    /// The host queued more than 64 commands before the render layer took them.
-    ///
-    /// The oldest were dropped, and `dropped` counts them.
+    /// More than 64 commands were queued before the render layer took them. The
+    /// oldest were dropped.
     CommandQueueOverflow {
         /// How many commands were dropped.
         dropped: usize,
     },
-    /// A key minted from one asset was handed to a model of another.
-    ///
-    /// Raw keys carry the asset they came from, so this is caught instead of
-    /// silently landing on the same index. The key was rejected; it is reported
-    /// once per distinct name.
+    /// A key minted from one asset was handed to a model of another. It was
+    /// rejected, and is reported once per distinct name.
     ForeignKey {
         /// Which vocabulary the key belongs to: `"parameter"` or `"part"`.
         vocabulary: &'static str,
         /// The key's name in its own model.
         name: String,
     },
-    /// A key does not exist in the vocabulary that produced it.
-    ///
-    /// Only a hand-written [`Vocabulary`](crate::Vocabulary) whose `index` and
-    /// `from_id` disagree with its `SPEC` can cause this; the event that carried
-    /// it was dropped.
+    /// A key does not exist in the vocabulary that produced it: only a hand-written
+    /// [`Vocabulary`](crate::Vocabulary) can cause this. The event was dropped.
     Vocabulary {
         /// Which vocabulary the entry belongs to, such as `"motion"`.
         vocabulary: &'static str,

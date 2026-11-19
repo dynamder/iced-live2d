@@ -5,11 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bounds::ModelBounds;
 
-/// Identity of one asset.
-///
-/// A key minted from an asset's [`ModelInfo`] carries this, so a key handed to a
-/// different asset is recognisably foreign instead of silently landing on the same
-/// index.
+/// Identity of one asset. Keys carry it, so a key handed to a model of another
+/// asset is recognisably foreign.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AssetId(u64);
 
@@ -53,14 +50,11 @@ pub struct HitArea {
     pub name: Arc<str>,
 }
 
-/// Everything a loaded asset declares.
+/// Everything a loaded asset declares, as plain data: what a host displays and
+/// what the escape-hatch interface enumerates.
 ///
-/// This is the non-generic view of an asset: what a host displays, and what the
-/// escape hatch interface enumerates. It never hands out typed keys — those belong
-/// to an interface.
-///
-/// Both lists are in model order, which is the order a model-scoped vocabulary
-/// indexes into.
+/// Lists are in model order, which is the order a model-scoped vocabulary indexes
+/// into.
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
     /// The asset this describes.

@@ -1,20 +1,9 @@
-//! Where a LookAt target should be written, resolved per model instead of
-//! hardcoded.
+//! Where a LookAt target should be written, resolved per rig instead of hardcoded.
 //!
-//! Live2D rigs disagree about which parameters a host is supposed to drive. A
-//! classic rig exposes `ParamAngleX` and the mesh reads it; a VTuber rig built
-//! for VTube Studio exposes `AngleX` as the look-at input and keeps
-//! `ParamAngleX` as a *physics output*, so writing `ParamAngleX` is silently
-//! undone by the next physics step.
-//!
-//! [`resolve`] collapses both shapes onto the same six slots. Two policies are
-//! available: [`LookAtMode::Adapted`] follows what the rig was authored for,
-//! and [`LookAtMode::ViewerDefault`] reproduces the Cubism Viewer's generic
-//! mouse bindings exactly, which is what a pixel comparison against the Viewer
-//! needs.
-//!
-//! Bindings carry a **model parameter index**, resolved once here, so the frame
-//! loop never looks a name up.
+//! Rigs disagree about this. A classic rig exposes `ParamAngleX` and the mesh reads
+//! it; a VTuber rig exposes `AngleX` as the look-at input and keeps `ParamAngleX`
+//! as a *physics output*, so writing `ParamAngleX` is undone by the next step.
+//! [`resolve`] collapses both onto six slots, carrying model parameter indexes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -85,7 +74,6 @@ pub enum Axis {
 }
 
 impl Axis {
-    /// Picks this axis out of a target.
     /// Picks this axis out of a `-1.0..=1.0` target.
     pub fn of(self, target: [f32; 2]) -> f32 {
         match self {
@@ -147,10 +135,8 @@ pub struct Binding {
     pub source: Source,
 }
 
-/// Which parameters a LookAt target is written to.
-///
-/// Cubism's `CubismLookController` has the same switch under the name *blend
-/// mode*: it decides who receives the target, not where the target comes from.
+/// Which parameters a LookAt target is written to — Cubism's *blend mode* under
+/// `CubismLookController`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LookAtMode {
     /// Follow the rig's own conventions: prefer the look-at input when the
@@ -211,7 +197,7 @@ impl Rig {
     }
 }
 
-/// What the resolver is allowed to look at, so it stays testable without a model.
+/// What the resolver may look at, so it stays testable without a model.
 #[derive(Debug, Clone, Default)]
 pub struct ModelFacts {
     /// Parameter ids in model order, so an index stays meaningful.
@@ -245,8 +231,8 @@ impl ModelFacts {
 
     /// The model index of a conventional parameter name, if the model has one.
     ///
-    /// Matching ignores case and underscores: older rigs use `PARAM_ANGLE_X`
-    /// where newer ones use `ParamAngleX`, and both mean the same slot.
+    /// Ignores case and underscores: `PARAM_ANGLE_X` and `ParamAngleX` are one
+    /// slot.
     pub fn find(&self, conventional: &str) -> Option<usize> {
         self.by_name.get(&normalize(conventional)).copied()
     }
@@ -282,9 +268,8 @@ pub fn resolve(mode: LookAtMode, facts: &ModelFacts) -> Rig {
     let mut rig = Rig::default();
 
     match mode {
-        // The Viewer binds the conventional names and nothing else, so on a
-        // physics rig these writes are overwritten and only the eyes respond.
-        // That is the point: it is the reference behaviour, not a good default.
+        // The Viewer binds the conventional names only: reference behaviour, not a
+        // good default.
         LookAtMode::ViewerDefault => {
             for (slot, parameter) in [
                 (Slot::HeadYaw, "ParamAngleX"),
@@ -332,8 +317,8 @@ pub fn resolve(mode: LookAtMode, facts: &ModelFacts) -> Rig {
 
 /// Picks between a rig's own look-at input and its conventional parameter.
 ///
-/// The interesting case is `ParamAngleX` being a physics output: writing it is
-/// useless, and `AngleX` is the parameter the rig actually wants.
+/// The interesting case: `ParamAngleX` is a physics output, so writing it is
+/// useless and `AngleX` is what the rig wants.
 fn resolve_adapted(rig: &mut Rig, facts: &ModelFacts, slot: Slot, input: &str, conventional: &str) {
     let conventional = facts.find(conventional);
     let input = facts.find(input);

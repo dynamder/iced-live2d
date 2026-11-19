@@ -1,8 +1,6 @@
 //! The GPU mirror of one instance: mesh buffers, clipping resources and the mask
-//! render target.
-//!
-//! Everything here needs a `device`; the CPU side ([`Model`](crate::Model)) does
-//! not. That split is what lets the whole update order be tested without a GPU.
+//! render target. Everything here needs a `device`; [`Model`](crate::Model) does
+//! not.
 
 use mocari::render::wgpu::{
     WgpuClippingPlan, WgpuClippingResources, WgpuLive2dRenderer, WgpuMaskRenderTarget,
@@ -50,9 +48,8 @@ impl ModelGpu {
 
     /// Pushes the current meshes to the GPU.
     ///
-    /// The returned error, when there is one, is *why* the whole buffer set had to
-    /// be rebuilt: a drawable changed shape in a way the buffers cannot absorb.
-    /// It is worth reporting, but the instance keeps drawing.
+    /// An error is *why* the whole buffer set had to be rebuilt — a drawable changed
+    /// shape in a way the buffers cannot absorb. Report it; drawing continues.
     pub fn upload(
         &mut self,
         renderer: &WgpuLive2dRenderer,
@@ -69,9 +66,6 @@ impl ModelGpu {
                     || update.structure_changed(),
                 None,
             ),
-            // A drawable changed shape in a way the buffers cannot absorb, so the
-            // whole set is rebuilt. Correct but expensive; a model doing it every
-            // frame looks exactly like a slow one.
             Err(error) => {
                 self.mesh =
                     WgpuMeshBuffers::from_drawables(device, meshes).ok_or(Error::MeshBuffers)?;
@@ -88,10 +82,9 @@ impl ModelGpu {
 
     /// Records the mask pass and the visible pass into `encoder`.
     ///
-    /// Masks are drawn into the instance's own off-screen buffer with the full
-    /// viewport: the Live2D mask shader works in the same clip space as the
-    /// visible pass, so the buffer must keep its own full extent. The visible
-    /// pass is scissored and viewported to `clip`.
+    /// Masks go to the instance's own off-screen buffer at full viewport — they live
+    /// in the same clip space as the visible pass, so it keeps its own extent. Only
+    /// the visible pass is scissored to `clip`.
     pub fn encode(
         &self,
         renderer: &WgpuLive2dRenderer,
@@ -167,10 +160,8 @@ impl ModelGpu {
         Ok(())
     }
 
-    /// Rebuilds clipping resources unconditionally.
-    ///
-    /// Diagnostic hook: comparing a run that calls this every frame against one
-    /// that does not isolates "stale mask layout" from "wrong mask math".
+    /// Rebuilds clipping resources unconditionally. Diagnostic hook: a run that
+    /// calls this every frame isolates a stale layout from wrong mask math.
     pub fn rebuild_clipping(
         &mut self,
         renderer: &WgpuLive2dRenderer,

@@ -22,52 +22,30 @@ use crate::pipeline::{
     FrameInputs, Live2dPrimitive, PipelineEvent, PointerEventKind, ViewId,
 };
 
-/// How much of the widget the model's bounds fill by default.
-///
-/// The sample models were framed at 1.85 out of the 2.0 clip-space range, so this
-/// is the framing they were verified against; `.fill(1.0)` touches the edges.
+/// `1.0` touches the edges; the sample models were framed for this.
 const DEFAULT_FILL: f32 = 0.925;
 
-/// How far ahead of the current frame to ask for the next one.
-///
-/// Half a step rather than a full one: iced snaps a redraw request to the
-/// monitor's refresh grid and rounds *up*, so a deadline exactly one period away
-/// gets pushed to the frame after it and the model runs at half rate. Half a
-/// period lands inside the next refresh, whatever the refresh rate is.
+/// Half a step: iced rounds a redraw deadline *up* to the refresh grid, so a full
+/// step lands one refresh too late and halves the frame rate.
 const REDRAW_LEAD: Duration = Duration::from_micros(STEP.as_micros() as u64 / 2);
 
-/// Pixels a scroll notch is assumed to carry, when the platform reports pixels.
+/// Pixels a scroll notch carries, when the platform reports pixels.
 const PIXELS_PER_LINE: f32 = 50.0;
 
-/// Starts a model widget.
+/// Starts a model widget: `live2d(&self.hiyori).on_event(Message::Live2d)`.
 ///
-/// ```text
-/// live2d(&self.hiyori)
-///     .on_event(Message::Live2d)
-///     .look_at(look_at::cursor)
-///     .width(Fill)
-///     .height(Fill)
-/// ```
-///
-/// The widget borrows the model, so the model has to outlive the UI tree — keep
-/// it in the host's state. Two widgets may draw one model: both receive its
-/// events, each frames it on its own, and each reports the pointer in its own
-/// space.
+/// The widget borrows the model, so the model must outlive the UI tree. Two
+/// widgets may draw one model; each frames it and reports pointer input in its own
+/// space, but its events reach both.
 pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Message, I> {
     Live2d::new(model)
 }
 
-/// A Live2D model drawn as a widget.
+/// A Live2D model drawn as a widget. wgpu only; the tiny-skia backend cannot draw
+/// iced's `shader` widget. Box it with `column![…]` or `container`.
 ///
-/// Only the wgpu renderer works: this delegates to iced's `shader` widget, which
-/// the tiny-skia backend cannot draw. Put it into the tree with `column![…]` or
-/// [`container`](iced::widget::container::Container), which box it.
-///
-/// The widget drives its own frames: while the model is not paused it asks for a
-/// redraw every animation [`STEP`] and advances the model by the time that
-/// actually passed. A host must therefore **not** also subscribe to
-/// [`window::frames`] — `window::RedrawRequest` holds a single request and the
-/// last writer wins, so the two would fight over the frame rate.
+/// The widget drives its own frames. A host must **not** also subscribe to
+/// [`window::frames`]: `RedrawRequest` holds one request and the last writer wins.
 pub struct Live2d<'a, Message, I: Interface> {
     model: &'a Live2dModel<I>,
     on_event: Option<Rc<dyn Fn(Live2dEvent<I>) -> Message + 'a>>,
@@ -92,47 +70,34 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
         }
     }
 
-    /// Sends a [`Live2dEvent`] to the host as `Message`.
+    /// Sends [`Live2dEvent`]s to the host as `Message`.
     ///
-    /// Without this, events are dropped: the widget still draws the model, but
-    /// load failures, pointer events and finished motions go nowhere, and the
-    /// render layer never allocates a channel for them.
-    ///
-    /// Events arrive one frame after the frame that produced them, and at most one
-    /// per frame per widget; a burst is queued, not lost.
+    /// Without it events are dropped, load failures included. At most one per
+    /// frame, one frame late; a burst is queued, not lost.
     pub fn on_event(mut self, on_event: impl Fn(Live2dEvent<I>) -> Message + 'a) -> Self {
         self.on_event = Some(Rc::new(on_event));
         self
     }
 
-    /// Lets the cursor point the model's head, body and eyes.
+    /// Lets the cursor point the model's head, body and eyes: pass
+    /// [`look_at::cursor`](crate::look_at::cursor) or a source of your own.
     ///
-    /// Off by default — pass [`look_at::cursor`](crate::look_at::cursor) for the
-    /// usual behaviour, or a function of your own. Once a source is set it owns
-    /// the gaze **while it has an answer**: while the cursor is over the widget
-    /// that position wins, and while it is not, the model looks at the point set
-    /// with [`Live2dModel::look_at`], or straight ahead if there is none.
-    ///
-    /// Without a source the model is only driven by its own motion and physics,
-    /// unless [`Live2dModel::look_at`] was called.
+    /// Off by default. The source only wins while it answers; outside the widget
+    /// the gaze falls back to [`Live2dModel::look_at`].
     pub fn look_at(mut self, source: LookAtSource) -> Self {
         self.look_at = Some(source);
         self
     }
 
-    /// How much of the widget the model's bounds fill.
+    /// How much of the widget the model's bounds fill; defaults to `0.925`.
     ///
-    /// `1.0` touches the edges; `0.925` is the default the sample models were
-    /// framed for. Values that are not positive and finite fall back to `1.0`.
+    /// A value that is not positive and finite falls back to `1.0`.
     pub fn fill(mut self, fill: f32) -> Self {
         self.fill = fill;
         self
     }
 
-    /// Prints this widget's per-frame cost every 60 frames.
-    ///
-    /// Off by default, and the only thing in this crate that prints: whether a
-    /// host wants the numbers is the host's decision.
+    /// Prints this widget's per-frame cost every 60 frames. Off by default.
     pub fn profile(mut self, profile: bool) -> Self {
         self.profile = profile;
         self
@@ -150,20 +115,17 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
         self
     }
 
-    /// The iced widget that owns the layout, the tree slot and the render pass.
-    /// Everything this widget does is delegated to it.
+    /// The iced widget that owns layout, the tree slot and the render pass.
     fn delegate(&self) -> shader::Shader<Message, Self> {
         shader::Shader::new(self.clone())
             .width(self.width)
             .height(self.height)
     }
 
-    /// Queues the input a pointer event carries, and keeps the state the cursor
-    /// shape is derived from.
+    /// Queues the input a pointer event carries.
     ///
-    /// A release is recorded wherever it happens: dragging out of the widget and
-    /// letting go must still end the drag, and the cursor must stop claiming to
-    /// hold something.
+    /// A release counts wherever it happens, or dragging out of the widget and
+    /// letting go leaves the drag open forever.
     fn queue_input(
         &self,
         state: &mut Live2dState,
@@ -212,8 +174,8 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
         Some(on_event(event))
     }
 
-    /// Turns a render-layer event into the host's, or into a problem when a
-    /// hand-written vocabulary does not cover what the render layer reported.
+    /// Turns a render-layer event into the host's, or into a problem when the
+    /// vocabulary does not cover what was reported.
     fn convert(event: PipelineEvent) -> Result<Live2dEvent<I>, Problem> {
         Ok(match event {
             PipelineEvent::Loaded { info } => Live2dEvent::ModelLoaded { info },
@@ -284,8 +246,7 @@ impl<Message, I: Interface> Clone for Live2d<'_, Message, I> {
     }
 }
 
-/// The widget's own slot in the UI tree: one event channel and one view per
-/// instance.
+/// The widget's own tree slot: one event channel and one view per instance.
 pub struct Live2dState {
     events: RefCell<Channel>,
     pending: VecDeque<PipelineEvent>,
@@ -336,8 +297,7 @@ impl Live2dState {
         Arc::clone(&self.presence)
     }
 
-    /// Moves every queued render-layer event into the widget's own queue, keeping
-    /// the hover state the cursor shape is derived from.
+    /// Moves every queued render-layer event into the widget's queue, noting hover.
     fn drain(&mut self) {
         loop {
             let event = self.events.borrow_mut().try_recv();

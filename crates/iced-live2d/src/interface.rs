@@ -11,20 +11,16 @@ use live2d_render::{AssetId, ModelInfo};
 pub enum VocabularySpec {
     /// Names the host declared, in the order it declared them.
     ///
-    /// Each one is looked up in the model when it loads, and a missing name fails
-    /// the load: an interface is a promise about the model, not a wish list.
+    /// A name the model lacks fails the load: an interface is a promise about the
+    /// model, not a wish list.
     Static(&'static [&'static str]),
-    /// The model's own entries, in model order.
-    ///
-    /// Nothing is looked up, so nothing can be missing; this is how a model acts
-    /// as its own interface.
+    /// The model's own entries, in model order. Nothing to look up, nothing to
+    /// miss — this is how a model acts as its own interface.
     Model,
 }
 
-/// A vocabulary entry as the render layer identifies it.
-///
-/// The render layer only knows model indices and names, so this is what comes back
-/// out of events; [`Vocabulary::from_id`] turns it into a typed key again.
+/// A vocabulary entry as the render layer identifies it, which is what events
+/// carry. [`Vocabulary::from_id`] turns it back into a typed key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyId {
     /// The asset the entry belongs to.
@@ -36,11 +32,9 @@ pub struct KeyId {
     pub name: Arc<str>,
 }
 
-/// One of the five lists an [`Interface`] names.
-///
-/// Implement it by hand, or derive it with the `macros` feature. The four
-/// required items are what the component needs to turn a key into a model index
-/// and back; everything else about the key is the host's business.
+/// One of the five lists an [`Interface`] names: the four items that turn a key
+/// into a model index and back. Derive it with the `macros` feature, or write it
+/// by hand.
 pub trait Vocabulary: Clone + Eq + Ord + Hash + std::fmt::Debug + Send + Sync + 'static {
     /// How the entries are identified in the model.
     const SPEC: VocabularySpec;
@@ -53,24 +47,20 @@ pub trait Vocabulary: Clone + Eq + Ord + Hash + std::fmt::Debug + Send + Sync + 
 
     /// Rebuilds the key the render layer means.
     ///
-    /// A derived implementation always succeeds; `None` is for hand-written ones
-    /// whose `index` and `from_id` disagree with `SPEC`. The component reports it
-    /// as a [`Problem`](crate::Problem) instead of dropping the event.
+    /// A derived implementation always succeeds; `None` is only possible for a
+    /// hand-written one whose `index` and `from_id` disagree, and is reported as a
+    /// [`Problem`](crate::Problem) rather than dropping the event.
     fn from_id(id: &KeyId) -> Option<Self>;
 
-    /// The asset a model-scoped key belongs to.
-    ///
-    /// `None` for a compile-time vocabulary, whose keys mean the same thing on
-    /// every asset of the interface.
+    /// The asset a model-scoped key belongs to. `None` for a compile-time
+    /// vocabulary, whose keys mean the same on every asset.
     fn asset(&self) -> Option<AssetId> {
         None
     }
 }
 
-/// The five vocabularies a model is driven through.
-///
-/// An implementation is five associated types and nothing else — usually declared
-/// once next to the enums it names:
+/// The five vocabularies a model is driven through, declared once next to the enums
+/// they name:
 ///
 /// ```text
 /// impl Interface for Face {
@@ -82,8 +72,7 @@ pub trait Vocabulary: Clone + Eq + Ord + Hash + std::fmt::Debug + Send + Sync + 
 /// }
 /// ```
 ///
-/// A model that no interface describes fits the same shape through
-/// [`Raw`](crate::raw::Raw), which names the model's own entries.
+/// [`Raw`](crate::raw::Raw) fits the same shape for a model no interface describes.
 pub trait Interface: 'static {
     /// Every parameter a host may drive.
     type Parameter: Vocabulary;
@@ -97,10 +86,8 @@ pub trait Interface: 'static {
     type HitArea: Vocabulary;
 }
 
-/// The five vocabularies of one interface, as plain data.
-///
-/// This is what crosses thread boundaries instead of the interface itself: the
-/// pipeline never sees a host type, only these five specs.
+/// The five vocabularies of one interface, as plain data: what the render layer
+/// sees instead of a host type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterfaceSpec {
     /// The parameter vocabulary.
@@ -129,8 +116,8 @@ impl InterfaceSpec {
 
     /// Resolves every vocabulary against one model, once, at load time.
     ///
-    /// Either every name resolves or the whole interface is rejected: a partial
-    /// mapping would leave keys that silently address the wrong entry.
+    /// All of it or none: a partial mapping would leave keys silently addressing
+    /// the wrong entry.
     pub(crate) fn resolve(&self, info: &ModelInfo) -> Result<Mapping, MissingNames> {
         let parameters = resolve(self.parameter, info.parameters.len(), |name| {
             info.parameter(name)
@@ -168,9 +155,7 @@ impl InterfaceSpec {
     }
 }
 
-/// Which model entries an interface's vocabulary entries point at.
-///
-/// Indexed by the vocabulary index, which is what a key's `index()` is.
+/// Which model entry each vocabulary index points at.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Mapping {
     parameters: Vec<usize>,
@@ -197,9 +182,8 @@ impl Mapping {
         self.expressions.get(index).copied()
     }
 
-    /// The vocabulary index of a model motion group.
-    ///
-    /// Reverse of [`Mapping::motion`], for events that start in the render layer.
+    /// The vocabulary index of a model motion group: the reverse of
+    /// [`Mapping::motion`], for events that start in the render layer.
     pub(crate) fn motion_vocabulary(&self, group: usize) -> Option<usize> {
         self.motions.iter().position(|mapped| *mapped == group)
     }
@@ -211,10 +195,8 @@ impl Mapping {
 
 }
 
-/// The names an interface asked for that a model does not declare.
-///
-/// An interface that names anything the model lacks fails the load, so this is
-/// what a host sees in [`LoadFailure::Interface`](crate::LoadFailure::Interface).
+/// The names an interface asked for that a model does not declare — what a host
+/// sees in [`LoadFailure::Interface`](crate::LoadFailure::Interface).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MissingNames {
     /// Parameter names the model does not declare.
@@ -278,8 +260,7 @@ impl fmt::Display for MissingNames {
     }
 }
 
-/// Resolves one vocabulary, returning the mapping and the names that did not
-/// resolve.
+/// Resolves one vocabulary: the mapping, and the names that did not resolve.
 fn resolve(
     spec: VocabularySpec,
     count: usize,

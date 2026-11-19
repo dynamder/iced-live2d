@@ -1,15 +1,8 @@
-//! The render layer's side of the component: three tables and one primitive.
+//! The render layer's side of the component: one pipeline per primitive type,
+//! holding the per-asset, per-model and per-view state.
 //!
-//! iced creates exactly one pipeline per primitive type, so this is where all the
-//! per-asset, per-model and per-view state lives, keyed by identity:
-//!
-//! - `assets` — parsed and uploaded once, shared by every model of the asset;
-//! - `models` — one instance each, with its own GPU mirror and event listeners;
-//! - `views` — one framing each, so two widgets can show one model at different
-//!   sizes.
-//!
-//! A slot is reclaimed when the host drops what it stands for: every slot holds a
-//! `Weak` to a `Presence` the host object owns.
+//! A slot is reclaimed when the host drops what it stands for: each holds a `Weak`
+//! to a `Presence` the host object owns.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -55,11 +48,8 @@ pub(crate) enum PointerEventKind {
     Scrolled { lines: f32 },
 }
 
-/// Something the pipeline tells the widgets that draw a model.
-///
-/// Non-generic on purpose: the pipeline never sees a host type, only the plain
-/// data an interface resolves to. The widget turns [`KeyId`]s back into typed
-/// keys.
+/// Something the pipeline tells the widgets that draw a model. Non-generic: the
+/// widget turns these [`KeyId`]s back into typed keys.
 #[derive(Debug, Clone)]
 pub(crate) enum PipelineEvent {
     Loaded {
@@ -82,8 +72,7 @@ pub(crate) enum PipelineEvent {
     Pointer(PointerEventKind),
 }
 
-/// Something the host asked the model to do, already reduced to vocabulary
-/// indices.
+/// Something the host asked the model to do, reduced to vocabulary indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveCommand {
     PlayMotion { group: usize, clip: usize },
@@ -93,11 +82,8 @@ pub(crate) enum PrimitiveCommand {
     ClearExpressions,
 }
 
-/// One frame of one model's inputs.
-///
-/// Rebuilt by the widget on every frame and dropped after it is rendered, so it
-/// carries plain data only — no GPU state, no `Rc`, nothing that would make the
-/// render path need a lock.
+/// One frame of one model's inputs. Plain data only, rebuilt every frame, so the
+/// render path needs no lock.
 #[derive(Debug)]
 pub struct Live2dPrimitive {
     pub(crate) asset: AssetId,
@@ -829,8 +815,6 @@ fn pointer(
                 );
             }
             PointerInput::Released => {
-                // The drag ends wherever the button came up, even off-widget: the
-                // point is only needed to report where.
                 ready.down = false;
                 ready.drag = None;
 
@@ -953,11 +937,10 @@ struct Cost {
     delta: Duration,
 }
 
-/// Printed once every [`Profile::REPORT_EVERY`] frames while a widget asks for it.
+/// The per-frame cost line, printed every [`Profile::REPORT_EVERY`] frames.
 ///
-/// `steps / frames` well above 1 means the host presents slower than the model
-/// steps and is paying for catch-up work. Cost is per frame, which is what a frame
-/// budget cares about.
+/// `steps / frames` well above 1 means the model steps faster than the host
+/// presents.
 struct Profile {
     frames: u32,
     steps: u32,

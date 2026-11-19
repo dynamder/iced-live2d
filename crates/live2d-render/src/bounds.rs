@@ -15,8 +15,8 @@ pub struct ModelBounds {
 impl ModelBounds {
     /// A box from two opposite corners, in model space.
     ///
-    /// The corners are taken as given: a host that swaps them gets a box with a
-    /// negative extent, which [`ModelBounds::fit_matrix`] cannot frame.
+    /// The corners are taken as given: swapping them yields a negative extent,
+    /// which [`ModelBounds::fit_matrix`] cannot frame.
     pub fn new(min: [f32; 2], max: [f32; 2]) -> Self {
         Self {
             min_x: min[0],
@@ -26,14 +26,12 @@ impl ModelBounds {
         }
     }
 
-    /// The artist-authored canvas from the `.moc3` header.
+    /// The artist-authored canvas from the `.moc3` header, which is the framing
+    /// Cubism itself uses: stable across parameter changes, and ignoring the spare
+    /// hands and props a drawable bounding box would pull in.
     ///
-    /// This is the framing Cubism itself uses, so it is stable across parameter
-    /// changes and ignores the alternate parts (spare hands, props, extra
-    /// outfits) that a "bounding box of every drawable" would pull in.
-    ///
-    /// Returns `None` for degenerate canvases and for models that flip their Y
-    /// axis, where recomputing from drawables is the safer fallback.
+    /// `None` for a degenerate canvas or a flipped Y axis; recompute from drawables
+    /// then.
     pub fn from_canvas(canvas: &Moc3CanvasInfo) -> Option<Self> {
         let pixels_per_unit = canvas.pixels_per_unit();
         let width = canvas.width() / pixels_per_unit;
@@ -109,11 +107,11 @@ impl ModelBounds {
         ]
     }
 
-    /// Builds the model-space -> clip-space matrix that fits the model inside a
-    /// viewport of the given aspect ratio.
+    /// The model-space → clip-space matrix that fits the model into a viewport of
+    /// the given aspect ratio.
     ///
-    /// `view_fill` is the fraction of the NDC range (2.0) the model may occupy:
-    /// 2.0 fills exactly, 1.85 leaves a small margin.
+    /// `view_fill` is the fraction of the NDC range (2.0) the model may occupy: 2.0
+    /// fills it exactly, 1.85 leaves a small margin.
     pub fn fit_matrix(&self, aspect: f32, view_fill: f32) -> Matrix44 {
         let aspect = if aspect.is_finite() && aspect > 0.0 {
             aspect

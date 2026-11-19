@@ -1,7 +1,7 @@
 //! One instance: its parameters, player, expressions and physics.
 //!
-//! Everything here is CPU state. There is no GPU handle and no `wgpu` call, so the
-//! whole update order can be driven — and asserted on — without a device.
+//! Pure CPU state — no GPU handle, no `wgpu` call — so the whole update order can
+//! be tested without a device.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,15 +16,11 @@ use crate::error::Error;
 use crate::info::ModelInfo;
 use crate::rig::LookAtMode;
 
-/// Animation step a model advances in, regardless of the host's frame rate.
+/// The animation step a model advances in, whatever the host's frame rate: 60 Hz is
+/// what Live2D models are authored against.
 ///
-/// 60 Hz is what Live2D models are authored against: motion curves and physics
-/// are sampled on it, and two hosts with the same elapsed time must agree on the
-/// resulting pose.
-///
-/// A host that wants exactly one step per frame should pass this as the interval
-/// to [`Model::advance`]. Passing a rounded interval instead (16 ms, say) is fine
-/// but slowly drifts below real time, because the model only spends whole steps.
+/// Pass this as the interval to [`Model::advance`]. A rounded one (16 ms) drifts
+/// below real time, because only whole steps are spent.
 pub const STEP: Duration = Duration::from_micros(16_667);
 
 /// Longest interval one `advance` call may count, so a stalled window does not
@@ -60,17 +56,12 @@ pub struct Finished {
     pub clip: usize,
 }
 
-/// One model instance.
+/// One model instance, built with [`Asset::model`](crate::Asset::model).
 ///
-/// Build it with [`Asset::model`](crate::Asset::model). The instance owns its
-/// parameter values, physics state and playback position; the asset it came from
-/// is shared, so several instances of one asset cost one set of textures.
-///
-/// [`Model::advance`] is the only place parameters are written. Their order is
-/// Cubism's own (`reset → motion → expression → host parameters → look-at →
-/// parts → physics → pose`), which is why a host parameter always wins over the
-/// motion that drives the same parameter, and why physics always sees the final
-/// input.
+/// [`Model::advance`] is the only place parameters are written, in Cubism's order:
+/// `reset → motion → expression → host parameters → look-at → parts → physics →
+/// pose`. A host parameter therefore wins over the motion, and physics sees the
+/// final input.
 pub struct Model {
     shared: Shared,
     runtime: ModelRuntime,
@@ -119,13 +110,10 @@ impl Model {
 
     /// Advances the animation by `delta`, returning how many steps ran.
     ///
-    /// A zero-step result means the pose did not change, so the caller has
-    /// nothing to [`Model::deform`] or re-upload. Time is consumed in fixed
-    /// [`STEP`] slices and the remainder is kept for the next call, so the same
-    /// elapsed time yields the same pose no matter how the host sliced it.
-    ///
-    /// Time beyond four steps is dropped rather than banked: a window that
-    /// stalled for a second must not make the model sprint to catch up.
+    /// Zero means the pose did not change, so there is nothing to
+    /// [`Model::deform`] or re-upload. Time is spent in whole [`STEP`]s and the
+    /// remainder kept, so the pose depends on elapsed time alone. More than four
+    /// steps of backlog are dropped, not sprinted through.
     pub fn advance(&mut self, delta: Duration) -> u32 {
         let steps = self.stepper.consume(delta);
 
@@ -142,8 +130,8 @@ impl Model {
 
     /// Rebuilds every drawable from the current parameters, parts and pose.
     ///
-    /// Returns `false` when the model data cannot produce a valid mesh update, in
-    /// which case the previously built geometry stays on screen.
+    /// `false` means the data could not produce a valid mesh update; the previous
+    /// geometry stays on screen.
     pub fn deform(&mut self) -> bool {
         self.dirty = false;
         self.runtime.update_meshes().is_some()
@@ -155,10 +143,7 @@ impl Model {
     }
 
     /// The raw parameter overrides to replay every step, as `(model index, raw
-    /// value)` pairs.
-    ///
-    /// Replacing them with an identical slice is free: the table is only marked
-    /// dirty when it actually changes.
+    /// value)` pairs. Setting an identical slice again is free.
     pub fn set_parameters(&mut self, overrides: &[(usize, f32)]) {
         if self.parameters == overrides {
             return;
@@ -169,10 +154,8 @@ impl Model {
         self.dirty = true;
     }
 
-    /// The part opacities to replay every step, as `(model index, opacity)` pairs.
-    ///
-    /// Opacities are clamped to `0.0..=1.0` by the runtime; pose fading still
-    /// applies on top of them.
+    /// The part opacities to replay every step, as `(model index, opacity)` pairs,
+    /// clamped to `0.0..=1.0`. Pose fading applies on top.
     pub fn set_parts(&mut self, overrides: &[(usize, f32)]) {
         if self.parts == overrides {
             return;
@@ -186,7 +169,7 @@ impl Model {
     /// Points the model at a target in `-1.0..=1.0` on both axes (`+y` up), or
     /// leaves it to its own motion and physics when `None`.
     ///
-    /// Which parameters the target lands on is fixed by [`Model::set_look_at_mode`].
+    /// Where the target lands is fixed by [`Model::set_look_at_mode`].
     pub fn set_look_at(&mut self, target: Option<[f32; 2]>) {
         if self.look_at == target {
             return;
@@ -201,10 +184,8 @@ impl Model {
         self.look_at_mode
     }
 
-    /// Switches where a LookAt target lands.
-    ///
-    /// Both tables were resolved at load time, so this cannot fail and does not
-    /// touch any other input: the next step rewrites the parameters from scratch.
+    /// Switches where a LookAt target lands. Both tables are resolved at load time,
+    /// so this cannot fail and touches no other input.
     pub fn set_look_at_mode(&mut self, mode: LookAtMode) {
         if self.look_at_mode == mode {
             return;
@@ -229,10 +210,8 @@ impl Model {
         self.dirty = true;
     }
 
-    /// Plays `clip` of `group`.
-    ///
-    /// The clip is loaded now, which is the only file read this call can cause.
-    /// An out-of-range pair is queued as an issue instead of being ignored.
+    /// Plays `clip` of `group`, loading the clip now — the only file read this call
+    /// can cause. An out-of-range pair becomes an issue, not a silent no-op.
     pub fn play_motion(&mut self, group: usize, clip: usize) {
         let Some(path) = self
             .shared
@@ -306,10 +285,8 @@ impl Model {
         self.dirty = true;
     }
 
-    /// Stops the current motion so the model shows its rest pose.
-    ///
-    /// Nothing plays afterwards until the host asks again: there is no idle policy
-    /// in this crate to restart it.
+    /// Stops the current motion so the model shows its rest pose. Nothing plays
+    /// afterwards until the host asks: there is no idle policy here.
     pub fn stop_motion(&mut self) {
         if self.player.is_none() {
             return;
@@ -325,10 +302,8 @@ impl Model {
         std::mem::take(&mut self.started)
     }
 
-    /// Motions that ended since the last call, in the order they ended.
-    ///
-    /// Playback stops at a finished motion unless the host asks for another one;
-    /// this is how it learns to.
+    /// Motions that ended since the last call, in order. Playback stops there; this
+    /// is how a host learns to ask for the next one.
     pub fn take_finished(&mut self) -> Vec<Finished> {
         std::mem::take(&mut self.finished)
     }
@@ -351,9 +326,7 @@ impl Model {
             || (self.physics_enabled && self.runtime.physics().is_some())
     }
 
-    /// One fixed-length step: replay motion, expression, overrides, look-at,
-    /// parts, physics and pose, leaving the parameters where the last step of this
-    /// frame renders them.
+    /// One fixed-length step through the update order.
     fn step(&mut self) {
         let seconds = STEP.as_secs_f32();
 
@@ -422,8 +395,7 @@ impl Model {
         self.dirty = true;
     }
 
-    /// xorshift64: deterministic per model, no dependency, good enough to pick a
-    /// different clip each time.
+    /// xorshift64: deterministic per model, good enough to pick a clip.
     fn next_random(&mut self) -> u32 {
         self.random ^= self.random << 13;
         self.random ^= self.random >> 7;
@@ -454,10 +426,6 @@ impl Model {
 }
 
 /// Fixed-timestep accumulator between the host's frame pacing and the model.
-///
-/// Hosts hand the model whatever interval they measured, which on a live window is
-/// neither constant nor never zero. Consuming it in whole [`STEP`]s keeps the pose
-/// a function of elapsed time alone.
 #[derive(Debug, Clone)]
 struct Stepper {
     carry: Duration,

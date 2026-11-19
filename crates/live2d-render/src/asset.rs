@@ -1,11 +1,8 @@
 //! One model file: what it declares, the textures it needs, and the template every
 //! instance is cloned from.
 //!
-//! Loading happens in two phases on purpose. [`Asset::parse`] reads and parses
-//! everything without touching the GPU, which is enough to validate a host's
-//! interface against the model — so a model that does not expose the parameters an
-//! interface names fails before a single texel is uploaded. [`Prepared::upload`]
-//! is the only phase that allocates textures.
+//! Two phases: [`Asset::parse`] touches no GPU, which is enough to validate an
+//! interface, and [`Prepared::upload`] is the only one that allocates textures.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -23,15 +20,12 @@ use crate::info::{AssetId, HitArea, ModelInfo, MotionGroup, ParameterRange};
 use crate::model::Model;
 use crate::rig::{self, LookAtMode, ModelFacts, Rig};
 
-/// The group name a model's own idle motions conventionally live in.
-///
-/// A constant, not a policy: this crate never picks a group to play.
+/// The group a model's own idle motions conventionally live in. A constant, not a
+/// policy: this crate never picks a group to play.
 pub const IDLE_GROUP: &str = "Idle";
 
-/// Group name given to motions discovered by scanning the model directory.
-///
-/// Only used when [`AssetOptions::scan_sidecars`] is set; the clips keep the
-/// alphabetical order of their files.
+/// The group scanned motions land in, when [`AssetOptions::scan_sidecars`] is set.
+/// Clips keep the alphabetical order of their files.
 pub const SCANNED_GROUP: &str = "Scanned";
 
 /// Longest directory scan, in levels below the model file.
@@ -42,16 +36,14 @@ const MAX_SCAN_DEPTH: usize = 2;
 pub struct AssetOptions {
     /// Texture resolution multiplier applied when uploading.
     ///
-    /// 1.0 keeps the authored resolution (a 5-texture rig with one 8192x8192
-    /// atlas costs ~592 MB of VRAM). 0.5 quarters that, which is plenty for a
-    /// few-hundred-pixel desktop pet.
+    /// `1.0` keeps the authored resolution — a rig with one 8192x8192 atlas costs
+    /// ~592 MB of VRAM, and `0.5` quarters that.
     pub texture_scale: f32,
-    /// Whether to look for `.motion3.json` / `.exp3.json` files next to the model
-    /// when `model3.json` declares none of its own.
+    /// Whether to look for `.motion3.json` / `.exp3.json` next to the model when
+    /// `model3.json` declares none of its own.
     ///
-    /// Off by default: a directory full of files is not the same thing as an
-    /// animation set, and only the host knows what the files are. What is found
-    /// lands in [`SCANNED_GROUP`], in the alphabetical order of the files.
+    /// Off by default: a directory of files is not an animation set, and only the
+    /// host knows what its files are. Matches land in [`SCANNED_GROUP`].
     pub scan_sidecars: bool,
 }
 
@@ -67,9 +59,8 @@ impl Default for AssetOptions {
 /// What one instance may spend on GPU memory.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelOptions {
-    /// Edge length of the instance's mask render target. Raise it if a complex
-    /// rig shows clipped geometry — packed mask contexts can run out of atlas
-    /// space.
+    /// Edge length of the instance's mask render target. Raise it if a complex rig
+    /// shows clipped geometry: packed mask contexts can run out of atlas space.
     pub mask_size: u32,
 }
 
@@ -123,8 +114,8 @@ pub struct Prepared {
 
 /// A loaded model: textures, metadata, and the template every instance clones.
 ///
-/// One asset can back any number of [`Model`] instances; they share the textures
-/// and the parsed data, and keep separate parameter, playback and physics state.
+/// [`Model`] instances share the textures and the parsed data, and keep separate
+/// parameter, playback and physics state.
 pub struct Asset {
     shared: Shared,
     template: ModelRuntime,
@@ -133,11 +124,11 @@ pub struct Asset {
 }
 
 impl Asset {
-    /// Reads and parses `path` (a `.model3.json`) without touching the GPU.
+    /// Reads and parses `path`, a `.model3.json`, without touching the GPU.
     ///
-    /// `id` is the identity every key minted from this asset will carry; derive
-    /// it with [`AssetId::unique`]. Only [`AssetOptions::scan_sidecars`] is read
-    /// here; the texture budget is used when the asset is uploaded.
+    /// `id` is the identity every key minted from this asset carries; mint it with
+    /// [`AssetId::unique`]. Only [`AssetOptions::scan_sidecars`] matters here, the
+    /// texture budget only at [`Prepared::upload`].
     pub fn parse(id: AssetId, path: impl AsRef<Path>, options: AssetOptions) -> Result<Prepared> {
         let loaded = load_model_runtime(path.as_ref())?;
         let model_dir = loaded.model_dir().map(Path::to_path_buf);
@@ -151,8 +142,6 @@ impl Asset {
         let mut motion_groups = motion_paths_by_group(runtime, model_dir.as_deref());
         let mut expressions = expression_paths(runtime, model_dir.as_deref());
 
-        // A directory full of files is not an animation set: what a clip means is
-        // the host's judgement, so it has to ask for the scan.
         if options.scan_sidecars
             && let Some(dir) = model_dir.as_deref()
             && (motion_groups.is_empty() || expressions.is_empty())
@@ -212,9 +201,7 @@ impl Asset {
                 .collect(),
         });
 
-        // Cloning the runtime and dropping `loaded`'s handle frees the decoded PNG
-        // bytes once they are on the GPU; five 4096x4096 textures is 335 MB of CPU
-        // memory we never need again.
+        // Dropping `loaded` frees the decoded PNG bytes once they are on the GPU.
         let template = runtime.clone();
 
         Ok(Prepared {
@@ -294,10 +281,8 @@ impl Asset {
         std::mem::take(&mut self.issues)
     }
 
-    /// Creates an independent instance of this asset.
-    ///
-    /// The instance clones the parsed model (its own parameter values, physics
-    /// state and playback position) and shares the textures.
+    /// Creates an independent instance: its own parameters, physics and playback,
+    /// with the textures shared.
     pub fn model(&self) -> Model {
         Model::new(self.template.clone(), self.shared.clone())
     }
@@ -353,11 +338,10 @@ struct ScannedSidecars {
     expressions: Vec<ExpressionRef>,
 }
 
-/// Every parameter a physics setting writes, i.e. the ones a host must not drive.
+/// Every parameter a physics setting writes, which a host must not drive.
 ///
-/// Read from the `physics3.json` the model references. A missing or unparsable
-/// file yields an empty set — the resolver then falls back to the conventional
-/// names — but it is reported rather than silently ignored.
+/// A missing or unparsable `physics3.json` yields an empty set — the resolver then
+/// falls back to the conventional names — but the failure is reported.
 fn physics_output_parameters(
     model: &ModelRuntime,
     model_dir: Option<&Path>,
@@ -395,8 +379,8 @@ fn physics_output_parameters(
 
 /// Walks the model directory looking for `.motion3.json` / `.exp3.json` files.
 ///
-/// Unreadable directories are pushed into `issues` rather than skipped: a scan
-/// that silently finds nothing looks exactly like a model with no animations.
+/// An unreadable directory is an `issue`, not a skip: a scan that silently finds
+/// nothing looks exactly like a model with no animations.
 fn scan_sidecars(dir: &Path, issues: &mut Vec<Error>) -> ScannedSidecars {
     let mut motions = Vec::new();
     let mut expressions = Vec::new();
@@ -477,8 +461,8 @@ fn downscale_factor(scale: f32) -> u32 {
 
 /// Box-filtered integer downscale.
 ///
-/// Averaging happens in premultiplied space and is then un-premultiplied, so
-/// texels that neighbour fully transparent pixels do not pick up dark halos.
+/// Averaging happens in premultiplied space, so texels next to transparency do not
+/// pick up dark halos.
 fn downscale_rgba(width: u32, height: u32, rgba: &[u8], factor: u32) -> (u32, u32, Vec<u8>) {
     let factor = factor.max(1);
 

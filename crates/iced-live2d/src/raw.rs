@@ -1,7 +1,6 @@
 //! The escape hatch: a model that names its own entries.
 //!
-//! Clips are indexed as `(group, clip)` wherever they are played, so a motion key
-//! names a **group**, not a clip.
+//! Motion keys name a **group**, not a clip: playing needs `(group, clip)`.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -32,8 +31,8 @@ pub struct HitAreaKind;
 
 /// A key from a model's own list.
 ///
-/// It carries the asset it was minted from, so handing it to a model of a
-/// different asset is rejected instead of silently landing on the same index.
+/// It carries the asset it was minted from, so a model of another asset rejects it
+/// instead of landing on the same index.
 pub struct RawKey<T> {
     asset: AssetId,
     name: Arc<str>,
@@ -144,15 +143,12 @@ pub type RawExpression = RawKey<ExpressionKind>;
 /// A hit area key from the model's own list.
 pub type RawHitArea = RawKey<HitAreaKind>;
 
-/// The interface that a model declares for itself.
-///
-/// Every vocabulary is the model's own, so the only way to get a key is to ask a
-/// loaded model for one:
+/// The interface a model declares for itself: every vocabulary is the model's own,
+/// so keys come from a loaded model.
 ///
 /// ```text
 /// let info = // the Arc<ModelInfo> a ModelLoaded event carried
-/// let mouth = raw::parameters(&info)[0].clone();
-/// model.parameters().insert(mouth, 1.0);
+/// model.parameters().insert(raw::parameters(&info)[0].clone(), 1.0);
 /// ```
 pub struct Raw;
 
