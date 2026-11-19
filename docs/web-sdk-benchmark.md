@@ -124,11 +124,11 @@ The rig looked "lower resolution in the webview" until `canvas.width =
 ## Reproducing
 
 ```powershell
-# official SDK (not vendored, license): unpack to .tmp-web/sdk
-node -e "require('https').get('https://cubism.live2d.com/sdk-web/bin/CubismSdkForWeb-5-r.4.zip',r=>r.pipe(require('fs').createWriteStream('.tmp-web/sdk.zip')))"
-powershell -NoProfile -Command "Expand-Archive .tmp-web/sdk.zip .tmp-web/sdk"
+# official SDK (not vendored, license): unpack to .refs/cubism-web-sdk
+node -e "require('https').get('https://cubism.live2d.com/sdk-web/bin/CubismSdkForWeb-5-r.4.zip',r=>r.pipe(require('fs').createWriteStream('.refs/cubism-web-sdk.zip')))"
+powershell -NoProfile -Command "Expand-Archive .refs/cubism-web-sdk.zip .refs/cubism-web-sdk"
 
-# probe page: esbuild + the SDK framework sources
+# probe page: esbuild on PATH + the SDK framework sources (-Sdk / -Esbuild override)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/web-probe/build.ps1
 
 # one case per run; -Shot writes a window capture

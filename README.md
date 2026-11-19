@@ -285,6 +285,7 @@ app/                           the demo app, now a thin host of the component
   src/cli.rs                   --model / --track / --list
 patches/                       the four mocari fixes, as patch files
 scripts/vendor-mocari.ps1      rebuilds .refs/mocari from the registry + patches
+scripts/mocari-patch.py        regenerates a patch body from .refs/mocari (dev tool)
 scripts/shot.ps1               DPI-aware window screenshot (dev tool)
 scripts/shot-window.ps1        screenshot any window by title prefix (dev tool)
 docs/                          feasibility write-up, plan, audit, design, defect records

@@ -15,7 +15,7 @@ $here = $PSScriptRoot
 $repo = Split-Path -Parent (Split-Path -Parent $here)
 
 if ($Sdk -eq '') {
-    $Sdk = if ($env:CUBISM_SDK) { $env:CUBISM_SDK } else { Join-Path $repo '.tmp-web\sdk\CubismSdkForWeb-5-r.4' }
+    $Sdk = if ($env:CUBISM_SDK) { $env:CUBISM_SDK } else { Join-Path $repo '.refs\cubism-web-sdk\CubismSdkForWeb-5-r.4' }
 }
 
 $framework = Join-Path $Sdk 'Framework\src'
@@ -25,14 +25,7 @@ if (-not (Test-Path $framework)) {
     exit 1
 }
 
-if ($Esbuild -eq '') {
-    $Esbuild = if (Test-Path (Join-Path $repo '.tmp-web\esb\package\esbuild.exe')) {
-        Join-Path $repo '.tmp-web\esb\package\esbuild.exe'
-    }
-    else {
-        'esbuild'
-    }
-}
+if ($Esbuild -eq '') { $Esbuild = 'esbuild' }
 
 & $Esbuild (Join-Path $here 'main.ts') --bundle --format=esm --target=es2022 `
     "--alias:@framework=$framework" `
