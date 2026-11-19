@@ -32,8 +32,8 @@ struct Press<A> {
 pub(crate) struct Recognizer<A> {
     config: Option<Gestures>,
     presses: Vec<Press<A>>,
-    /// The last click, kept for the double-click window.
-    clicked: Option<(Instant, Option<A>)>,
+    /// A finished click waiting for the double-click window to close.
+    pending: Option<(Instant, Tap<A>)>,
 }
 
 impl<A> Default for Recognizer<A> {
@@ -41,7 +41,7 @@ impl<A> Default for Recognizer<A> {
         Self {
             config: None,
             presses: Vec::new(),
-            clicked: None,
+            pending: None,
         }
     }
 }
@@ -52,7 +52,7 @@ impl<A: Clone + PartialEq> Recognizer<A> {
         if self.config != config {
             self.config = config;
             self.presses.clear();
-            self.clicked = None;
+            self.pending = None;
         }
     }
 
@@ -145,23 +145,28 @@ impl<A: Clone + PartialEq> Recognizer<A> {
                 let tap = Tap {
                     model: press.model,
                     pointer: press.pointer,
-                    area: press.area.clone(),
+                    area: press.area,
                     at: released.at,
                     held,
                 };
 
-                let doubled = self.clicked.as_ref().is_some_and(|(when, area)| {
-                    *area == press.area
-                        && now.saturating_duration_since(*when) < config.double_click
-                });
-
-                if doubled {
-                    self.clicked = None;
-                    out.push(Gesture::DoubleClicked(tap));
-                } else {
-                    self.clicked = Some((now, press.area));
+                let Some(window) = config.double_click else {
                     out.push(Gesture::Clicked(tap));
+
+                    return;
+                };
+
+                if let Some((when, first)) = self.pending.take() {
+                    if first.area == tap.area && now.saturating_duration_since(when) <= window {
+                        out.push(Gesture::DoubleClicked(tap));
+
+                        return;
+                    }
+
+                    out.push(Gesture::Clicked(first));
                 }
+
+                self.pending = Some((now, tap));
             }
             PointerEvent::Cancelled(cancelled) => {
                 self.presses
@@ -174,11 +179,20 @@ impl<A: Clone + PartialEq> Recognizer<A> {
         }
     }
 
-    /// Advances the clock, reporting a long press that has come due.
+    /// Advances the clock, reporting what has come due: a long press, or a click
+    /// whose double-click window closed.
     pub(crate) fn tick(&mut self, now: Instant, out: &mut Vec<Gesture<A>>) {
         let Some(config) = self.config else {
             return;
         };
+
+        if let Some(window) = config.double_click
+            && let Some((when, _)) = &self.pending
+            && now.saturating_duration_since(*when) >= window
+            && let Some((_, click)) = self.pending.take()
+        {
+            out.push(Gesture::Clicked(click));
+        }
 
         for press in &mut self.presses {
             if press.dragging || press.long_fired {
@@ -205,11 +219,19 @@ impl<A: Clone + PartialEq> Recognizer<A> {
     pub(crate) fn deadline(&self) -> Option<Instant> {
         let config = self.config?;
 
-        self.presses
+        let long_press = self
+            .presses
             .iter()
             .filter(|press| !press.dragging && !press.long_fired)
             .map(|press| press.started + config.long_press)
-            .min()
+            .min();
+
+        let click = match (config.double_click, &self.pending) {
+            (Some(window), Some((when, _))) => Some(*when + window),
+            _ => None,
+        };
+
+        long_press.into_iter().chain(click).min()
     }
 }
 
@@ -300,19 +322,33 @@ mod tests {
     }
 
     #[test]
-    fn a_press_and_release_that_stay_put_is_a_click() {
+    fn a_click_is_reported_when_the_double_click_window_closes() {
         let mut recognizer = tapped();
         let start = Instant::now();
+        let mut out = Vec::new();
 
-        let out = run(
-            &mut recognizer,
-            &[
-                (start, press(Some("Body"), 0.0)),
-                (
-                    start + Duration::from_millis(120),
-                    release(Some("Body"), 0.0),
-                ),
-            ],
+        recognizer.push(&press(Some("Body"), 0.0), start, &mut out);
+        recognizer.push(
+            &release(Some("Body"), 0.0),
+            start + Duration::from_millis(120),
+            &mut out,
+        );
+
+        assert!(out.is_empty(), "a click could still become a double click");
+        assert_eq!(
+            recognizer.deadline(),
+            Some(start + Duration::from_millis(120) + Duration::from_millis(300))
+        );
+
+        recognizer.tick(
+            start + Duration::from_millis(120) + Duration::from_millis(299),
+            &mut out,
+        );
+        assert!(out.is_empty());
+
+        recognizer.tick(
+            start + Duration::from_millis(120) + Duration::from_millis(300),
+            &mut out,
         );
 
         assert_eq!(out.len(), 1);
@@ -324,6 +360,32 @@ mod tests {
                 ..
             }) if held == Duration::from_millis(120)
         ));
+        assert!(recognizer.deadline().is_none());
+    }
+
+    #[test]
+    fn without_a_double_click_window_every_click_is_immediate() {
+        let mut recognizer = Recognizer::default();
+        recognizer.configure(Some(Gestures {
+            double_click: None,
+            ..Gestures::default()
+        }));
+
+        let start = Instant::now();
+        let mut events = Vec::new();
+
+        for index in 0..2 {
+            let at = start + Duration::from_millis(100 * index);
+
+            events.push((at, press(Some("Body"), 0.0)));
+            events.push((at + Duration::from_millis(50), release(Some("Body"), 0.0)));
+        }
+
+        let out = run(&mut recognizer, &events);
+
+        assert!(matches!(out[0], Gesture::Clicked(_)));
+        assert!(matches!(out[1], Gesture::Clicked(_)));
+        assert_eq!(out.len(), 2);
     }
 
     #[test]
@@ -341,9 +403,9 @@ mod tests {
 
         let out = run(&mut recognizer, &events);
 
-        assert!(matches!(out[0], Gesture::Clicked(_)));
-        assert!(matches!(out[1], Gesture::DoubleClicked(_)));
-        assert_eq!(out.len(), 2);
+        assert_eq!(out.len(), 1, "the first click is replaced, not repeated");
+        assert!(matches!(out[0], Gesture::DoubleClicked(_)));
+        assert!(recognizer.deadline().is_none());
     }
 
     #[test]
@@ -352,17 +414,36 @@ mod tests {
         let start = Instant::now();
         let mut events = Vec::new();
 
-        for area in ["Body", "Head"] {
-            let at = start + Duration::from_millis(100);
+        for (index, area) in ["Body", "Head"].into_iter().enumerate() {
+            let at = start + Duration::from_millis(100 * index as u64);
 
             events.push((at, press(Some(area), 0.0)));
             events.push((at + Duration::from_millis(50), release(Some(area), 0.0)));
         }
 
-        let out = run(&mut recognizer, &events);
+        let mut out = run(&mut recognizer, &events);
 
-        assert!(matches!(out[0], Gesture::Clicked(_)));
-        assert!(matches!(out[1], Gesture::Clicked(_)));
+        assert_eq!(out.len(), 1, "the first click is flushed, not doubled");
+        assert!(matches!(
+            out[0],
+            Gesture::Clicked(Tap {
+                area: Some("Body"),
+                ..
+            })
+        ));
+
+        recognizer.tick(
+            start + Duration::from_millis(150) + Duration::from_millis(300),
+            &mut out,
+        );
+
+        assert!(matches!(
+            out[1],
+            Gesture::Clicked(Tap {
+                area: Some("Head"),
+                ..
+            })
+        ));
     }
 
     #[test]

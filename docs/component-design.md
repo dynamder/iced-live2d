@@ -345,8 +345,13 @@ pub enum Live2dEvent<I: Interface> {
 命中区在一次拖拽里固定为**按下时**那个：拖出头部不会变成「拖空气」。
 
 原始与分类是**事实**与**判断**的关系，两层都在：双击依然是两次 `Pressed` 两次 `Released`
-（事实），而第二次点击**不再**产生 `Clicked`，只产生 `DoubleClicked`（判断）。宿主若只想要
-判断，就只绑 `on_click` / `on_double_click`，不要绑 `on_event`。
+（事实），而分类层只产出**一个** `DoubleClicked`（判断）。宿主若只想要判断，就只绑
+`on_click` / `on_double_click`，不要绑 `on_event`。
+
+单击与双击**不是前缀码**：第一次抬起时无法判断它是不是双击的开头。`Gestures::double_click`
+因此是一个 `Option<Duration>` 窗口 —— `Some(w)` 时每次单击都要等窗口关闭才上报，窗口内的第二次
+点击直接变成 `DoubleClicked` 且第一次**不再上报**（一次动作一条消息）；代价是单击最多晚 `w`。
+`None` 则单击立即上报、双击检测关闭。等待由分类器的 `deadline()` 精确安排，不靠 60 Hz 轮询。
 
 分类器是**纯状态机**（`gesture.rs`）：`push(event, now)`、`tick(now)`、`deadline()`。它没有自己
 的定时器，只告诉控件「下一个需要的时刻」，控件把它塞进 `request_redraw_at` —— 静止时不空转，

@@ -214,8 +214,8 @@ pub enum Gesture<A> {
     /// Pressed and released on the same hit area, in under
     /// [`Gestures::long_press`](crate::Gestures::long_press), without moving.
     Clicked(Tap<A>),
-    /// Two clicks in quick succession on the same hit area. The second click is not
-    /// reported separately.
+    /// Two clicks in quick succession on the same hit area. The first of the two is
+    /// not reported separately, so this arrives instead of it, never after it.
     DoubleClicked(Tap<A>),
     /// Held without moving for at least [`Gestures::long_press`]. Reported while the
     /// pointer is still down, and the release that follows is not a click.
@@ -252,8 +252,16 @@ pub struct Gestures {
     pub drag_threshold: f32,
     /// How long a press must hold still to become a long press.
     pub long_press: Duration,
-    /// How far apart two clicks may be to count as a double click.
-    pub double_click: Duration,
+    /// How long a click waits for a possible second one.
+    ///
+    /// A click and a double click are not a prefix code: at the first release there
+    /// is no way to know which one it is. With `Some(window)` every click is held for
+    /// up to `window` — a second click inside it is reported as
+    /// [`Gesture::DoubleClicked`] and the first click is never reported at all, so a
+    /// host that handles both never sees one action twice. The cost is that a single
+    /// click is reported late by that much; `None` reports every click immediately,
+    /// and then a double click arrives as two [`Gesture::Clicked`] events.
+    pub double_click: Option<Duration>,
 }
 
 impl Default for Gestures {
@@ -261,7 +269,7 @@ impl Default for Gestures {
         Self {
             drag_threshold: 5.0,
             long_press: Duration::from_millis(500),
-            double_click: Duration::from_millis(300),
+            double_click: Some(Duration::from_millis(300)),
         }
     }
 }

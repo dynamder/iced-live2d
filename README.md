@@ -468,7 +468,8 @@ message:
 |---|---|---|
 | `on_event` | everything the component says | `Live2dEvent<I>` |
 | `on_press` / `on_release` | a button or finger went down / came up | `Pointing<I::HitArea>` |
-| `on_click` / `on_double_click` | a press that came back without moving | `Tap<I::HitArea>` |
+| `on_click` | a press that came back without moving, once the double-click window closes | `Tap<I::HitArea>` |
+| `on_double_click` | a second click inside that window; the first one is not reported | `Tap<I::HitArea>` |
 | `on_long_press` | held still past the threshold, while still down | `Tap<I::HitArea>` |
 | `on_drag_start` / `on_drag` / `on_drag_end` | a press that travelled | `Drag<I::HitArea>` |
 | `on_scroll` | the wheel over the widget | `Scrolling` |
@@ -494,11 +495,15 @@ Decisions worth knowing:
 - **Raw events are facts, gestures are a judgement.** `Pressed`/`Released` are
   reported for every physical press, so a double click shows two of each — that is
   the escape hatch and it never lies. `Clicked`/`DoubleClicked` exist only with
-  `gestures(..)`, and the second click of a double click is reported as
-  `DoubleClicked` *instead of* a second `Clicked`. A host that logs everything
-  therefore sees, for one double click: press, release, `Clicked`, press, release,
-  `DoubleClicked`. The demo app prints the two streams as `pointer:` and `gesture:`
-  so the difference is visible.
+  `gestures(..)`.
+- **A click is never reported before it is known not to be a double click.** Click
+  and double click are not a prefix code: at the first release there is nothing to
+  tell them apart. So `Gestures::double_click = Some(window)` holds every click until
+  the window closes — a second click inside it produces `DoubleClicked` and the first
+  click is never reported, and a single click is reported when the window closes.
+  One action, one message. The cost is that a single click is late by up to that
+  window; `double_click: None` reports clicks immediately and turns double click
+  detection off. The demo app prints the two streams as `pointer:` and `gesture:`.
 - **A specific hook wins over `on_event`** for the events it covers, and a more
   specific hook that is *not* bound falls back to `on_event`. With neither, the event
   is dropped — that is why binding only `on_click` costs exactly one message per
