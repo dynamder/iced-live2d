@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use iced::{Fill, Subscription, Task, Widget, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Hover, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions, Raw,
-    live2d, look_at, raw,
+    AssetOptions, Gestures, Hover, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions,
+    Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -125,6 +125,9 @@ impl App {
     fn view(&self) -> impl Widget<Message> {
         live2d(&self.model)
             .on_event(Message::Live2d)
+            // Classification is opt-in: without this the log shows presses and
+            // releases only, because those are the facts and a click is a judgement.
+            .gestures(Gestures::default())
             .look_at(look_at::cursor)
             .cursor(|hover| match hover {
                 Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
@@ -200,8 +203,8 @@ impl App {
                     self.model.play_motion(group.clone(), (*clip + 1) % clips);
                 }
             }
-            Live2dEvent::Pointer(event) => println!("live2d: {event:?}"),
-            Live2dEvent::Gesture(gesture) => println!("live2d: {gesture:?}"),
+            Live2dEvent::Pointer(event) => println!("live2d: pointer: {event:?}"),
+            Live2dEvent::Gesture(gesture) => println!("live2d: gesture: {gesture:?}"),
         }
     }
 

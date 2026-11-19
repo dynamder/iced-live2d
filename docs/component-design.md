@@ -344,6 +344,10 @@ pub enum Live2dEvent<I: Interface> {
 `DragStarted` / `Dragged` / `DragEnded`，载荷是 `Tap`（带 `held`）或 `Drag`（带 `velocity`）。
 命中区在一次拖拽里固定为**按下时**那个：拖出头部不会变成「拖空气」。
 
+原始与分类是**事实**与**判断**的关系，两层都在：双击依然是两次 `Pressed` 两次 `Released`
+（事实），而第二次点击**不再**产生 `Clicked`，只产生 `DoubleClicked`（判断）。宿主若只想要
+判断，就只绑 `on_click` / `on_double_click`，不要绑 `on_event`。
+
 分类器是**纯状态机**（`gesture.rs`）：`push(event, now)`、`tick(now)`、`deadline()`。它没有自己
 的定时器，只告诉控件「下一个需要的时刻」，控件把它塞进 `request_redraw_at` —— 静止时不空转，
 长按与双击的窗口精确到点，状态机可以脱离 iced 单测。

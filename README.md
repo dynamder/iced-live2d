@@ -491,6 +491,14 @@ live2d(&self.model)
 
 Decisions worth knowing:
 
+- **Raw events are facts, gestures are a judgement.** `Pressed`/`Released` are
+  reported for every physical press, so a double click shows two of each — that is
+  the escape hatch and it never lies. `Clicked`/`DoubleClicked` exist only with
+  `gestures(..)`, and the second click of a double click is reported as
+  `DoubleClicked` *instead of* a second `Clicked`. A host that logs everything
+  therefore sees, for one double click: press, release, `Clicked`, press, release,
+  `DoubleClicked`. The demo app prints the two streams as `pointer:` and `gesture:`
+  so the difference is visible.
 - **A specific hook wins over `on_event`** for the events it covers, and a more
   specific hook that is *not* bound falls back to `on_event`. With neither, the event
   is dropped — that is why binding only `on_click` costs exactly one message per
