@@ -147,22 +147,33 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
             .height(self.height)
     }
 
-    /// Queues the input a pointer event carries.
-    fn queue_input(&self, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) {
+    /// Queues the input a pointer event carries, and keeps the state the cursor
+    /// shape is derived from.
+    ///
+    /// A release is recorded wherever it happens: dragging out of the widget and
+    /// letting go must still end the drag, and the cursor must stop claiming to
+    /// hold something.
+    fn queue_input(
+        &self,
+        state: &mut Live2dState,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) {
         let model = self.model.inner();
 
-        if !cursor.is_over(bounds) {
-            return;
-        }
-
         match event {
-            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                model.push_pointer(PointerInput::Pressed);
-            }
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                state.pressed = false;
                 model.push_pointer(PointerInput::Released);
             }
-            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                if cursor.is_over(bounds) =>
+            {
+                state.pressed = true;
+                model.push_pointer(PointerInput::Pressed);
+            }
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
                 let lines = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => *y,
                     mouse::ScrollDelta::Pixels { y, .. } => *y / PIXELS_PER_LINE,
@@ -314,7 +325,7 @@ impl Live2dState {
     }
 
     /// Moves every queued render-layer event into the widget's own queue, keeping
-    /// the hover and press state the cursor shape is derived from.
+    /// the hover state the cursor shape is derived from.
     fn drain(&mut self) {
         loop {
             let event = self.events.borrow_mut().try_recv();
@@ -326,8 +337,6 @@ impl Live2dState {
             match &event {
                 PipelineEvent::Pointer(PointerEventKind::Entered { .. }) => self.hovered = true,
                 PipelineEvent::Pointer(PointerEventKind::Exited { .. }) => self.hovered = false,
-                PipelineEvent::Pointer(PointerEventKind::Pressed { .. }) => self.pressed = true,
-                PipelineEvent::Pointer(PointerEventKind::Released { .. }) => self.pressed = false,
                 _ => {}
             }
 
@@ -347,7 +356,7 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<Message>> {
-        self.queue_input(event, bounds, cursor);
+        self.queue_input(state, event, bounds, cursor);
 
         let message = self.next_message(state);
         let draining = !state.pending.is_empty();

@@ -382,5 +382,11 @@ PointerEvent<I>::
 LIVE2D_TEXTURE_SCALE=0.5 LIVE2D_NO_MOTION=1 ./target/debug/examples/offscreen.exe <model> out.png 900 30
 ```
 
-`LIVE2D_PROFILE=1` 现在把一帧拆成 `step` / `deform` / `upload` 三项；Hiyori（134 drawable）实测
-`step 0.08 ms, deform 3.4 ms, upload 1.4 ms`，60 fps。
+`LIVE2D_PROFILE=1` 现在把一帧拆成 `step` / `deform` / `upload` 三项。release、接电源：
+
+| 模型 | drawable | step | deform | upload | 帧间隔 |
+|---|---|---|---|---|---|
+| Hiyori | 134 | 0.08 ms | 3.4 ms（debug） | 1.4 ms（debug） | 16.67 ms |
+| 大肥鱼 | 715 | 0.05 ms | 2.5 ms | 0.9 ms | 16.67 ms |
+
+两者都钉在 60 fps；拆分项存在的意义是下一次慢下来时能一眼看出是模拟还是缓冲。

@@ -839,12 +839,14 @@ fn pointer(
                 );
             }
             PointerInput::Released => {
+                // The drag ends wherever the button came up, even off-widget: the
+                // point is only needed to report where.
+                ready.down = false;
+                ready.drag = None;
+
                 let Some(at) = point else {
                     continue;
                 };
-
-                ready.down = false;
-                ready.drag = None;
 
                 broadcast(
                     listeners,
