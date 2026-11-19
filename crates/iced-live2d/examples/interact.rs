@@ -20,8 +20,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, container, row, text};
 use iced::{Element, Fill, Length, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Gestures, Hover, Live2d, Live2dAsset, Live2dEvent, Live2dId, Live2dModel,
-    ModelOptions, Raw, live2d, raw,
+    AssetOptions, GestureMode, Gestures, Hover, Live2d, Live2dAsset, Live2dEvent, Live2dId,
+    Live2dModel, ModelOptions, Raw, live2d, raw,
 };
 
 fn main() -> iced::Result {
@@ -260,7 +260,7 @@ impl App {
 }
 
 /// The widget is rebuilt every frame, so every hook is bound here.
-fn widget(pane: &Pane) -> Live2d<'_, Message, Raw> {
+fn widget(pane: &Pane) -> Live2d<'_, Message, Raw, GestureMode> {
     live2d(&pane.model)
         .fill(pane.fill)
         .on_event(Message::Live2d)

@@ -152,6 +152,18 @@ pub enum PointerEvent<A> {
 }
 
 impl<A> PointerEvent<A> {
+    /// When this happened.
+    pub fn when(&self) -> Instant {
+        match self {
+            PointerEvent::Pressed(pointing) | PointerEvent::Released(pointing) => pointing.when,
+            PointerEvent::Cancelled(cancelled) => cancelled.when,
+            PointerEvent::Moved(moved) => moved.when,
+            PointerEvent::Entered(hovered) | PointerEvent::Exited(hovered) => hovered.when,
+            PointerEvent::Dragged(dragged) => dragged.when,
+            PointerEvent::Scrolled(scrolled) => scrolled.when,
+        }
+    }
+
     /// Which model this happened on.
     pub fn model(&self) -> Live2dId {
         match self {
@@ -239,6 +251,15 @@ pub enum Gesture<A> {
     Dragged(Drag<A>),
     /// The drag ended; the pointer is no longer down.
     DragEnded(Drag<A>),
+    /// The pointer came onto a hit area. Reported here because the classified
+    /// vocabulary is the only input vocabulary a widget has when gestures are on.
+    Entered(Hovering<A>),
+    /// The pointer left a hit area.
+    Exited(Hovering<A>),
+    /// The pointer moved over the widget.
+    Moved(Moving),
+    /// The wheel turned over the widget.
+    Scrolled(Scrolling),
 }
 
 impl<A> Gesture<A> {
@@ -251,6 +272,9 @@ impl<A> Gesture<A> {
             Gesture::DragStarted(drag) | Gesture::Dragged(drag) | Gesture::DragEnded(drag) => {
                 drag.model
             }
+            Gesture::Entered(hovered) | Gesture::Exited(hovered) => hovered.model,
+            Gesture::Moved(moved) => moved.model,
+            Gesture::Scrolled(scrolled) => scrolled.model,
         }
     }
 }

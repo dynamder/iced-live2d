@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -40,9 +41,38 @@ const PIXELS_PER_LINE: f32 = 50.0;
 /// The widget borrows the model, so the model must outlive the UI tree. Two
 /// widgets may draw one model; each frames it and reports pointer input in its own
 /// space, but its events reach both.
-pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Message, I> {
+pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Message, I, Unset> {
     Live2d::new(model)
 }
+
+/// Which input vocabulary a widget reports. Chosen once, at construction: the two
+/// vocabularies are mutually exclusive, so one physical action can only ever be
+/// handled once.
+pub trait Mode: sealed::Mode + 'static {}
+
+/// Nothing chosen yet: the widget reports raw pointer events, and the raw hooks move
+/// it into [`RawMode`].
+pub struct Unset;
+
+/// Raw pointer facts only, each with the instant it happened. A double click is two
+/// of those, and telling them apart is the host's business.
+pub struct RawMode;
+
+/// Classified input only: clicks, double clicks, long presses, drags, hover, scroll.
+/// No raw pointer event is delivered.
+pub struct GestureMode;
+
+mod sealed {
+    pub trait Mode {}
+
+    impl Mode for super::Unset {}
+    impl Mode for super::RawMode {}
+    impl Mode for super::GestureMode {}
+}
+
+impl Mode for Unset {}
+impl Mode for RawMode {}
+impl Mode for GestureMode {}
 
 /// A Live2D model drawn as a widget. wgpu only; the tiny-skia backend cannot draw
 /// iced's `shader` widget. Box it with `column![…]` or `container`.
@@ -53,10 +83,11 @@ pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Messa
 /// Input reaches the host through the `on_*` methods, each of which takes a closure
 /// that maps the event to the host's own message. Nothing is decided here: the
 /// component reports what happened and the host decides what it means.
-pub struct Live2d<'a, Message, I: Interface> {
+pub struct Live2d<'a, Message, I: Interface, M: Mode = Unset> {
     model: &'a Live2dModel<I>,
     handlers: Handlers<'a, Message, I>,
     gestures: Option<Gestures>,
+    mode: PhantomData<M>,
     cursor: Option<Cursor<'a, I::HitArea>>,
     look_at: Option<LookAtSource>,
     capture: bool,
@@ -150,13 +181,14 @@ impl<Message, I: Interface> Handlers<'_, Message, I> {
     }
 }
 
-impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
+impl<'a, Message, I: Interface, M: Mode> Live2d<'a, Message, I, M> {
     /// A widget for `model`, filling its container.
     pub fn new(model: &'a Live2dModel<I>) -> Self {
         Self {
             model,
             handlers: Handlers::default(),
             gestures: None,
+            mode: PhantomData,
             cursor: None,
             look_at: None,
             capture: false,
@@ -164,6 +196,23 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
             profile: false,
             width: Length::Fill,
             height: Length::Fill,
+        }
+    }
+
+    /// The same widget, reporting in another vocabulary.
+    fn cast<M2: Mode>(self) -> Live2d<'a, Message, I, M2> {
+        Live2d {
+            model: self.model,
+            handlers: self.handlers,
+            gestures: self.gestures,
+            mode: PhantomData,
+            cursor: self.cursor,
+            look_at: self.look_at,
+            capture: self.capture,
+            fill: self.fill,
+            profile: self.profile,
+            width: self.width,
+            height: self.height,
         }
     }
 
@@ -175,78 +224,6 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
     /// A more specific `on_*` handler wins over this one for the events it covers.
     pub fn on_event(mut self, on_event: impl Fn(Live2dEvent<I>) -> Message + 'a) -> Self {
         self.handlers.any = Some(Rc::new(on_event));
-        self
-    }
-
-    /// A button or finger went down.
-    pub fn on_press(mut self, on_press: impl Fn(Pointing<I::HitArea>) -> Message + 'a) -> Self {
-        self.handlers.press = Some(Rc::new(on_press));
-        self
-    }
-
-    /// A button or finger came up, inside the widget or not.
-    pub fn on_release(mut self, on_release: impl Fn(Pointing<I::HitArea>) -> Message + 'a) -> Self {
-        self.handlers.release = Some(Rc::new(on_release));
-        self
-    }
-
-    /// A press and release on the same hit area, without moving.
-    ///
-    /// Needs [`Live2d::gestures`].
-    pub fn on_click(mut self, on_click: impl Fn(Tap<I::HitArea>) -> Message + 'a) -> Self {
-        self.handlers.click = Some(Rc::new(on_click));
-        self
-    }
-
-    /// Two clicks in quick succession. The second click is not reported twice.
-    ///
-    /// Needs [`Live2d::gestures`].
-    pub fn on_double_click(
-        mut self,
-        on_double_click: impl Fn(Tap<I::HitArea>) -> Message + 'a,
-    ) -> Self {
-        self.handlers.double_click = Some(Rc::new(on_double_click));
-        self
-    }
-
-    /// A press held still for a while, reported while the pointer is still down.
-    ///
-    /// The release that follows is not reported as a click. Needs
-    /// [`Live2d::gestures`].
-    pub fn on_long_press(
-        mut self,
-        on_long_press: impl Fn(Tap<I::HitArea>) -> Message + 'a,
-    ) -> Self {
-        self.handlers.long_press = Some(Rc::new(on_long_press));
-        self
-    }
-
-    /// A press travelled far enough to become a drag.
-    ///
-    /// Needs [`Live2d::gestures`].
-    pub fn on_drag_start(
-        mut self,
-        on_drag_start: impl Fn(Drag<I::HitArea>) -> Message + 'a,
-    ) -> Self {
-        self.handlers.drag_start = Some(Rc::new(on_drag_start));
-        self
-    }
-
-    /// The pointer moved while held down, once per frame.
-    ///
-    /// With [`Live2d::gestures`] the classified [`Gesture::Dragged`] is reported
-    /// instead, so this never fires twice for one movement; without it, the raw drag
-    /// arrives, which carries no velocity.
-    pub fn on_drag(mut self, on_drag: impl Fn(Drag<I::HitArea>) -> Message + 'a) -> Self {
-        self.handlers.drag = Some(Rc::new(on_drag));
-        self
-    }
-
-    /// The drag ended; the pointer is no longer down.
-    ///
-    /// Needs [`Live2d::gestures`].
-    pub fn on_drag_end(mut self, on_drag_end: impl Fn(Drag<I::HitArea>) -> Message + 'a) -> Self {
-        self.handlers.drag_end = Some(Rc::new(on_drag_end));
         self
     }
 
@@ -274,15 +251,6 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
     /// that does not need it should not pay a message per frame.
     pub fn on_move(mut self, on_move: impl Fn(Moving) -> Message + 'a) -> Self {
         self.handlers.moved = Some(Rc::new(on_move));
-        self
-    }
-
-    /// Classifies presses into clicks, double clicks, long presses and drags.
-    ///
-    /// Off by default: without it the host sees presses, releases and raw drags and
-    /// can classify them itself. See [`Gestures`] for the thresholds.
-    pub fn gestures(mut self, gestures: Gestures) -> Self {
-        self.gestures = Some(gestures);
         self
     }
 
@@ -451,7 +419,11 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
 
     /// Moves every queued render-layer event into the widget's queue, keeping the
     /// hover state the cursor hook reads and classifying pointer input on the way.
-    fn drain(&self, state: &mut Live2dState<I>, now: Instant) {
+    ///
+    /// A widget reports one vocabulary and only one: with gestures enabled the raw
+    /// pointer facts are consumed here and never reach the host, so a press that ends
+    /// as a click cannot also be handled as a press.
+    fn drain(&self, state: &mut Live2dState<I>) {
         loop {
             let Some(raw) = state.events.borrow_mut().try_recv() else {
                 return;
@@ -459,17 +431,27 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
 
             let event = self.convert(raw);
 
-            if let Live2dEvent::Pointer(pointer) = &event {
-                match pointer {
-                    PointerEvent::Entered(hovered) => state.hover = Some(hovered.area.clone()),
-                    PointerEvent::Exited(_) => state.hover = None,
-                    _ => {}
-                }
+            let Live2dEvent::Pointer(pointer) = &event else {
+                state.pending.push_back(event);
 
-                state.recognizer.push(pointer, now, &mut state.produced);
+                continue;
+            };
+
+            match pointer {
+                PointerEvent::Entered(hovered) => state.hover = Some(hovered.area.clone()),
+                PointerEvent::Exited(_) => state.hover = None,
+                _ => {}
             }
 
-            state.pending.push_back(event);
+            if self.gestures.is_some() {
+                state.recognizer.push(pointer, &mut state.produced);
+
+                if let Some(gesture) = classify(pointer) {
+                    state.pending.push_back(Live2dEvent::Gesture(gesture));
+                }
+            } else {
+                state.pending.push_back(event);
+            }
 
             for gesture in state.produced.drain(..) {
                 state.pending.push_back(Live2dEvent::Gesture(gesture));
@@ -478,8 +460,8 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
     }
 
     /// Takes the next queued event, if the host listens for it.
-    fn next_message(&self, state: &mut Live2dState<I>, now: Instant) -> Option<Message> {
-        self.drain(state, now);
+    fn next_message(&self, state: &mut Live2dState<I>) -> Option<Message> {
+        self.drain(state);
 
         self.dispatch(state.pending.pop_front()?)
     }
@@ -664,6 +646,22 @@ impl<'a, Message, I: Interface> Live2d<'a, Message, I> {
     }
 }
 
+/// The pointer facts that are not about a button, expressed in the classified
+/// vocabulary: hover, movement and the wheel have no click to arbitrate with, so
+/// they survive the switch unchanged.
+fn classify<A: Clone>(event: &PointerEvent<A>) -> Option<Gesture<A>> {
+    Some(match event {
+        PointerEvent::Entered(hovered) => Gesture::Entered(hovered.clone()),
+        PointerEvent::Exited(hovered) => Gesture::Exited(hovered.clone()),
+        PointerEvent::Moved(moved) => Gesture::Moved(*moved),
+        PointerEvent::Scrolled(scrolled) => Gesture::Scrolled(*scrolled),
+        PointerEvent::Pressed(_)
+        | PointerEvent::Released(_)
+        | PointerEvent::Dragged(_)
+        | PointerEvent::Cancelled(_) => return None,
+    })
+}
+
 fn key<V: Vocabulary>(id: KeyId, vocabulary: &'static str) -> Result<V, Problem> {
     V::from_id(&id).ok_or(Problem::Vocabulary {
         vocabulary,
@@ -678,12 +676,13 @@ fn optional_key<V: Vocabulary>(
     id.map(|id| key::<V>(id, vocabulary)).transpose()
 }
 
-impl<Message, I: Interface> Clone for Live2d<'_, Message, I> {
+impl<Message, I: Interface, M: Mode> Clone for Live2d<'_, Message, I, M> {
     fn clone(&self) -> Self {
         Self {
             model: self.model,
             handlers: self.handlers.clone(),
             gestures: self.gestures,
+            mode: PhantomData,
             cursor: self.cursor.clone(),
             look_at: self.look_at,
             capture: self.capture,
@@ -751,7 +750,7 @@ impl<I: Interface> Live2dState<I> {
     }
 }
 
-impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> {
+impl<Message, I: Interface, M: Mode> shader::Program<Message> for Live2d<'_, Message, I, M> {
     type State = Live2dState<I>;
     type Primitive = Live2dPrimitive;
 
@@ -775,7 +774,7 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
             state.pending.push_front(Live2dEvent::Gesture(gesture));
         }
 
-        let message = self.next_message(state, now);
+        let message = self.next_message(state);
         let draining = !state.pending.is_empty();
 
         let mut next_frame = None::<Instant>;
@@ -888,11 +887,12 @@ impl<Message, I: Interface> shader::Program<Message> for Live2d<'_, Message, I> 
     }
 }
 
-impl<Message, I: Interface> iced::advanced::widget::Meta for Live2d<'_, Message, I> {}
+impl<Message, I: Interface, M: Mode> iced::advanced::widget::Meta for Live2d<'_, Message, I, M> {}
 
-impl<Message, I, Theme, Renderer> Widget<Message, Theme, Renderer> for Live2d<'_, Message, I>
+impl<Message, I, M, Theme, Renderer> Widget<Message, Theme, Renderer> for Live2d<'_, Message, I, M>
 where
     I: Interface,
+    M: Mode,
     shader::Shader<Message, Self>: Widget<Message, Theme, Renderer>,
 {
     fn tag(&self) -> tree::Tag {
@@ -949,5 +949,107 @@ where
     ) {
         self.delegate()
             .draw(tree, renderer, theme, style, layout, cursor, viewport);
+    }
+}
+
+impl<'a, Message, I: Interface> Live2d<'a, Message, I, Unset> {
+    /// Classifies input instead of reporting it raw.
+    ///
+    /// From here on the raw hooks do not exist and no [`PointerEvent`] is delivered:
+    /// one action, one message. See [`Gestures`] for the thresholds.
+    pub fn gestures(mut self, gestures: Gestures) -> Live2d<'a, Message, I, GestureMode> {
+        self.gestures = Some(gestures);
+
+        self.cast()
+    }
+}
+
+impl<'a, Message, I: Interface> Live2d<'a, Message, I, GestureMode> {
+    /// A press and release on the same hit area, without moving.
+    ///
+    /// Needs [`Live2d::gestures`].
+    pub fn on_click(mut self, on_click: impl Fn(Tap<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.click = Some(Rc::new(on_click));
+        self
+    }
+
+    /// Two clicks in quick succession. The second click is not reported twice.
+    ///
+    /// Needs [`Live2d::gestures`].
+    pub fn on_double_click(
+        mut self,
+        on_double_click: impl Fn(Tap<I::HitArea>) -> Message + 'a,
+    ) -> Self {
+        self.handlers.double_click = Some(Rc::new(on_double_click));
+        self
+    }
+
+    /// A press held still for a while, reported while the pointer is still down.
+    ///
+    /// The release that follows is not reported as a click. Needs
+    /// [`Live2d::gestures`].
+    pub fn on_long_press(
+        mut self,
+        on_long_press: impl Fn(Tap<I::HitArea>) -> Message + 'a,
+    ) -> Self {
+        self.handlers.long_press = Some(Rc::new(on_long_press));
+        self
+    }
+
+    /// A press travelled far enough to become a drag.
+    ///
+    /// Needs [`Live2d::gestures`].
+    pub fn on_drag_start(
+        mut self,
+        on_drag_start: impl Fn(Drag<I::HitArea>) -> Message + 'a,
+    ) -> Self {
+        self.handlers.drag_start = Some(Rc::new(on_drag_start));
+        self
+    }
+
+    /// The drag ended; the pointer is no longer down.
+    ///
+    /// Needs [`Live2d::gestures`].
+    pub fn on_drag_end(mut self, on_drag_end: impl Fn(Drag<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.drag_end = Some(Rc::new(on_drag_end));
+        self
+    }
+
+    /// The pointer moved while held down, once per frame, with its velocity.
+    pub fn on_drag(mut self, on_drag: impl Fn(Drag<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.drag = Some(Rc::new(on_drag));
+        self
+    }
+}
+
+impl<'a, Message, I: Interface> Live2d<'a, Message, I, Unset> {
+    /// Reports raw pointer events instead of classifying them, which is what the raw
+    /// hooks need.
+    pub fn raw(self) -> Live2d<'a, Message, I, RawMode> {
+        self.cast()
+    }
+}
+
+impl<'a, Message, I: Interface> Live2d<'a, Message, I, RawMode> {
+    /// A button or finger went down.
+    pub fn on_press(mut self, on_press: impl Fn(Pointing<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.press = Some(Rc::new(on_press));
+        self
+    }
+
+    /// A button or finger came up, inside the widget or not.
+    pub fn on_release(mut self, on_release: impl Fn(Pointing<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.release = Some(Rc::new(on_release));
+        self
+    }
+
+    /// The pointer moved while held down, once per frame.
+    ///
+    /// With [`Live2d::gestures`] the classified [`Gesture::Dragged`] is reported
+    /// instead, so this never fires twice for one movement; without it, the raw drag
+    /// arrives, which carries no velocity.
+    pub fn on_drag(mut self, on_drag: impl Fn(Drag<I::HitArea>) -> Message + 'a) -> Self {
+        self.handlers.drag = Some(Rc::new(on_drag));
+        self
     }
 }

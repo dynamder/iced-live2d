@@ -21,8 +21,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Gestures, Hover, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo,
-    ModelOptions, Raw, live2d, look_at, raw,
+    AssetOptions, Hover, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo, ModelOptions,
+    Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -137,7 +137,6 @@ impl App {
                 .map(|slot| {
                     live2d(&slot.model)
                         .on_event(Message::Live2d)
-                        .gestures(Gestures::default())
                         .look_at(look_at::cursor)
                         .cursor(|hover| match hover {
                             Hover { pressed: true, .. } => mouse::Interaction::Grabbing,

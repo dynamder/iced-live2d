@@ -18,8 +18,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Hover, Interface, Live2dAsset, Live2dEvent, Live2dModel, ModelInfo, ModelOptions,
-    PointerEvent, Pointing, Vocabulary, live2d, look_at,
+    AssetOptions, Gesture, Gestures, Hover, Interface, Live2dAsset, Live2dEvent, Live2dModel,
+    ModelInfo, ModelOptions, Vocabulary, live2d, look_at,
 };
 
 /// The parameters this interface drives.
@@ -147,6 +147,7 @@ impl App {
     fn view(&self) -> impl iced::Widget<Message> {
         let pane: Element<'_, Message> = live2d(&self.model)
             .on_event(Message::Live2d)
+            .gestures(Gestures::default())
             .look_at(look_at::cursor)
             .cursor(|hover| match hover {
                 Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
@@ -205,18 +206,19 @@ impl App {
 
                 self.status = format!("finished {group:?} #{clip}");
             }
-            Live2dEvent::Pointer(PointerEvent::Pressed(Pointing {
-                area: Some(FaceHitArea::Body),
-                ..
-            })) => {
-                self.model.play_motion(FaceMotion::TapBody, 0);
-                self.status = "pressed Body: TapBody".to_owned();
-            }
-            Live2dEvent::Pointer(pointing) => {
-                self.status = format!("{pointing:?}");
+            Live2dEvent::Gesture(Gesture::Clicked(tap)) => {
+                if tap.area == Some(FaceHitArea::Body) {
+                    self.model.play_motion(FaceMotion::TapBody, 0);
+                    self.status = "clicked Body: TapBody".to_owned();
+                } else {
+                    self.status = format!("clicked {:?}", tap.area);
+                }
             }
             Live2dEvent::Gesture(gesture) => {
                 self.status = format!("{gesture:?}");
+            }
+            Live2dEvent::Pointer(event) => {
+                self.status = format!("{event:?}");
             }
         }
 

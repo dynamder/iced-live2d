@@ -57,15 +57,16 @@ impl<A: Clone + PartialEq> Recognizer<A> {
     }
 
     /// Feeds one pointer event, appending whatever gestures it completes.
-    pub(crate) fn push(
-        &mut self,
-        event: &PointerEvent<A>,
-        now: Instant,
-        out: &mut Vec<Gesture<A>>,
-    ) {
+    ///
+    /// The instant comes from the event, not from the moment the widget drained its
+    /// queue: several events can arrive in one frame, and their order in time is what
+    /// tells a click from a double click.
+    pub(crate) fn push(&mut self, event: &PointerEvent<A>, out: &mut Vec<Gesture<A>>) {
         let Some(config) = self.config else {
             return;
         };
+
+        let now = event.when();
 
         match event {
             PointerEvent::Pressed(pointed) => {
@@ -273,34 +274,34 @@ mod tests {
         }
     }
 
-    fn press(area: Option<&'static str>, x: f32) -> PointerEvent<&'static str> {
+    fn press(area: Option<&'static str>, x: f32, when: Instant) -> PointerEvent<&'static str> {
         PointerEvent::Pressed(Pointing {
             model: model(),
             pointer: Pointer::Mouse(mouse::Button::Left),
             area,
             at: sample(x),
-            when: Instant::now(),
+            when,
         })
     }
 
-    fn release(area: Option<&'static str>, x: f32) -> PointerEvent<&'static str> {
+    fn release(area: Option<&'static str>, x: f32, when: Instant) -> PointerEvent<&'static str> {
         PointerEvent::Released(Pointing {
             model: model(),
             pointer: Pointer::Mouse(mouse::Button::Left),
             area,
             at: sample(x),
-            when: Instant::now(),
+            when,
         })
     }
 
-    fn dragged(x: f32) -> PointerEvent<&'static str> {
+    fn dragged(x: f32, when: Instant) -> PointerEvent<&'static str> {
         PointerEvent::Dragged(Dragging {
             model: model(),
             pointer: Pointer::Mouse(mouse::Button::Left),
             area: Some("Body"),
             origin: sample(0.0),
             at: sample(x),
-            when: Instant::now(),
+            when,
         })
     }
 
@@ -313,15 +314,24 @@ mod tests {
 
     fn run(
         recognizer: &mut Recognizer<&'static str>,
-        events: &[(Instant, PointerEvent<&'static str>)],
+        events: &[PointerEvent<&'static str>],
     ) -> Vec<Gesture<&'static str>> {
         let mut out = Vec::new();
 
-        for (at, event) in events {
-            recognizer.push(event, *at, &mut out);
+        for event in events {
+            recognizer.push(event, &mut out);
         }
 
         out
+    }
+
+    /// A press and a release `held` apart, starting at `at`.
+    fn click(
+        area: Option<&'static str>,
+        at: Instant,
+        held: Duration,
+    ) -> [PointerEvent<&'static str>; 2] {
+        [press(area, 0.0, at), release(area, 0.0, at + held)]
     }
 
     #[test]
@@ -330,29 +340,20 @@ mod tests {
         let start = Instant::now();
         let mut out = Vec::new();
 
-        recognizer.push(&press(Some("Body"), 0.0), start, &mut out);
-        recognizer.push(
-            &release(Some("Body"), 0.0),
-            start + Duration::from_millis(120),
-            &mut out,
-        );
+        for event in click(Some("Body"), start, Duration::from_millis(120)) {
+            recognizer.push(&event, &mut out);
+        }
 
         assert!(out.is_empty(), "a click could still become a double click");
-        assert_eq!(
-            recognizer.deadline(),
-            Some(start + Duration::from_millis(120) + Duration::from_millis(300))
-        );
 
-        recognizer.tick(
-            start + Duration::from_millis(120) + Duration::from_millis(299),
-            &mut out,
-        );
+        let closed = start + Duration::from_millis(120) + Duration::from_millis(300);
+
+        assert_eq!(recognizer.deadline(), Some(closed));
+
+        recognizer.tick(closed - Duration::from_millis(1), &mut out);
         assert!(out.is_empty());
 
-        recognizer.tick(
-            start + Duration::from_millis(120) + Duration::from_millis(300),
-            &mut out,
-        );
+        recognizer.tick(closed, &mut out);
 
         assert_eq!(out.len(), 1);
         assert!(matches!(
@@ -377,12 +378,12 @@ mod tests {
         let start = Instant::now();
         let mut events = Vec::new();
 
-        for index in 0..2 {
-            let at = start + Duration::from_millis(100 * index);
-
-            events.push((at, press(Some("Body"), 0.0)));
-            events.push((at + Duration::from_millis(50), release(Some("Body"), 0.0)));
-        }
+        events.extend(click(Some("Body"), start, Duration::from_millis(50)));
+        events.extend(click(
+            Some("Body"),
+            start + Duration::from_millis(100),
+            Duration::from_millis(50),
+        ));
 
         let out = run(&mut recognizer, &events);
 
@@ -397,12 +398,12 @@ mod tests {
         let start = Instant::now();
         let mut events = Vec::new();
 
-        for index in 0..2 {
-            let at = start + Duration::from_millis(200 * index);
-
-            events.push((at, press(Some("Body"), 0.0)));
-            events.push((at + Duration::from_millis(50), release(Some("Body"), 0.0)));
-        }
+        events.extend(click(Some("Body"), start, Duration::from_millis(50)));
+        events.extend(click(
+            Some("Body"),
+            start + Duration::from_millis(200),
+            Duration::from_millis(50),
+        ));
 
         let out = run(&mut recognizer, &events);
 
@@ -412,17 +413,49 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_second_click_is_two_clicks() {
+        let mut recognizer = tapped();
+        let start = Instant::now();
+        let mut events = Vec::new();
+
+        events.extend(click(Some("Body"), start, Duration::from_millis(50)));
+        events.extend(click(
+            Some("Body"),
+            start + Duration::from_secs(1),
+            Duration::from_millis(50),
+        ));
+
+        let mut out = run(&mut recognizer, &events);
+
+        assert_eq!(out.len(), 1, "the first click is flushed, the second waits");
+        assert!(matches!(out[0], Gesture::Clicked(_)));
+
+        recognizer.tick(
+            start + Duration::from_millis(1050) + Duration::from_millis(300),
+            &mut out,
+        );
+
+        assert!(matches!(
+            out[1],
+            Gesture::Clicked(Tap {
+                area: Some("Body"),
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn a_click_on_another_area_is_not_a_double_click() {
         let mut recognizer = tapped();
         let start = Instant::now();
         let mut events = Vec::new();
 
-        for (index, area) in ["Body", "Head"].into_iter().enumerate() {
-            let at = start + Duration::from_millis(100 * index as u64);
-
-            events.push((at, press(Some(area), 0.0)));
-            events.push((at + Duration::from_millis(50), release(Some(area), 0.0)));
-        }
+        events.extend(click(Some("Body"), start, Duration::from_millis(50)));
+        events.extend(click(
+            Some("Head"),
+            start + Duration::from_millis(100),
+            Duration::from_millis(50),
+        ));
 
         let mut out = run(&mut recognizer, &events);
 
@@ -455,7 +488,7 @@ mod tests {
         let start = Instant::now();
         let mut out = Vec::new();
 
-        recognizer.push(&press(Some("Body"), 0.0), start, &mut out);
+        recognizer.push(&press(Some("Body"), 0.0, start), &mut out);
         recognizer.tick(start + Duration::from_millis(499), &mut out);
         assert!(out.is_empty());
         assert_eq!(
@@ -467,8 +500,7 @@ mod tests {
         assert!(matches!(out[0], Gesture::LongPressed(_)));
 
         recognizer.push(
-            &release(Some("Body"), 0.0),
-            start + Duration::from_millis(600),
+            &release(Some("Body"), 0.0, start + Duration::from_millis(600)),
             &mut out,
         );
 
@@ -482,18 +514,17 @@ mod tests {
         let start = Instant::now();
         let mut out = Vec::new();
 
-        recognizer.push(&press(Some("Body"), 0.0), start, &mut out);
-        recognizer.push(&dragged(4.0), start + Duration::from_millis(16), &mut out);
+        recognizer.push(&press(Some("Body"), 0.0, start), &mut out);
+        recognizer.push(&dragged(4.0, start + Duration::from_millis(16)), &mut out);
         assert!(out.is_empty(), "under the threshold is still a press");
 
-        recognizer.push(&dragged(40.0), start + Duration::from_millis(32), &mut out);
+        recognizer.push(&dragged(40.0, start + Duration::from_millis(32)), &mut out);
         assert!(matches!(out[0], Gesture::DragStarted(_)));
         assert!(matches!(out[1], Gesture::Dragged(_)));
 
         out.clear();
         recognizer.push(
-            &release(Some("Body"), 40.0),
-            start + Duration::from_millis(48),
+            &release(Some("Body"), 40.0, start + Duration::from_millis(48)),
             &mut out,
         );
 
@@ -517,11 +548,8 @@ mod tests {
         let out = run(
             &mut recognizer,
             &[
-                (start, press(Some("Body"), 0.0)),
-                (
-                    start + Duration::from_millis(50),
-                    release(Some("Head"), 2.0),
-                ),
+                press(Some("Body"), 0.0, start),
+                release(Some("Head"), 2.0, start + Duration::from_millis(50)),
             ],
         );
 
@@ -534,19 +562,17 @@ mod tests {
         let start = Instant::now();
         let mut out = Vec::new();
 
-        recognizer.push(&press(Some("Body"), 0.0), start, &mut out);
+        recognizer.push(&press(Some("Body"), 0.0, start), &mut out);
         recognizer.push(
             &PointerEvent::Cancelled(Cancelled {
                 model: model(),
                 pointer: Pointer::Mouse(mouse::Button::Left),
-                when: Instant::now(),
+                when: start + Duration::from_millis(10),
             }),
-            start + Duration::from_millis(10),
             &mut out,
         );
         recognizer.push(
-            &release(Some("Body"), 0.0),
-            start + Duration::from_millis(20),
+            &release(Some("Body"), 0.0, start + Duration::from_millis(20)),
             &mut out,
         );
 
@@ -565,18 +591,16 @@ mod tests {
                 model: model(),
                 area: "Body",
                 at: sample(0.0),
-                when: Instant::now(),
+                when: start,
             }),
-            start,
             &mut out,
         );
         recognizer.push(
             &PointerEvent::Moved(Moving {
                 model: model(),
                 at: sample(10.0),
-                when: Instant::now(),
+                when: start,
             }),
-            start,
             &mut out,
         );
 
@@ -589,11 +613,42 @@ mod tests {
         let start = Instant::now();
         let mut out = Vec::new();
 
-        recognizer.push(&press(Some("Body"), 0.0), start, &mut out);
-        recognizer.push(&release(Some("Body"), 0.0), start, &mut out);
+        for event in click(Some("Body"), start, Duration::from_millis(50)) {
+            recognizer.push(&event, &mut out);
+        }
+
         recognizer.tick(start + Duration::from_secs(5), &mut out);
 
         assert!(out.is_empty());
         assert!(recognizer.deadline().is_none());
+    }
+
+    #[test]
+    fn several_events_drained_at_once_keep_their_own_instants() {
+        let mut recognizer = tapped();
+        let start = Instant::now();
+        let mut events = Vec::new();
+
+        events.extend(click(Some("Body"), start, Duration::from_millis(50)));
+        events.extend(click(
+            Some("Body"),
+            start + Duration::from_millis(800),
+            Duration::from_millis(50),
+        ));
+
+        let mut out = run(&mut recognizer, &events);
+
+        assert_eq!(out.len(), 1, "800 ms apart cannot be a double click");
+        assert!(
+            matches!(out[0], Gesture::Clicked(Tap { held, .. }) if held == Duration::from_millis(50))
+        );
+
+        recognizer.tick(
+            start + Duration::from_millis(850) + Duration::from_millis(300),
+            &mut out,
+        );
+
+        assert_eq!(out.len(), 2);
+        assert!(matches!(out[1], Gesture::Clicked(_)));
     }
 }

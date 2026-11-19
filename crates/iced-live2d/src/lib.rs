@@ -36,7 +36,7 @@ pub use interface::{Interface, InterfaceSpec, KeyId, MissingNames, Vocabulary, V
 pub use look_at::LookAtSource;
 pub use model::{Live2dAsset, Live2dId, Live2dModel, Parameters, Parts};
 pub use raw::{Raw, RawExpression, RawHitArea, RawKey, RawMotion, RawParameter, RawPart};
-pub use widget::{Live2d, Live2dState, live2d};
+pub use widget::{GestureMode, Live2d, Live2dState, Mode, RawMode, Unset, live2d};
 
 /// Derives [`Vocabulary`] for a fieldless enum. Behind the `macros` feature, off by
 /// default. See [`Vocabulary`] for what is generated.
