@@ -12,6 +12,10 @@
 //!
 //! The status line shows the model identity every event carries: with more than one
 //! model, the message says which one was touched.
+//!
+//! This example stays on the **classified** vocabulary: no raw pointer event is
+//! delivered, so one physical action produces one message. See `minimal` for raw
+//! input.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

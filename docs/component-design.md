@@ -329,24 +329,31 @@ pub enum Live2dEvent<I: Interface> {
 无关，模型空间给命中区与物理。位置在 `update` 里就捕获（不是 `prepare` 里再取光标），否则快速
 按下再移开会把命中算错。
 
-原始词汇（`PointerEvent`，永远可用）：
+**两套词汇互斥**，一次构造时选定其一（类型态：`Live2d<.., Unset>` → `.raw()` 或
+`.gestures(..)`）：原始控件上不存在 gesture 钩子，分类控件上不存在原始钩子，所以一次物理动作
+只可能被处理一次。要原始信息就必须自己分类（双击、长按都是宿主的判断）。
+
+原始词汇（`PointerEvent`，`.raw()` 才有）：
 
 | 事件 | 何时 | 载荷 |
 |---|---|---|
-| `Pressed` / `Released` | 任意按键或手指按下、抬起；抬起在控件外也报 | 指针身份、命中区、位置 |
-| `Cancelled` | 失焦、触摸被系统收走 | 指针身份 |
-| `Moved` | 指针在控件内移动（只有订阅了才上报） | 位置 |
-| `Entered` / `Exited` | 进入 / 离开命中区 | 区域、位置 |
-| `Dragged` | 按下后移动，逐帧 | 起点、当前位置 |
-| `Scrolled` | 滚轮 | 行数、锚点 |
+| `Pressed` / `Released` | 任意按键或手指按下、抬起；抬起在控件外也报 | 指针身份、命中区、位置、时刻 |
+| `Cancelled` | 失焦、触摸被系统收走 | 指针身份、时刻 |
+| `Moved` | 指针在控件内移动（只有订阅了才上报） | 位置、时刻 |
+| `Entered` / `Exited` | 进入 / 离开命中区 | 区域、位置、时刻 |
+| `Dragged` | 按下后移动，逐帧 | 起点、当前位置、时刻 |
+| `Scrolled` | 滚轮 | 行数、锚点、时刻 |
+
+时刻在 `update` 里随事件入队，不是渲染侧补的：一帧可能排空多条事件，若都用「排空的这一刻」，
+双击窗口和按住时长就全错了（本次就这么错过一次）。
 
 分类词汇（`Gesture`，`.gestures(..)` 打开）：`Clicked` / `DoubleClicked` / `LongPressed` /
 `DragStarted` / `Dragged` / `DragEnded`，载荷是 `Tap`（带 `held`）或 `Drag`（带 `velocity`）。
 命中区在一次拖拽里固定为**按下时**那个：拖出头部不会变成「拖空气」。
 
-原始与分类是**事实**与**判断**的关系，两层都在：双击依然是两次 `Pressed` 两次 `Released`
-（事实），而分类层只产出**一个** `DoubleClicked`（判断）。宿主若只想要判断，就只绑
-`on_click` / `on_double_click`，不要绑 `on_event`。
+原始与分类是**事实**与**判断**的关系，但一个控件只给其中一套：`raw()` 的控件不会产出任何
+`Gesture`，`gestures(..)` 的控件不会产出任何 `PointerEvent` —— 后者连 `Pressed` 都不给，
+否则「这一次按下被双击吃掉」这个判断对原始流就不可见。
 
 单击与双击**不是前缀码**：第一次抬起时无法判断它是不是双击的开头。`Gestures::double_click`
 因此是一个 `Option<Duration>` 窗口 —— `Some(w)` 时每次单击都要等窗口关闭才上报，窗口内的第二次
@@ -357,17 +364,16 @@ pub enum Live2dEvent<I: Interface> {
 的定时器，只告诉控件「下一个需要的时刻」，控件把它塞进 `request_redraw_at` —— 静止时不空转，
 长按与双击的窗口精确到点，状态机可以脱离 iced 单测。
 
-**钩子**：一个 `on_event` 加十二个按类钩子（`on_press` / `on_release` / `on_click` /
-`on_double_click` / `on_long_press` / `on_drag_start` / `on_drag` / `on_drag_end` / `on_scroll` /
-`on_enter` / `on_exit` / `on_move`），每个收 `Fn(载荷) -> Message`；另有两个非消息钩子：
+**钩子**：一个 `on_event` 加上按类钩子，每个收 `Fn(载荷) -> Message`。原始侧是 `on_press` /
+`on_release` / `on_drag`；分类侧是 `on_click` / `on_double_click` / `on_long_press` /
+`on_drag_start` / `on_drag` / `on_drag_end`；两侧共有 `on_enter` / `on_exit` / `on_scroll` /
+`on_move`（悬停与滚轮没有可仲裁的按钮，两套词汇都保留它们）。另有两个非消息钩子：
 `cursor(Hover -> mouse::Interaction)` 是纯函数（不产生消息，所以不会自激），`capture(bool)` 在
 按下期间捕获事件，免得父级 `scrollable` 一起动。
 
 - 具体钩子优先于 `on_event`；没绑具体钩子的事件回落到 `on_event`；两者都没有就丢弃。
   于是「只绑 `on_click`」的宿主一次点击恰好一条消息。
 - `on_move` 是唯一连续输入，不绑就不报。
-- 手势开启时 `on_drag` 收到分类后的 `Drag`（带速度），未开启时收到原始拖拽；两种情况都每帧一次，
-  不会重复。
 - 按下必有收尾：`Released` 或 `Cancelled`。
 - `Action` 一次只装一条消息，所以是「一帧排空一条」，顺序与发生顺序一致。
 

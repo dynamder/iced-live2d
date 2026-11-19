@@ -2,6 +2,11 @@
 //! without declaring an interface first, and keys are minted from the `ModelInfo`
 //! a `ModelLoaded` event carries.
 //!
+//! This example stays on the **raw** vocabulary: every press, release, drag, hover and
+//! scroll is printed with the instant it happened, so a double click shows up as two
+//! presses and classifying them is left to the host. See `interact` for the other
+//! vocabulary.
+//!
 //! ```text
 //! cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second.model3.json>]
 //! ```

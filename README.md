@@ -447,11 +447,11 @@ a directory listing and then chosen from it at random.
   rendered frame, not immediately.
 
 `cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second>]`
-shows two models through `Raw`,
+shows two models through `Raw` on the raw vocabulary,
 `cargo run -p iced-live2d --features macros --example typed -- <model>` shows a
 declared interface — including what happens when the model does not declare it — and
-`cargo run -p iced-live2d --example interact -- <model> [<second>]` wires every input
-to a message and prints what arrives.
+`cargo run -p iced-live2d --example interact -- <model> [<second>]` wires the
+classified vocabulary to messages and prints what arrives.
 
 ### Interaction
 
@@ -461,20 +461,27 @@ identity cannot live in the message variant. One model has several hit areas and
 same vocabulary of clicks and drags serves every model, so the message is
 `(Live2dId, what happened)` and the variant says only what happened.
 
-Bind what you need; each method takes a closure that maps the event to your own
-message:
+**A widget reports one vocabulary, chosen once.** `live2d(..)` starts undecided and
+`raw()` or `gestures(..)` picks the branch; each branch only has the hooks that fit
+it, so the same physical action can never be handled twice:
 
-| Method | Reported | Payload |
-|---|---|---|
-| `on_event` | everything the component says | `Live2dEvent<I>` |
-| `on_press` / `on_release` | a button or finger went down / came up | `Pointing<I::HitArea>` |
-| `on_click` | a press that came back without moving, once the double-click window closes | `Tap<I::HitArea>` |
-| `on_double_click` | a second click inside that window; the first one is not reported | `Tap<I::HitArea>` |
-| `on_long_press` | held still past the threshold, while still down | `Tap<I::HitArea>` |
-| `on_drag_start` / `on_drag` / `on_drag_end` | a press that travelled | `Drag<I::HitArea>` |
-| `on_scroll` | the wheel over the widget | `Scrolling` |
-| `on_enter` / `on_exit` | the pointer reached / left a hit area | `Hovering<I::HitArea>` |
-| `on_move` | the pointer moved over the widget | `Moving` |
+```rust
+live2d(&model).raw()                  // raw facts, classified by the host
+live2d(&model).gestures(Gestures::default())   // the component classifies
+```
+
+| Method | Available in | Reported | Payload |
+|---|---|---|---|
+| `on_event` | both | everything the component says | `Live2dEvent<I>` |
+| `on_press` / `on_release` | `raw` | a button or finger went down / came up | `Pointing<I::HitArea>` |
+| `on_drag` | `raw` | the pointer moved while held, once per frame | `Dragging<I::HitArea>` |
+| `on_click` | `gestures` | a press that came back without moving, once the double-click window closes | `Tap<I::HitArea>` |
+| `on_double_click` | `gestures` | a second click inside that window; the first one is not reported | `Tap<I::HitArea>` |
+| `on_long_press` | `gestures` | held still past the threshold, while still down | `Tap<I::HitArea>` |
+| `on_drag_start` / `on_drag` / `on_drag_end` | `gestures` | a press that travelled | `Drag<I::HitArea>` |
+| `on_scroll` | both | the wheel over the widget | `Scrolling` |
+| `on_enter` / `on_exit` | both | the pointer reached / left a hit area | `Hovering<I::HitArea>` |
+| `on_move` | both | the pointer moved over the widget | `Moving` |
 
 ```rust
 live2d(&self.model)
@@ -492,10 +499,13 @@ live2d(&self.model)
 
 Decisions worth knowing:
 
+- **One vocabulary, not two.** A raw widget never reports a gesture and a classified
+  widget never reports a raw pointer event, so nothing arrives twice. Raw input is
+  the escape hatch: it carries the facts, including the instant each one happened, and
+  a host that wants a double click classifies it itself.
 - **Raw events are facts, gestures are a judgement.** `Pressed`/`Released` are
-  reported for every physical press, so a double click shows two of each — that is
-  the escape hatch and it never lies. `Clicked`/`DoubleClicked` exist only with
-  `gestures(..)`.
+  reported for every physical press, so on a raw widget a double click shows two of
+  each; `Clicked`/`DoubleClicked` exist only with `gestures(..)`.
 - **A click is never reported before it is known not to be a double click.** Click
   and double click are not a prefix code: at the first release there is nothing to
   tell them apart. So `Gestures::double_click = Some(window)` holds every click until
@@ -503,7 +513,7 @@ Decisions worth knowing:
   click is never reported, and a single click is reported when the window closes.
   One action, one message. The cost is that a single click is late by up to that
   window; `double_click: None` reports clicks immediately and turns double click
-  detection off. The demo app prints the two streams as `pointer:` and `gesture:`.
+  detection off.
 - **A specific hook wins over `on_event`** for the events it covers, and a more
   specific hook that is *not* bound falls back to `on_event`. With neither, the event
   is dropped — that is why binding only `on_click` costs exactly one message per
