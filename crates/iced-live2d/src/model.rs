@@ -8,7 +8,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use live2d_render::{AssetId, AssetOptions, Fade, LookAtMode, ModelOptions};
+use live2d_render::{
+    AssetId, AssetOptions, Fade, LookAtBlend, LookAtMode, ModelOptions, ParameterPolicy,
+    ParameterWrite,
+};
 
 use crate::event::Problem;
 use crate::interaction::Pointer;
@@ -89,10 +92,13 @@ impl fmt::Debug for Live2dAsset {
 
 /// One instance of an asset: its own parameters, playback and physics.
 ///
-/// `!Clone` and `!Send` on purpose — one owner, UI thread only. Every method takes
-/// `&self`, so a host can command it from immutable state.
+/// `!Clone` and `!Send` on purpose — one owner, UI thread only. Commands take
+/// `&self`; the options it was created with are read through [`Live2dModel::options`]
+/// and the two that may change at runtime through
+/// [`Live2dModel::parameter_policy_mut`] and [`Live2dModel::look_at_blend_mut`].
 pub struct Live2dModel<I: Interface> {
     inner: Rc<Inner<I>>,
+    options: ModelOptions,
 }
 
 pub(crate) struct Inner<I: Interface> {
@@ -100,9 +106,8 @@ pub(crate) struct Inner<I: Interface> {
     asset: AssetId,
     asset_options: AssetOptions,
     path: Arc<PathBuf>,
-    options: ModelOptions,
     spec: InterfaceSpec,
-    parameters: RefCell<BTreeMap<I::Parameter, f32>>,
+    parameters: RefCell<BTreeMap<I::Parameter, ParameterWrite>>,
     parts: RefCell<BTreeMap<I::Part, f32>>,
     commands: RefCell<VecDeque<Command<I>>>,
     look_at: Cell<Option<[f32; 2]>>,
@@ -199,11 +204,12 @@ pub(crate) enum PointerInput {
 }
 
 impl<I: Interface> Live2dModel<I> {
-    /// An instance of `asset`, with an explicit GPU budget.
+    /// An instance of `asset`, with the GPU budget and the write policy it is
+    /// created with.
     ///
-    /// The mask render target is per instance, so [`ModelOptions`] is the one budget
-    /// an asset cannot share: raise `mask_size` for a rig whose masks run out of
-    /// atlas space.
+    /// The mask render target is per instance, so `mask_size` is the one budget an
+    /// asset cannot share. There is no overload that invents the rest: pass
+    /// [`ModelOptions::default`] when the defaults are what you want.
     pub fn new(asset: &Live2dAsset, options: ModelOptions) -> Self {
         Self {
             inner: Rc::new(Inner {
@@ -211,7 +217,6 @@ impl<I: Interface> Live2dModel<I> {
                 asset: asset.id(),
                 asset_options: asset.options(),
                 path: asset.path_arc(),
-                options,
                 spec: InterfaceSpec::of::<I>(),
                 parameters: RefCell::new(BTreeMap::new()),
                 parts: RefCell::new(BTreeMap::new()),
@@ -228,6 +233,7 @@ impl<I: Interface> Live2dModel<I> {
                 reported: RefCell::new(BTreeSet::new()),
                 presence: Arc::new(Presence),
             }),
+            options,
         }
     }
 
@@ -246,16 +252,39 @@ impl<I: Interface> Live2dModel<I> {
         &self.inner.path
     }
 
-    /// The budget this instance was built with.
+    /// The options this instance was built with, including the current write
+    /// policy.
     pub fn options(&self) -> ModelOptions {
-        self.inner.options
+        self.options
     }
 
-    /// The parameter overrides of this instance.
+    /// How writes that do not name their own blend or stage are applied.
+    pub fn parameter_policy(&self) -> ParameterPolicy {
+        self.options.parameter_policy
+    }
+
+    /// Changes how unnamed writes are applied, from the next frame on.
+    pub fn parameter_policy_mut(&mut self) -> &mut ParameterPolicy {
+        &mut self.options.parameter_policy
+    }
+
+    /// How the built-in look-at combines with what the model plays.
+    pub fn look_at_blend(&self) -> LookAtBlend {
+        self.options.look_at_blend
+    }
+
+    /// Changes how the built-in look-at combines with the pose.
+    pub fn look_at_blend_mut(&mut self) -> &mut LookAtBlend {
+        &mut self.options.look_at_blend
+    }
+
+    /// The parameter writes of this instance.
     ///
     /// Values are **raw**, in the range the model declares — see
-    /// [`ParameterRange`](crate::ParameterRange). They are replayed every step after
-    /// the motion, so a host value wins over what the motion drives.
+    /// [`ParameterRange`](crate::ParameterRange). Every step replays them after
+    /// the motion and the expressions, and after look-at: a host write wins over
+    /// all three. [`ParameterPolicy`] decides whether physics sees it and how it
+    /// combines with what played.
     pub fn parameters(&self) -> Parameters<'_, I> {
         Parameters { model: &self.inner }
     }
@@ -380,7 +409,7 @@ impl<I: Interface> fmt::Debug for Live2dModel<I> {
             .field("id", &self.inner.id)
             .field("asset", &self.inner.asset)
             .field("path", &self.inner.path)
-            .field("options", &self.inner.options)
+            .field("options", &self.options)
             .finish_non_exhaustive()
     }
 }
@@ -445,7 +474,7 @@ impl<I: Interface> Inner<I> {
     }
 }
 
-/// The parameter overrides of one model, keyed by the interface's vocabulary.
+/// The parameter writes of one model, keyed by the interface's vocabulary.
 ///
 /// A key minted from another asset is rejected and reported once, instead of
 /// landing on the same index of this model.
@@ -454,39 +483,63 @@ pub struct Parameters<'a, I: Interface> {
 }
 
 impl<I: Interface> Parameters<'_, I> {
-    /// Sets an override, returning the value it replaced.
+    /// Overwrites what the motion, expressions and look-at produced, returning the
+    /// write it replaced.
     ///
-    /// `None` means there was no previous value — or that the key belongs to
-    /// another asset and was rejected.
-    pub fn insert(&self, key: I::Parameter, value: f32) -> Option<f32> {
+    /// The blend and stage follow the model's [`ParameterPolicy`]; use
+    /// [`Parameters::apply`] to name either. `None` means there was no previous
+    /// write — or that the key belongs to another asset and was rejected.
+    pub fn insert(&self, key: I::Parameter, value: f32) -> Option<ParameterWrite> {
+        self.write(key, ParameterWrite::new(value))
+    }
+
+    /// Adds `delta` to what the model produced, returning the write it replaced.
+    ///
+    /// The stage follows the policy, so a physics input is seen by the simulation.
+    pub fn add(&self, key: I::Parameter, delta: f32) -> Option<ParameterWrite> {
+        self.write(key, ParameterWrite::add(delta))
+    }
+
+    /// Multiplies what the model produced by `factor`, returning the write it
+    /// replaced.
+    pub fn multiply(&self, key: I::Parameter, factor: f32) -> Option<ParameterWrite> {
+        self.write(key, ParameterWrite::multiply(factor))
+    }
+
+    /// Writes with an explicit blend and/or stage, returning the write it replaced.
+    pub fn apply(&self, key: I::Parameter, write: ParameterWrite) -> Option<ParameterWrite> {
+        self.write(key, write)
+    }
+
+    fn write(&self, key: I::Parameter, write: ParameterWrite) -> Option<ParameterWrite> {
         if !self.model.accepts(key.asset(), "parameter", key.name()) {
             return None;
         }
 
-        self.model.parameters.borrow_mut().insert(key, value)
+        self.model.parameters.borrow_mut().insert(key, write)
     }
 
-    /// Removes an override.
-    pub fn remove(&self, key: &I::Parameter) -> Option<f32> {
+    /// Removes the write for one key, leaving the model to play alone.
+    pub fn remove(&self, key: &I::Parameter) -> Option<ParameterWrite> {
         self.model.parameters.borrow_mut().remove(key)
     }
 
-    /// The override set for one key, if any.
-    pub fn get(&self, key: &I::Parameter) -> Option<f32> {
+    /// The write set for one key, if any — not the value the model shows.
+    pub fn get(&self, key: &I::Parameter) -> Option<ParameterWrite> {
         self.model.parameters.borrow().get(key).copied()
     }
 
-    /// Drops every override.
+    /// Drops every write.
     pub fn clear(&self) {
         self.model.parameters.borrow_mut().clear();
     }
 
-    /// How many overrides are set.
+    /// How many writes are set.
     pub fn len(&self) -> usize {
         self.model.parameters.borrow().len()
     }
 
-    /// Whether no overrides are set.
+    /// Whether no writes are set.
     pub fn is_empty(&self) -> bool {
         self.model.parameters.borrow().is_empty()
     }
@@ -551,10 +604,6 @@ impl<I: Interface> Inner<I> {
         Arc::clone(&self.path)
     }
 
-    pub(crate) fn options(&self) -> ModelOptions {
-        self.options
-    }
-
     pub(crate) fn spec(&self) -> InterfaceSpec {
         self.spec
     }
@@ -591,11 +640,11 @@ impl<I: Interface> Inner<I> {
         self.physics_enabled.get()
     }
 
-    pub(crate) fn parameter_indices(&self) -> Vec<(usize, f32)> {
+    pub(crate) fn parameter_writes(&self) -> Vec<(usize, ParameterWrite)> {
         self.parameters
             .borrow()
             .iter()
-            .map(|(key, value)| (key.index(), *value))
+            .map(|(key, write)| (key.index(), *write))
             .collect()
     }
 
@@ -634,6 +683,7 @@ impl<I: Interface> Live2dModel<I> {
 mod tests {
     use super::*;
     use crate::raw::{Raw, RawMotion, RawParameter};
+    use live2d_render::{ParameterBlend, ParameterStage};
 
     fn asset() -> Live2dAsset {
         Live2dAsset::new("model.model3.json", AssetOptions::default())
@@ -742,11 +792,66 @@ mod tests {
         .expect("a raw key");
 
         assert_eq!(model.parameters().insert(own.clone(), 0.5), None);
-        assert_eq!(model.parameters().get(&own), Some(0.5));
-        assert_eq!(model.parameters().insert(own, 0.75), Some(0.5));
+        assert_eq!(model.parameters().get(&own), Some(ParameterWrite::new(0.5)));
+        assert_eq!(
+            model.parameters().insert(own, 0.75),
+            Some(ParameterWrite::new(0.5))
+        );
 
         let problems = model.inner.take_problems();
         assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn a_key_holds_one_write_and_later_writes_replace_it() {
+        let asset = Live2dAsset::new("model.model3.json", AssetOptions::default());
+        let model = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
+        let own = RawParameter::from_id(&crate::interface::KeyId {
+            asset: model.asset(),
+            index: 0,
+            name: Arc::from("ParamAngleX"),
+        })
+        .expect("a raw key");
+
+        assert_eq!(model.parameters().insert(own.clone(), 0.5), None);
+        assert_eq!(
+            model.parameters().add(own.clone(), 0.25),
+            Some(ParameterWrite::new(0.5))
+        );
+        assert_eq!(
+            model.parameters().get(&own),
+            Some(ParameterWrite::add(0.25))
+        );
+        assert_eq!(
+            model.parameters().multiply(own.clone(), 2.0),
+            Some(ParameterWrite::add(0.25))
+        );
+        assert_eq!(
+            model.parameters().apply(
+                own.clone(),
+                ParameterWrite::new(7.0).at(ParameterStage::AfterPhysics)
+            ),
+            Some(ParameterWrite::multiply(2.0))
+        );
+        assert_eq!(
+            model.parameters().remove(&own),
+            Some(ParameterWrite::new(7.0).at(ParameterStage::AfterPhysics))
+        );
+        assert!(model.parameters().is_empty());
+    }
+
+    #[test]
+    fn the_policy_changes_without_rebuilding() {
+        let mut model = Live2dModel::<Raw>::new(&asset(), ModelOptions::default());
+
+        assert_eq!(model.parameter_policy(), ParameterPolicy::default());
+        assert_eq!(model.look_at_blend(), LookAtBlend::Overwrite);
+
+        model.parameter_policy_mut().blend = ParameterBlend::Add;
+        *model.look_at_blend_mut() = LookAtBlend::Add;
+
+        assert_eq!(model.parameter_policy().blend, ParameterBlend::Add);
+        assert_eq!(model.look_at_blend(), LookAtBlend::Add);
     }
 
     #[test]

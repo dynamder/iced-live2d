@@ -17,7 +17,7 @@ use iced::widget::shader;
 use iced::{Point, Rectangle};
 use live2d_render::{
     Asset, AssetId, AssetOptions, ClipRect, Error, Fade, LookAtMode, Model, ModelGpu, ModelInfo,
-    ModelOptions, MotionEnd, Prepared, View, WgpuLive2dRenderer,
+    ModelOptions, MotionEnd, ParameterWrite, Prepared, View, WgpuLive2dRenderer,
 };
 
 use crate::event::{LoadFailure, Problem};
@@ -142,7 +142,7 @@ pub struct Live2dPrimitive {
 
 #[derive(Debug)]
 pub(crate) struct FrameInputs {
-    pub(crate) parameters: Vec<(usize, f32)>,
+    pub(crate) parameters: Vec<(usize, ParameterWrite)>,
     pub(crate) parts: Vec<(usize, f32)>,
     pub(crate) commands: Vec<PrimitiveCommand>,
     pub(crate) problems: Vec<Problem>,
@@ -508,7 +508,7 @@ struct Ready {
     /// Last problem reported from the update path, so a repeating failure is not
     /// reported sixty times a second.
     last_problem: Option<String>,
-    parameters: Vec<(usize, f32)>,
+    parameters: Vec<(usize, ParameterWrite)>,
     parts: Vec<(usize, f32)>,
 }
 
@@ -751,15 +751,21 @@ fn reconcile(
     ready.model.set_physics_enabled(inputs.physics_enabled);
     ready.model.set_fade(inputs.fade);
     ready.model.set_fade_limit(inputs.fade_limit);
+    ready
+        .model
+        .set_parameter_policy(primitive.model_options.parameter_policy);
+    ready
+        .model
+        .set_look_at_blend(primitive.model_options.look_at_blend);
 
     ready.parameters.clear();
     ready
         .parameters
-        .extend(inputs.parameters.iter().filter_map(|&(vocabulary, value)| {
+        .extend(inputs.parameters.iter().filter_map(|&(vocabulary, write)| {
             ready
                 .mapping
                 .parameter(vocabulary)
-                .map(|index| (index, value))
+                .map(|index| (index, write))
         }));
     ready.model.set_parameters(&ready.parameters);
 

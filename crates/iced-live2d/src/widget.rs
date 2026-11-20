@@ -995,12 +995,12 @@ impl<Message, I: Interface, M: Plumbing> shader::Program<Message> for Live2d<'_,
             asset_options: model.asset_options(),
             path: model.path_arc(),
             model: model.id(),
-            model_options: model.options(),
+            model_options: self.model.options(),
             view: state.view,
             spec: model.spec(),
             fill: self.fill,
             inputs: FrameInputs {
-                parameters: model.parameter_indices(),
+                parameters: model.parameter_writes(),
                 parts: model.part_indices(),
                 commands: model
                     .drain_commands()
