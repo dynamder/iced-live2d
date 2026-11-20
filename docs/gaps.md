@@ -16,17 +16,16 @@ file is the working list.
 Everything below stops a host from doing something its users expect, and none of
 it can be worked around from the widget's public API.
 
-### Host parameter layering
+### Host parameter read-back
 
-`parameters()` writes absolute overrides
-([model.rs](../crates/iced-live2d/src/model.rs#L429-L435)) and `get` returns the
-override, never the value the motion or physics produced. `mocari` has no
-additive write. Consequence: lip-sync, blinking and breathing cannot be layered
-on top of a motion — writing them clobbers whatever the clip animates.
+`parameters().get` returns the write the host set, not the value the model shows:
+motion, expressions, look-at, physics and pose all contribute around it. A host
+that wants to add to the mouth's current opening, or a UI that shows a slider's
+true position, has nothing to read. The render layer's
+`parameter_value_by_index` is diagnostics-only and lives behind the pipeline.
 
-**wire** for additive offsets (read, add and write inside `Model::step`);
-**build** for effective-value read-back, which needs a channel back from the
-render thread.
+**build**, medium: a snapshot the pipeline fills after the step and publishes one
+frame late, plus a way to say which parameters matter.
 
 ### Loading is synchronous and terminal
 
@@ -65,6 +64,11 @@ VRAM.
 
 ## Should have
 
+- **Provider transitions.** A host layer appears and disappears instantly, and the
+  fixed step order cannot reproduce VTS's priority model: there, a one-shot clip
+  (P3) overrides tracking (P2) and an expression (P4) overrides both, with a smooth
+  fade between providers. More blend modes do not close this; a per-parameter
+  provider state does.
 - **Global opacity.** The model has per-part opacity only, and parts do not cover
   every drawable, so fading a whole model in or out is not expressible.
 - **Non-rectangular clipping.** The primitive receives an axis-aligned

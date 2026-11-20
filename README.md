@@ -33,18 +33,20 @@ iced's `shader` primitive, which the tiny-skia backend does not have.
 | motions: groups, looping, cross-faded switching, expressions | ✅ |
 | physics, including settings that chain into each other | ✅ |
 | look-at: head, eyes, torso, routed per rig | ✅ |
-| parameter and part overrides, replayed every step | ✅ |
+| parameter writes staged before or after physics — overwrite, add or multiply | ✅ |
+| part overrides, replayed every step | ✅ |
 | hit areas; hover, press, drag, wheel | ✅ raw or classified |
 | typed vocabularies, validated at load | ✅ |
 | headless offscreen render to PNG | ✅ |
 | 60 fps on the 715-drawable reference rig | ✅ |
 
-Not there yet: host parameter layering, asynchronous loading, idle frames,
-DPI-aware texture budgets, global opacity, non-rectangular clipping, view
-transforms (pan/zoom of the framing itself), playback control (seek, speed),
-physics beyond a switch, loading a model from bytes, and a pause that is more than
-a total freeze. [docs/gaps.md](docs/gaps.md) tracks each of them with where it
-lives and what closing it costs.
+Not there yet: reading back the effective parameter values, smooth transitions
+between the clip and a host layer, asynchronous loading, idle frames, DPI-aware
+texture budgets, global opacity, non-rectangular clipping, view transforms
+(pan/zoom of the framing itself), playback control (seek, speed), physics beyond a
+switch, loading a model from bytes, and a pause that is more than a total freeze.
+[docs/gaps.md](docs/gaps.md) tracks each of them with where it lives and what
+closing it costs.
 
 Deliberately out of scope: keyboard and focus, accessibility, pinch, pen pressure,
 inertia and physics drags, breathing/eye-blink/lip-sync helpers, a desktop-pet
@@ -111,11 +113,11 @@ The asset/model split is what makes several instances cheap: they share the text
 and the parsed model, and each keeps its own parameter values, playback position and
 physics state.
 
-Both constructors take their budget explicitly, and there is no variant that invents
-one: whether to spend 592 MB of VRAM on 4096px textures or 37 on half-size, and
-whether a folder of animation files is a loop set, are not things a component can
-guess. `AssetOptions::default()` and `ModelOptions::default()` are a starting point to
-override, not a hidden decision.
+Both constructors take their options explicitly, and there is no variant that invents
+them: whether to spend 592 MB of VRAM on 4096px textures or 37 on half-size, whether a
+folder of animation files is a loop set, and how host writes combine with what plays,
+are not things a component can guess. `AssetOptions::default()` and
+`ModelOptions::default()` are a starting point to override, not a hidden decision.
 
 For a runnable host, this repository carries a demo app and three examples; all of
 them need a model path:
@@ -135,7 +137,7 @@ hundreds of drawables is unoptimised, which also makes motion look like slow mot
 | Type | Owns | Lifetime |
 |---|---|---|
 | `Live2dAsset` | file path, texture budget (`AssetOptions`) | as long as any model of it, plus itself |
-| `Live2dModel<I>` | parameters, parts, playback, physics, budgets (`ModelOptions`) | the host's |
+| `Live2dModel<I>` | parameters, parts, playback, physics, budgets and write policy (`ModelOptions`) | the host's |
 | `Live2d<'_, Message, I>` | framing, pointer, event channel | while it is in the UI tree |
 
 Below the component the same split reappears as `live2d_render::{Asset, Model,
@@ -177,17 +179,57 @@ let hiyori = Live2dModel::<Face>::new(&asset, ModelOptions::default());
 ### Driving a model
 
 ```rust
-model.parameters().insert(FaceParameter::MouthOpenY, 0.8);   // raw, see ModelInfo ranges
+model.parameters().insert(FaceParameter::MouthOpenY, 0.8);   // overwrite, the default
+model.parameters().add(FaceParameter::AngleX, wave);         // add on top of what plays
+model.parameters().multiply(FaceParameter::AngleY, 0.5);     // multiply what plays
 model.parts().insert(FacePart::ArmA, 0.0);                   // 0.0..=1.0
 model.play_motion(FaceMotion::TapBody, 0);                   // (group, clip), as Cubism indexes
 model.play_random_motion(FaceMotion::Idle);
 model.stop_motion();
 ```
 
-Every write is **replayed on every step**, in Cubism's own order (`reset → motion →
-expression → host parameters → look-at → parts → physics → pose`). That is why a host
-value always wins over the motion driving the same parameter, why physics always sees
-the final input, and why look-at needs no slot in a separate override table.
+Every write is **replayed on every step**, after look-at:
+
+```text
+reset → motion → expression → look-at → host (before physics)
+      → parts → physics → host (after physics) → pose
+```
+
+`ModelOptions` carries the two decisions a host makes once:
+
+```rust
+let model = Live2dModel::<Face>::new(
+    &asset,
+    ModelOptions {
+        mask_size: 1024,
+        parameter_policy: ParameterPolicy {
+            blend: ParameterBlend::Overwrite,
+            stage: ParameterStage::Auto,
+        },
+        look_at_blend: LookAtBlend::Overwrite,
+    },
+);
+```
+
+- **`blend`** decides how a write combines with what played: `Overwrite` (the default),
+  `Add` or `Multiply`. A write can name its own blend (`add`, `multiply`, `apply`) and
+  then ignores the policy's blend; its stage still follows the policy unless it names
+  one.
+- **`stage`** decides where it lands. `Auto`, the default, reads the model's own
+  `physics3.json`: a parameter physics writes is staged after physics, everything else
+  before it. A write can name `BeforePhysics` or `AfterPhysics` explicitly.
+- **`look_at_blend`** decides whether the built-in look-at replaces the pose
+  (`Overwrite`, the default) or adds to it (`Add`).
+- A **physics output** written before physics is overwritten; the component reports
+  that once as a `Problem` instead of leaving a silent no-op.
+
+The policy is live: `parameter_policy_mut()` and `look_at_blend_mut()` change it
+without rebuilding the model. There is no constructor that invents it —
+`ModelOptions::default()` is how a host explicitly chooses the defaults.
+
+A key holds **one** write: `add` replaces an earlier `insert` on the same key, so a
+host that wants to combine a tracking value and an effect computes the final value
+itself.
 
 Values are **raw**, in the range the model declares; `ModelInfo` carries
 `minimum`/`maximum`/`default` per parameter. Clamping is the render layer's job.
@@ -327,7 +369,9 @@ Everything takes a model path, because none is shipped:
 cargo run --release -p iced-live2d --example minimal  -- "path/to/model.model3.json" [second]
 cargo run --release -p iced-live2d --features macros --example typed -- "path/to/model.model3.json"
 cargo run --release -p iced-live2d --example interact -- "path/to/model.model3.json" [second]
+cargo run --release -p iced-live2d --example policy   -- "path/to/model.model3.json"
 cargo run --release -p live2d-render --example offscreen -- "path/to/model.model3.json" frame.png 900 30
+cargo run --release -p live2d-render --example policy -- "path/to/model.model3.json" ParamMouthOpenY 0.8 auto
 ```
 
 | Example | Shows |
@@ -335,6 +379,8 @@ cargo run --release -p live2d-render --example offscreen -- "path/to/model.model
 | `minimal` | two models in one window through `Raw`, keyed by `Live2dId`; keys `R`/`E`/`P`/`1`/`2`, every component event printed |
 | `typed` | a host-declared interface: typed keys for parameters, parts, motions and hit areas, and the load failure a model that lacks them produces |
 | `interact` | every input mapped to a message: click, double click, long press, drag, drag end, scroll (zooms the pane), hover, and gaze driven by the pointer |
+| `policy` (iced) | a mouth and breath layer over the first clip; `B`/`S`/`L` switch blend, stage and look blend live |
+| `policy <Param> <v> <auto\|before\|after>` (render) | which parameters a write changes, and whether staging it before physics moves the physics outputs |
 | `offscreen` | one frame into a PNG, no window |
 | `dump` | what is in the `.moc3`: drawables, mask sets, canvas, motion groups |
 | `inspect` | what is in the *files*: physics settings, motion curves, expression targets, and how the art sits in the canvas |

@@ -252,7 +252,7 @@ impl<I: Interface> Live2dModel<I> {
         &self.inner.path
     }
 
-    /// The options this instance was built with, including the current write
+    /// The options this instance is running with, including the current write
     /// policy.
     pub fn options(&self) -> ModelOptions {
         self.options
