@@ -94,8 +94,13 @@ fn expand(input: &DeriveInput) -> Result<TokenStream2> {
                 }
             }
 
-            fn from_id(id: &::iced_live2d::KeyId) -> Option<Self> {
-                Self::ALL.get(id.index).cloned()
+            fn from_id(
+                id: &::iced_live2d::KeyId,
+            ) -> ::core::result::Result<Self, ::iced_live2d::VocabularyError> {
+                Self::ALL
+                    .get(id.index)
+                    .cloned()
+                    .ok_or(::iced_live2d::VocabularyError::new(id.index))
             }
         }
 

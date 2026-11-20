@@ -664,9 +664,9 @@ fn pointer_payload<A: Vocabulary>(
 }
 
 fn key<V: Vocabulary>(id: KeyId, vocabulary: &'static str) -> Result<V, Problem> {
-    V::from_id(&id).ok_or(Problem::Vocabulary {
+    V::from_id(&id).map_err(|error| Problem::Vocabulary {
         vocabulary,
-        index: id.index,
+        index: error.index(),
     })
 }
 
@@ -1456,6 +1456,40 @@ mod tests {
             at: sample(),
             when: Instant::now(),
         })
+    }
+
+    /// A vocabulary that disagrees with the render layer about its own keys.
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    struct Broken;
+
+    impl Vocabulary for Broken {
+        const SPEC: crate::VocabularySpec = crate::VocabularySpec::Static(&["A"]);
+
+        fn name(&self) -> &str {
+            "A"
+        }
+
+        fn index(&self) -> usize {
+            0
+        }
+
+        fn from_id(id: &KeyId) -> Result<Self, crate::VocabularyError> {
+            Err(crate::VocabularyError::new(id.index))
+        }
+    }
+
+    #[test]
+    fn a_key_the_vocabulary_cannot_rebuild_is_reported() {
+        let id = KeyId {
+            asset: live2d_render::AssetId::unique(),
+            index: 3,
+            name: Arc::from("A"),
+        };
+
+        assert!(matches!(
+            key::<Broken>(id, "motion"),
+            Err(Problem::Vocabulary { index: 3, .. })
+        ));
     }
 
     #[test]

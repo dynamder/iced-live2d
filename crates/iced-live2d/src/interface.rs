@@ -32,6 +32,35 @@ pub struct KeyId {
     pub name: Arc<str>,
 }
 
+/// Why a [`Vocabulary`] could not rebuild one of its keys.
+///
+/// It means the render layer and the vocabulary disagree about an index — an
+/// internal mismatch, never a missing name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VocabularyError {
+    index: usize,
+}
+
+impl VocabularyError {
+    /// Reports the index the render layer asked for.
+    pub fn new(index: usize) -> Self {
+        Self { index }
+    }
+
+    /// The index that was asked for.
+    pub fn index(self) -> usize {
+        self.index
+    }
+}
+
+impl fmt::Display for VocabularyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "index #{} is not in the vocabulary", self.index)
+    }
+}
+
+impl std::error::Error for VocabularyError {}
+
 /// One of the five lists an [`Interface`] names: the four items that turn a key
 /// into a model index and back. Derive it with the `macros` feature, or write it
 /// by hand.
@@ -47,10 +76,11 @@ pub trait Vocabulary: Clone + Eq + Ord + Hash + std::fmt::Debug + Send + Sync + 
 
     /// Rebuilds the key the render layer means.
     ///
-    /// A derived implementation always succeeds; `None` is only possible for a
-    /// hand-written one whose `index` and `from_id` disagree, and is reported as a
-    /// [`Problem`](crate::Problem) rather than dropping the event.
-    fn from_id(id: &KeyId) -> Option<Self>;
+    /// A derived implementation fails only for an index outside the vocabulary. A
+    /// hand-written one may also fail when its `index` and `from_id` disagree. The
+    /// failure is reported as a [`Problem`](crate::Problem) rather than dropping the
+    /// event silently.
+    fn from_id(id: &KeyId) -> Result<Self, VocabularyError>;
 
     /// The asset a model-scoped key belongs to. `None` for a compile-time
     /// vocabulary, whose keys mean the same on every asset.

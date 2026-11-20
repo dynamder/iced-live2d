@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use iced_live2d::{AssetId, KeyId, Vocabulary, VocabularySpec};
+use iced_live2d::{AssetId, KeyId, Vocabulary, VocabularyError, VocabularySpec};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Vocabulary)]
 #[vocabulary(prefix = "Param")]
@@ -52,8 +52,11 @@ fn the_index_is_the_declaration_order() {
 
 #[test]
 fn a_key_round_trips_through_the_render_layers_identity() {
-    assert_eq!(Face::from_id(&id(1, "ParamEyeBallX")), Some(Face::EyeBallX));
-    assert_eq!(Face::from_id(&id(9, "nowhere")), None);
+    assert_eq!(Face::from_id(&id(1, "ParamEyeBallX")), Ok(Face::EyeBallX));
+    assert_eq!(
+        Face::from_id(&id(9, "nowhere")),
+        Err(VocabularyError::new(9))
+    );
 }
 
 #[test]
@@ -66,7 +69,10 @@ fn without_a_prefix_the_variant_name_is_the_model_name() {
 fn an_empty_vocabulary_has_no_keys() {
     assert_eq!(Empty::SPEC, VocabularySpec::Static(&[]));
     assert!(Empty::ALL.is_empty());
-    assert_eq!(Empty::from_id(&id(0, "anything")), None);
+    assert_eq!(
+        Empty::from_id(&id(0, "anything")),
+        Err(VocabularyError::new(0))
+    );
 }
 
 #[test]

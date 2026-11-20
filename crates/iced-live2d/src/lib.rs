@@ -33,7 +33,9 @@ pub use interaction::{
     Cancelled, Drag, Dragging, Gesture, Gestures, Hover, Hovering, Moving, Pointer, PointerEvent,
     Pointing, Sample, Scrolling, Tap,
 };
-pub use interface::{Interface, InterfaceSpec, KeyId, MissingNames, Vocabulary, VocabularySpec};
+pub use interface::{
+    Interface, InterfaceSpec, KeyId, MissingNames, Vocabulary, VocabularyError, VocabularySpec,
+};
 pub use look_at::LookAtSource;
 pub use model::{Live2dAsset, Live2dId, Live2dModel, Parameters, Parts};
 pub use raw::{Raw, RawExpression, RawHitArea, RawKey, RawMotion, RawParameter, RawPart};

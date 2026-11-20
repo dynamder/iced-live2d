@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use live2d_render::{AssetId, ModelInfo};
 
-use crate::interface::{Interface, KeyId, Vocabulary, VocabularySpec};
+use crate::interface::{Interface, KeyId, Vocabulary, VocabularyError, VocabularySpec};
 
 /// Marks a key as addressing a parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -118,8 +118,8 @@ impl<T: 'static> Vocabulary for RawKey<T> {
         self.index()
     }
 
-    fn from_id(id: &KeyId) -> Option<Self> {
-        Some(Self {
+    fn from_id(id: &KeyId) -> Result<Self, VocabularyError> {
+        Ok(Self {
             asset: id.asset,
             name: Arc::clone(&id.name),
             index: id.index,
@@ -281,7 +281,7 @@ mod tests {
             name: Arc::from(key.name()),
         };
 
-        assert_eq!(RawMotion::from_id(&id), Some(key));
+        assert_eq!(RawMotion::from_id(&id), Ok(key));
     }
 
     #[test]
