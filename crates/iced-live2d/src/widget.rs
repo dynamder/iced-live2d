@@ -131,8 +131,9 @@ impl InputMode for GestureMode {}
 /// A Live2D model drawn as a widget. wgpu only; the tiny-skia backend cannot draw
 /// iced's `shader` widget. Box it with `column![…]` or `container`.
 ///
-/// The widget drives its own frames. A host must **not** also subscribe to
-/// [`window::frames`]: `RedrawRequest` holds one request and the last writer wins.
+/// The widget drives its own frames. A host must **not** request frames of its own:
+/// `RedrawRequest` holds one request and the last writer wins. Observing
+/// [`window::frames`] for a clock is fine — it requests nothing.
 ///
 /// Input reaches the host through `on_event` or the specific `on_*` hooks, and the
 /// model's own events through `on_model_event`. Nothing is decided here: the

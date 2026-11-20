@@ -4,8 +4,9 @@ A pixel-level oracle for the refactor in `docs/change-plan.md`: every example's
 scene is captured before the changes and must be captured identically after them.
 No library change in that plan is allowed to move these frames.
 
-Recorded at commit `0af66f2` on the llvmpipe adapter. Delete this file once the
-refactor has landed and the captures are part of the normal review.
+Recorded at commit `0af66f2` on the llvmpipe adapter, and re-checked identical after
+each phase of the refactor: `d0836b2`, `7ec5129`, `3d20064`, `3af2f8e`, `d17747a`.
+Delete this file once the captures are part of the normal review.
 
 ## Reproducing
 

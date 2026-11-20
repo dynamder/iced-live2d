@@ -109,7 +109,7 @@ What that costs anyone reading these files:
   `CombinedParameters`; 大肥鱼's expressions add VTube Studio's
   `IsModelCustomizationExpression`. Reading these files means ignoring what is not
   understood, never rejecting a document for having more in it.
-- **Every one of the 113 clips declares `Loop: true`**, including 大肥鱼's
+- **Every one of the 86 motion files declares `Loop: true`**, including 大肥鱼's
   one-shot "switch the hand" transitions. A clip that ends on its own does not
   exist in this corpus; leaving one means `stop_motion` or starting another.
 - **Model-target curves are data, not decoration.** Haru ships an `Opacity` curve

@@ -116,6 +116,13 @@ pub enum Error {
         path: PathBuf,
     },
 
+    /// The texture scale has no usable downscale factor.
+    #[error("texture scale must be positive and finite, got {scale}")]
+    TextureScale {
+        /// The scale that was asked for.
+        scale: f32,
+    },
+
     /// The drawable set could not be turned into GPU buffers.
     #[error("failed to allocate Live2D mesh buffers")]
     MeshBuffers,

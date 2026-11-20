@@ -200,7 +200,7 @@ impl Rig {
 /// What the resolver may look at, so it stays testable without a model.
 #[derive(Debug, Clone, Default)]
 pub struct ModelFacts {
-    /// Parameter ids in model order, so an index stays meaningful.
+    /// Parameter ids in the asset's list order, so an index stays meaningful.
     parameters: Vec<String>,
     by_name: BTreeMap<String, usize>,
     physics_outputs: BTreeSet<String>,

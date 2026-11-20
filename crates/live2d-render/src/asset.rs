@@ -86,7 +86,7 @@ impl Default for ModelOptions {
 #[derive(Debug, Clone)]
 pub(crate) struct Shared {
     pub info: Arc<ModelInfo>,
-    /// Motion clips per group, in model order.
+    /// Motion clips per group, in the order `ModelInfo::motions` lists them.
     pub motions: Arc<[Arc<[MotionRef]>]>,
     pub expressions: Arc<[ExpressionRef]>,
     pub rigs: Arc<Rigs>,
@@ -295,6 +295,8 @@ impl Prepared {
         queue: &Queue,
         options: AssetOptions,
     ) -> Result<Asset> {
+        validate_texture_scale(options.texture_scale)?;
+
         let factor = downscale_factor(options.texture_scale);
 
         let textures = self
@@ -520,6 +522,15 @@ fn collect_sidecars(
     }
 }
 
+/// Rejects a scale with no meaningful downscale factor.
+fn validate_texture_scale(scale: f32) -> Result<()> {
+    if scale.is_finite() && scale > 0.0 {
+        Ok(())
+    } else {
+        Err(Error::TextureScale { scale })
+    }
+}
+
 /// Integer box-filter factor derived from a `0..1` texture scale.
 fn downscale_factor(scale: f32) -> u32 {
     if !scale.is_finite() || scale >= 0.999 {
@@ -584,4 +595,29 @@ fn downscale_rgba(width: u32, height: u32, rgba: &[u8], factor: u32) -> (u32, u3
     }
 
     (out_width, out_height, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_scale_without_a_factor_is_rejected() {
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(matches!(
+                validate_texture_scale(scale),
+                Err(Error::TextureScale { .. })
+            ));
+        }
+
+        assert!(validate_texture_scale(0.5).is_ok());
+    }
+
+    #[test]
+    fn the_factor_is_the_nearest_whole_one_over_the_scale() {
+        assert_eq!(downscale_factor(1.0), 1);
+        assert_eq!(downscale_factor(0.7), 1);
+        assert_eq!(downscale_factor(0.5), 2);
+        assert_eq!(downscale_factor(0.25), 4);
+    }
 }

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # `cargo fmt --all` would format the vendor path dependency and break the
+      # byte-exact patches, so the packages are named.
+      - run: cargo fmt --check -p iced-live2d -p live2d-render -p iced-live2d-macros -p app
+      - run: cargo check --workspace --all-targets --locked
+      # The macro tests are behind the `macros` feature, so all features are needed.
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vendor/mocari
+      # The vendor crate is outside the workspace, so it needs its own run. Its
+      # tests read the Cubism sample models, which are not in this repository, so
+      # CI compiles them instead of running them.
+      - run: cargo check --manifest-path vendor/mocari/Cargo.toml --all-targets --locked

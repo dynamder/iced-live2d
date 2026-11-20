@@ -14,8 +14,8 @@ pub enum VocabularySpec {
     /// A name the model lacks fails the load: an interface is a promise about the
     /// model, not a wish list.
     Static(&'static [&'static str]),
-    /// The model's own entries, in model order. Nothing to look up, nothing to
-    /// miss — this is how a model acts as its own interface.
+    /// The model's own entries, in the order [`ModelInfo`] lists them. Nothing to
+    /// look up, nothing to miss — this is how a model acts as its own interface.
     Model,
 }
 

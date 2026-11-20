@@ -57,8 +57,8 @@ time.
 ([asset.rs](../crates/live2d-render/src/asset.rs#L36-L48)) while the render target
 is measured in physical pixels, so a HiDPI window stretches a half-size atlas and
 the only remedy is rebuilding the asset. There is no runtime re-scale and no
-DPI-aware choice, although a 4K rig is the difference between 37 MB and 592 MB of
-VRAM.
+DPI-aware choice, although a 4K rig is the difference between 148 MB and 592 MB of
+VRAM at half and full resolution.
 
 **build**, medium.
 

@@ -160,7 +160,7 @@ impl Interface for Raw {
     type HitArea = RawHitArea;
 }
 
-/// Every parameter the model declares, in model order.
+/// Every parameter the model declares, in the order [`ModelInfo`] lists it.
 pub fn parameters(info: &ModelInfo) -> Vec<RawParameter> {
     info.parameters
         .iter()
@@ -174,7 +174,7 @@ pub fn parameters(info: &ModelInfo) -> Vec<RawParameter> {
         .collect()
 }
 
-/// Every part the model declares, in model order.
+/// Every part the model declares, in the order [`ModelInfo`] lists it.
 pub fn parts(info: &ModelInfo) -> Vec<RawPart> {
     info.parts
         .iter()
@@ -188,7 +188,7 @@ pub fn parts(info: &ModelInfo) -> Vec<RawPart> {
         .collect()
 }
 
-/// Every motion group the model declares, in model order.
+/// Every motion group the model declares, in the order [`ModelInfo`] lists it.
 pub fn motions(info: &ModelInfo) -> Vec<RawMotion> {
     info.motions
         .iter()
@@ -202,7 +202,7 @@ pub fn motions(info: &ModelInfo) -> Vec<RawMotion> {
         .collect()
 }
 
-/// Every expression the model declares, in model order.
+/// Every expression the model declares, in the order [`ModelInfo`] lists it.
 pub fn expressions(info: &ModelInfo) -> Vec<RawExpression> {
     info.expressions
         .iter()
@@ -216,7 +216,7 @@ pub fn expressions(info: &ModelInfo) -> Vec<RawExpression> {
         .collect()
 }
 
-/// Every hit area the model declares, in model order.
+/// Every hit area the model declares, in the order [`ModelInfo`] lists it.
 pub fn hit_areas(info: &ModelInfo) -> Vec<RawHitArea> {
     info.hit_areas
         .iter()

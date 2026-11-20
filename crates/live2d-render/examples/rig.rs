@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for mode in [LookAtMode::Adapted, LookAtMode::ViewerDefault] {
         let rig = resolve(mode, &facts);
         println!("\n== {mode} ==");
-        print_rig(&rig);
+        print_rig(&rig, &facts);
 
         if mode == LookAtMode::Adapted {
             let unbound: Vec<&str> = live2d_render::Slot::ALL
@@ -44,12 +44,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn print_rig(rig: &Rig) {
+fn print_rig(rig: &Rig, facts: &ModelFacts) {
     for binding in rig.bindings() {
+        let parameter = facts
+            .name(binding.parameter)
+            .map_or_else(|| format!("#{}", binding.parameter), str::to_owned);
+
         println!(
             "  {:<11} -> {:<18} {:<16} ({})",
             binding.slot.name(),
-            binding.parameter,
+            parameter,
             binding.route.to_string(),
             binding.source
         );

@@ -12,8 +12,8 @@
 //! tongue and cheeks follow the layer. On a rig whose clips animate the mouth,
 //! switching the blend changes whether the layer replaces or stacks on the clip.
 //!
-//! The frame subscription is the layer's clock, not its pacing: the widget still
-//! asks for the frames it needs.
+//! The frame subscription is the layer's clock, not its pacing: it observes the
+//! redraws the widget asks for, and requests none of its own.
 
 use iced::advanced::Widget as _;
 use iced::time::Instant;

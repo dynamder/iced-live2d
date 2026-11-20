@@ -117,7 +117,7 @@ parameter values, playback position and physics state. The mutable model state i
 still copied per instance; [docs/gaps.md](docs/gaps.md) records the cost.
 
 Both constructors take their options explicitly, and there is no variant that invents
-them: whether to spend 592 MB of VRAM on 4096px textures or 37 on half-size, whether a
+them: whether to spend 592 MB of VRAM on 4096px textures or 148 on half-size, whether a
 folder of animation files is a loop set, and how host writes combine with what plays,
 are not things a component can guess. `AssetOptions::default()` and
 `ModelOptions::default()` are a starting point to override, not a hidden decision.
@@ -419,18 +419,32 @@ from a command line:
 
 | Variable | Meaning |
 |---|---|
-| `LIVE2D_TEXTURE_SCALE` | upload resolution multiplier, default `1.0` |
-| `LIVE2D_MASK` | mask render-target edge in pixels, default `1024` |
+| `LIVE2D_TEXTURE_SCALE` | upload resolution multiplier, default `1.0`; values quantise to `1/n`, and `0` is rejected by the hang check |
+| `LIVE2D_MASK` | mask render-target edge in pixels, default `1024`; clamped to the device limit |
 | `LIVE2D_MOTION` / `LIVE2D_EXPR` | `group,clip` to play / expression index to apply before the capture |
-| `LIVE2D_LOOK_AT` | `x,y` in `-1.0..=1.0`, applied as the cursor position |
+| `LIVE2D_CLEAR_EXPR` / `LIVE2D_NO_MOTION` | drop the expressions / stop the motion after loading |
+| `LIVE2D_FADE` | seconds, or `cut`: overrides every fade the model files declare |
+| `LIVE2D_NO_PHYSICS` | leave physics out of the frame |
+| `LIVE2D_RECLIP` | rebuild the clipping resources every frame, to catch a stale plan |
+| `LIVE2D_LOOK_AT` / `LIVE2D_TRACK` | `x,y` in `-1.0..=1.0`, applied as a LookAt target / `adapted` or `viewer` routing |
 | `LIVE2D_HIT` | `x,y` in `-1.0..=1.0`: print which hit area a click there would land in |
 | `LIVE2D_FILL` | how much of the widget the model's bounds span (`1.0` touches the edges, default `0.925`) |
-| `LIVE2D_PROFILE` | ask the widget for step/deform/upload cost and frame-interval statistics |
+
+`jolt` takes `JOLT_RANGE=low,high` (`-0.15,0.15`), `JOLT_SETTLE` (120 frames),
+`JOLT_SIZE` (640) and `JOLT_MOTION`; `sweep` takes `SWEEP_RANGE`, `SWEEP_SETTLE`,
+`SWEEP_JUMP`, `SWEEP_ALL`, `SWEEP_MOTION` and `SWEEP_DIRECT=<ParamId>`. Both read
+`LIVE2D_NO_PHYSICS` and `LIVE2D_TRACK`.
+
+A scale has no effect between quantisation steps: `0.7` uploads exactly like `1.0` and
+`0.6` like `0.5`, because the factor is `round(1 / scale)`. A scale that is zero,
+negative or not finite is reported as an error rather than attempting the upload.
 
 ## Frame pacing
 
-The widget drives its own frames at 60 Hz; **do not subscribe the app to
-`window::frames`**. `Model::advance` takes whatever interval the host measured and
+The widget drives its own frames at 60 Hz; **do not request frames of your own**. A
+host may observe `window::frames` for a clock (it requests nothing), but a second
+`RedrawRequest` source races the widget's. `Model::advance` takes whatever interval the
+host measured and
 spends it in fixed 1/60 s steps, keeping the rest for the next call, so the pose is a
 function of elapsed time alone rather than of how the host sliced it.
 
@@ -517,13 +531,23 @@ the same model hosted in a Chromium webview running the official Cubism Web SDK 
 
 ## Vendored mocari
 
-`vendor/mocari` is the crates.io `0.4.1` release plus the four diffs in `patches/`,
+`vendor/mocari` is the crates.io `0.4.1` release plus the five patches in `patches/`,
 committed so a fresh clone builds; the workspace dependency points straight at it, and
 `patches/` is kept so the difference against upstream can be audited line by line.
 
 Unpatched `0.4.1` cannot render this rig, and the fixes belong upstream rather than in
 every consumer. Each patch file opens with what it corrects and how it was verified;
 they are still being tested in more detail before being submitted upstream.
+
+Upstream's own test suite reads the Cubism sample models, which are not part of this
+repository, so it only runs with the corpus from `docs/test-models.md` laid out under
+`vendor/mocari/assets/models`. CI compiles the vendor crate instead of running it.
+
+The crate is not publishable as it stands: a path dependency without a version is
+rejected, and a versioned one is stripped on publish, so a consumer would silently get
+upstream `0.4.1` without the patches. `[patch.crates-io]` is local-only for the same
+reason. Publishing needs the patches upstreamed, or a distinct fork version published
+under its own name.
 
 ## Why iced comes from git
 
