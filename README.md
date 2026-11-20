@@ -104,7 +104,9 @@ fn new() -> App {
 
 fn view(app: &App) -> impl iced::Widget<Message> {
     live2d(&app.hiyori)
-        .on_event(Message::Live2d)
+        .raw()
+        .on_event(Message::Input)          // pointer facts
+        .on_model_event(Message::Live2d)   // load result, motions, problems
         .look_at(look_at::cursor)
 }
 ```
@@ -119,7 +121,7 @@ folder of animation files is a loop set, and how host writes combine with what p
 are not things a component can guess. `AssetOptions::default()` and
 `ModelOptions::default()` are a starting point to override, not a hidden decision.
 
-For a runnable host, this repository carries a demo app and three examples; all of
+For a runnable host, this repository carries a demo app and four examples; all of
 them need a model path:
 
 ```bash
@@ -243,9 +245,9 @@ stays in its rest pose. "Idle" is the host's five lines:
 
 ```rust
 // on load: start something
-Live2dEvent::ModelLoaded { .. } => model.play_motion(FaceMotion::Idle, MotionClipIndex::new(0)),
+ModelEvent::Loaded { .. } => model.play_motion(FaceMotion::Idle, MotionClipIndex::new(0)),
 // and when a one-shot ends: start the next one
-Live2dEvent::MotionFinishedPlaying { .. } => model.play_random_motion(FaceMotion::Idle),
+ModelEvent::MotionEnded { .. } => model.play_random_motion(FaceMotion::Idle),
 ```
 
 That is deliberate. A component that picks for the host also picks *wrong*: this
@@ -255,20 +257,25 @@ a directory listing and then chosen from it at random.
 
 ### Events
 
+Two types, because the two categories never overlap: [`ModelEvent`] is what the model
+did, and the interaction input is what the pointer did, in the vocabulary chosen with
+`raw()` or `gestures(..)`.
+
 - **Loading is deferred and reported.** `Live2dAsset::new` does no IO; the first frame
   that draws a model loads it, and the outcome arrives as
-  `Live2dEvent::ModelLoaded { info }` or `ModelFailedToLoad { failure }`. A failed load
+  `ModelEvent::Loaded { info }` or `ModelEvent::FailedToLoad { failure }`. A failed load
   is not retried, and the widget keeps reserving its space.
 - **Events are one frame late and per model.** The render layer cannot publish while
   preparing a frame, so it hands events to the widget, whose next `update` publishes
-  them. Two widgets drawing one model both receive all of them, and the second one to
-  appear is sent the load result it missed.
-- **No listener, no channel.** Without `.on_event(..)` the render layer allocates no
-  channel at all, so events cannot pile up.
+  them. Two widgets drawing one model both receive all model events, and the second one
+  to appear is sent the load result it missed.
+- **No listener, no channel.** A widget with neither `on_model_event` nor an
+  interaction handler asks the render layer for nothing, so events cannot pile up.
 - **`MotionStarted` carries `(group, clip)` plus the clip's duration and loop flag.**
-  `MotionFinishedPlaying` fires for clips that end, and playback then stops until the
-  host asks again. A looping clip never finishes, which is why an idle loop needs no
-  scheduler.
+  `MotionEnded` fires for every clip that stops — `MotionEnd::Completed` when it reached
+  its own end, `Interrupted` when it was replaced or stopped — and playback then stops
+  until the host asks again. A looping clip never completes, which is why an idle loop
+  needs no scheduler.
 - **Pointer events belong to the widget, not the model.** Two widgets drawing one
   model keep separate hover, presses and drags: each reports input in its own space.
   Every event names its model and carries the position in three forms — widget pixels,
@@ -292,19 +299,19 @@ and the variant says only what happened.
 it, so the same physical action can never be handled twice:
 
 ```rust
-live2d(&model).raw()                            // RawEvent:    raw facts, host classifies
-live2d(&model).gestures(Gestures::default())    // GestureEvent: the component classifies
+live2d(&model).raw()                            // RawInput:     raw facts, host classifies
+live2d(&model).gestures(Gestures::default())    // GestureInput: the component classifies
 ```
 
-The choice decides the **event type**, so it comes before `on_event`: a raw widget
-hands the closure `RawEvent<I>` and a classified one `GestureEvent<I>`. Both carry the
-same model events and a different input arm — `Input(PointerEvent<..>)` versus
-`Input(Gesture<..>)` — so a message type names the vocabulary it holds and a handler
-cannot match the wrong one.
+The choice decides the **input type**, so it comes before `on_event`: a raw widget
+hands the closure `RawInput<I>` and a classified one `GestureInput<I>`. Model events
+are a separate type and channel, so `on_model_event` works in either branch and does
+not care when it is bound.
 
 | Method | Available in | Reported | Payload |
 |---|---|---|---|
-| `on_event` | both | everything the component says | `Live2dEvent<I>` |
+| `on_model_event` | both | load result, problems, motion start and end | `ModelEvent<I>` |
+| `on_event` | both vocabularies, on its own | every interaction event, movement included | `RawInput<I>` or `GestureInput<I>` |
 | `on_press` / `on_release` | `raw` | a button or finger went down / came up | `Pointing<I::HitArea>` |
 | `on_drag` | `raw` | the pointer moved while held, once per frame | `Dragging<I::HitArea>` |
 | `on_click` | `gestures` | a press that came back without moving, once the double-click window closes | `Tap<I::HitArea>` |
@@ -323,10 +330,10 @@ live2d(&self.model)
         Hover { area: Some(_), .. } => mouse::Interaction::Pointer,
         _ => mouse::Interaction::Idle,
     })
+    .on_model_event(Message::Live2d)               // load result, motions, problems
     .on_click(|tap| Message::Pet { model: tap.model, area: tap.area })
     .on_drag(|drag| Message::Turned { model: drag.model, by: drag.delta() })
     .on_scroll(|scroll| Message::Zoom { model: scroll.model, by: scroll.lines[1] })
-    .on_event(Message::Live2d)                     // everything else, load failures included
 ```
 
 Decisions worth knowing:
@@ -345,12 +352,13 @@ Decisions worth knowing:
   never reported, and a single click is reported when the window closes. One action, one
   message. The cost is that a single click is late by up to that window;
   `double_click: None` reports clicks immediately and turns double-click detection off.
-- **A specific hook wins over `on_event`** for the events it covers, and a more specific
-  hook that is *not* bound falls back to `on_event`. With neither, the event is dropped —
-  that is why binding only `on_click` costs exactly one message per click, while binding
-  `on_event` as well costs one per press, release and click.
-- **`on_move` is the only continuous input.** Nothing is reported per frame unless it is
-  bound.
+- **`on_event` and the specific hooks are exclusive.** `on_event` is the catch-all: it
+  receives every interaction event of the vocabulary, movement included. Binding it
+  together with a specific hook does not compile, and a widget with neither drops the
+  input. Choose by intent: `on_event` for logging, replay or a host-side recognizer;
+  specific hooks for a policy.
+- **`on_move` is the only continuous input for specific hooks.** It is reported once per
+  frame only when bound; `on_event` receives movement without it.
 - **With `gestures`, `on_drag` reports the classified drag**, which carries velocity;
   without it, the raw drag arrives, which does not. Either way it fires once per frame,
   never twice.

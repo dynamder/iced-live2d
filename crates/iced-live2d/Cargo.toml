@@ -24,3 +24,6 @@ iced-live2d-macros = { path = "../iced-live2d-macros", optional = true }
 [[example]]
 name = "typed"
 required-features = ["macros"]
+
+[dev-dependencies]
+trybuild = "1.0.125"

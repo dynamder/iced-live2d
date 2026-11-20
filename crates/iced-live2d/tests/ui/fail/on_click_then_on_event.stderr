@@ -1,0 +1,18 @@
+error[E0599]: no method named `on_event` found for struct `Live2d<'_, (), iced_live2d::Raw, GestureMode, SpecificInput>` in the current scope
+  --> tests/ui/fail/on_click_then_on_event.rs:10:10
+   |
+ 7 |       let _ = live2d(&model)
+   |               --------------
+   |               |
+   |  _____________method `on_event` is available on `Live2d<'_, (), iced_live2d::Raw>`
+   | |
+ 8 | |         .gestures(Gestures::default())
+   | |          ----------------------------- method `on_event` is available on `Live2d<'_, (), iced_live2d::Raw, GestureMode>`
+ 9 | |         .on_click(|_| ())
+10 | |         .on_event(|_| ());
+   | |_________-^^^^^^^^
+   |
+help: there is a method `on_model_event` with a similar name
+   |
+10 |         .on_model_event(|_| ());
+   |             ++++++

@@ -29,8 +29,8 @@ static NEXT_MODEL: AtomicU64 = AtomicU64::new(1);
 /// One model file, shared by every instance driven from it.
 ///
 /// Nothing is read at construction: the first frame that draws one of its models
-/// loads it and reports [`Live2dEvent::ModelLoaded`](crate::Live2dEvent::ModelLoaded)
-/// or [`Live2dEvent::ModelFailedToLoad`](crate::Live2dEvent::ModelFailedToLoad).
+/// loads it and reports [`ModelEvent::Loaded`](crate::ModelEvent::Loaded) or
+/// [`ModelEvent::FailedToLoad`](crate::ModelEvent::FailedToLoad).
 /// The textures go away one frame after the last model using them is dropped.
 pub struct Live2dAsset {
     id: AssetId,

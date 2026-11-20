@@ -20,9 +20,8 @@ use iced::time::Instant;
 use iced::widget::{column, text};
 use iced::{Fill, Subscription, Task, keyboard, window};
 use iced_live2d::{
-    AssetOptions, Live2dAsset, Live2dEvent, Live2dModel, LookAtBlend, ModelInfo, ModelOptions,
-    MotionClipIndex, ParameterBlend, ParameterPolicy, ParameterStage, Raw, RawEvent, live2d,
-    look_at, raw,
+    AssetOptions, Live2dAsset, Live2dModel, LookAtBlend, ModelEvent, ModelInfo, ModelOptions,
+    MotionClipIndex, ParameterBlend, ParameterPolicy, ParameterStage, Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -58,7 +57,7 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(RawEvent<Raw>),
+    Live2d(ModelEvent<Raw>),
     Tick(Instant),
     NextBlend,
     NextStage,
@@ -113,11 +112,11 @@ impl App {
         Task::none()
     }
 
-    fn report(&mut self, event: RawEvent<Raw>) {
+    fn report(&mut self, event: ModelEvent<Raw>) {
         match event {
-            Live2dEvent::ModelLoaded { info, .. } => self.loaded(&info),
-            Live2dEvent::ModelFailedToLoad { failure, .. } => eprintln!("live2d: {failure}"),
-            Live2dEvent::ModelReportedProblem { problem, .. } => eprintln!("live2d: {problem}"),
+            ModelEvent::Loaded { info, .. } => self.loaded(&info),
+            ModelEvent::FailedToLoad { failure, .. } => eprintln!("live2d: {failure}"),
+            ModelEvent::Problem { problem, .. } => eprintln!("live2d: {problem}"),
             _ => {}
         }
     }
@@ -218,7 +217,7 @@ impl App {
 
         column![
             live2d(&self.model)
-                .on_event(Message::Live2d)
+                .on_model_event(Message::Live2d)
                 .look_at(look_at::cursor)
                 .width(Fill)
                 .height(Fill)

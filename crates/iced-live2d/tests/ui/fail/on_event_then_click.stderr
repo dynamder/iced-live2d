@@ -1,0 +1,19 @@
+error[E0599]: the method `on_click` exists for struct `Live2d<'_, (), iced_live2d::Raw, GestureMode, CatchAllInput>`, but its trait bounds were not satisfied
+  --> tests/ui/fail/on_event_then_click.rs:10:10
+   |
+ 7 |       let _ = live2d(&model)
+   |  _____________-
+ 8 | |         .gestures(Gestures::default())
+ 9 | |         .on_event(|_| ())
+10 | |         .on_click(|_| ());
+   | |         -^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   | |_________|
+   |
+   |
+  ::: src/widget.rs
+   |
+   |   pub struct CatchAllInput;
+   |   ------------------------ doesn't satisfy `CatchAllInput: AcceptsSpecific`
+   |
+   = note: the following trait bounds were not satisfied:
+           `CatchAllInput: AcceptsSpecific`

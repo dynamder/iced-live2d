@@ -147,7 +147,7 @@ pub type RawHitArea = RawKey<HitAreaKind>;
 /// so keys come from a loaded model.
 ///
 /// ```text
-/// let info = // the Arc<ModelInfo> a ModelLoaded event carried
+/// let info = // the Arc<ModelInfo> a Loaded event carried
 /// model.parameters().insert(raw::parameters(&info)[0].clone(), 1.0);
 /// ```
 pub struct Raw;

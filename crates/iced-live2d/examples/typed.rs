@@ -18,8 +18,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Gesture, GestureEvent, Gestures, Hover, Interface, Live2dAsset, Live2dEvent,
-    Live2dModel, ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, Vocabulary, live2d, look_at,
+    AssetOptions, Gesture, GestureInput, Gestures, Hover, Interface, Live2dAsset, Live2dModel,
+    ModelEvent, ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, Vocabulary, live2d, look_at,
 };
 
 /// The parameters this interface drives.
@@ -103,7 +103,8 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(GestureEvent<Face>),
+    Live2d(ModelEvent<Face>),
+    Input(GestureInput<Face>),
     Key(keyboard::Event),
 }
 
@@ -124,7 +125,8 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Live2d(event) => self.on_event(event),
+            Message::Live2d(event) => self.on_model(event),
+            Message::Input(input) => self.on_input(input),
             Message::Key(keyboard::Event::KeyPressed {
                 text: Some(text),
                 repeat: false,
@@ -151,7 +153,8 @@ impl App {
     fn view(&self) -> impl iced::Widget<Message> {
         let pane: Element<'_, Message> = live2d(&self.model)
             .gestures(Gestures::default())
-            .on_event(Message::Live2d)
+            .on_event(Message::Input)
+            .on_model_event(Message::Live2d)
             .look_at(look_at::cursor)
             .cursor(|hover| match hover {
                 Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
@@ -170,9 +173,25 @@ impl App {
         keyboard::listen().map(Message::Key)
     }
 
-    fn on_event(&mut self, event: GestureEvent<Face>) {
+    fn on_input(&mut self, input: GestureInput<Face>) {
+        match &input {
+            Gesture::Clicked(tap) if tap.area == Some(FaceHitArea::Body) => {
+                self.model
+                    .play_motion(FaceMotion::TapBody, MotionClipIndex::new(0));
+                self.status = "clicked Body: TapBody".to_owned();
+            }
+            Gesture::Clicked(tap) => {
+                self.status = format!("clicked {:?}", tap.area);
+            }
+            other => self.status = format!("{other:?}"),
+        }
+
+        println!("{}", self.status);
+    }
+
+    fn on_model(&mut self, event: ModelEvent<Face>) {
         match &event {
-            Live2dEvent::ModelLoaded { info, .. } => {
+            ModelEvent::Loaded { info, .. } => {
                 self.info = Some(Arc::clone(info));
 
                 // Playing `Idle` is this example's policy, not the component's.
@@ -187,13 +206,13 @@ impl App {
                     info.hit_areas.len(),
                 );
             }
-            Live2dEvent::ModelFailedToLoad { failure, .. } => {
+            ModelEvent::FailedToLoad { failure, .. } => {
                 self.status = format!("failed to load: {failure}");
             }
-            Live2dEvent::ModelReportedProblem { problem, .. } => {
+            ModelEvent::Problem { problem, .. } => {
                 self.status = problem.to_string();
             }
-            Live2dEvent::MotionStarted {
+            ModelEvent::MotionStarted {
                 group,
                 clip,
                 duration,
@@ -203,7 +222,7 @@ impl App {
                 self.status =
                     format!("started {group:?} #{clip} ({duration:.2} s, looping: {looping})");
             }
-            Live2dEvent::MotionEnded {
+            ModelEvent::MotionEnded {
                 group,
                 clip,
                 ended: MotionEnd::Completed,
@@ -217,20 +236,8 @@ impl App {
 
                 self.status = format!("finished {group:?} #{clip}");
             }
-            Live2dEvent::MotionEnded { group, clip, .. } => {
+            ModelEvent::MotionEnded { group, clip, .. } => {
                 self.status = format!("interrupted {group:?} #{clip}");
-            }
-            Live2dEvent::Input(Gesture::Clicked(tap)) => {
-                if tap.area == Some(FaceHitArea::Body) {
-                    self.model
-                        .play_motion(FaceMotion::TapBody, MotionClipIndex::new(0));
-                    self.status = "clicked Body: TapBody".to_owned();
-                } else {
-                    self.status = format!("clicked {:?}", tap.area);
-                }
-            }
-            Live2dEvent::Input(input) => {
-                self.status = format!("{input:?}");
             }
         }
 

@@ -1,0 +1,13 @@
+error[E0599]: the method `on_event` exists for struct `Live2d<'_, _, iced_live2d::Raw>`, but its trait bounds were not satisfied
+ --> tests/ui/fail/on_event_on_unset.rs:7:28
+  |
+7 |     let _ = live2d(&model).on_event(|_| ());
+  |                            ^^^^^^^^
+  |
+ ::: src/widget.rs
+  |
+  | pub struct Unset;
+  | ---------------- doesn't satisfy `Unset: InputMode`
+  |
+  = note: the following trait bounds were not satisfied:
+          `Unset: InputMode`

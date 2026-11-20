@@ -2,7 +2,8 @@
 //!
 //! One [`Live2dAsset`] per file, one [`Live2dModel`] per instance, and a
 //! [`live2d`] widget that borrows the model. The host decides what plays and reacts
-//! to [`Live2dEvent`]s; the component has no policy of its own.
+//! to [`ModelEvent`]s and [`RawInput`] / [`GestureInput`]; the component has no
+//! policy of its own.
 //!
 //! ```text
 //! let asset = Live2dAsset::new("Hiyori.model3.json", AssetOptions::default());
@@ -27,7 +28,7 @@ mod widget;
 pub mod look_at;
 pub mod raw;
 
-pub use event::{Associated, GestureEvent, Live2dEvent, LoadFailure, Problem, RawEvent};
+pub use event::{Associated, GestureInput, LoadFailure, ModelEvent, Problem, RawInput};
 pub use interaction::{
     Cancelled, Drag, Dragging, Gesture, Gestures, Hover, Hovering, Moving, Pointer, PointerEvent,
     Pointing, Sample, Scrolling, Tap,
@@ -36,7 +37,10 @@ pub use interface::{Interface, InterfaceSpec, KeyId, MissingNames, Vocabulary, V
 pub use look_at::LookAtSource;
 pub use model::{Live2dAsset, Live2dId, Live2dModel, Parameters, Parts};
 pub use raw::{Raw, RawExpression, RawHitArea, RawKey, RawMotion, RawParameter, RawPart};
-pub use widget::{GestureMode, Live2d, Live2dState, Mode, RawMode, Unset, live2d};
+pub use widget::{
+    AcceptsSpecific, CatchAllInput, GestureMode, InputMode, Live2d, Live2dState, Mode,
+    NoInputHandler, RawMode, SpecificInput, Unset, live2d,
+};
 
 /// Derives [`Vocabulary`] for a fieldless enum. Behind the `macros` feature, off by
 /// default. See [`Vocabulary`] for what is generated.
@@ -52,6 +56,7 @@ pub use live2d_render::{
 /// Compile-time check that events may cross the render-to-UI channel.
 const _: fn() = || {
     fn assert_send<T: Send>() {}
-    assert_send::<RawEvent<raw::Raw>>();
+    assert_send::<RawInput<raw::Raw>>();
+    assert_send::<ModelEvent<raw::Raw>>();
     assert_send::<Problem>();
 };

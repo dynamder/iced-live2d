@@ -24,8 +24,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, container, row, text};
 use iced::{Element, Fill, Length, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, GestureEvent, GestureMode, Gestures, Hover, Live2d, Live2dAsset, Live2dEvent,
-    Live2dId, Live2dModel, ModelOptions, MotionClipIndex, MotionEnd, Raw, live2d, raw,
+    AssetOptions, GestureMode, Gestures, Hover, Live2d, Live2dAsset, Live2dId, Live2dModel,
+    ModelEvent, ModelOptions, MotionClipIndex, MotionEnd, Raw, SpecificInput, live2d, raw,
 };
 
 fn main() -> iced::Result {
@@ -63,7 +63,7 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(GestureEvent<Raw>),
+    Live2d(ModelEvent<Raw>),
     Petted {
         model: Live2dId,
         what: String,
@@ -122,7 +122,7 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Live2d(event) => self.on_event(event),
+            Message::Live2d(event) => self.on_model(event),
 
             Message::Petted { model, what } | Message::Hovered { model, what } => {
                 self.report(model, &what);
@@ -210,12 +210,12 @@ impl App {
             .map_or(0, |index| index + 1)
     }
 
-    fn on_event(&mut self, event: GestureEvent<Raw>) {
+    fn on_model(&mut self, event: ModelEvent<Raw>) {
         let model = event.model();
         let label = self.label(model);
 
         match &event {
-            Live2dEvent::ModelLoaded { info, .. } => {
+            ModelEvent::Loaded { info, .. } => {
                 if let Some(group) = raw::motions(info).into_iter().next()
                     && let Some(pane) = self.panes.get(&model)
                 {
@@ -224,18 +224,18 @@ impl App {
 
                 self.last = format!("model {label} loaded");
             }
-            Live2dEvent::ModelFailedToLoad { failure, .. } => {
+            ModelEvent::FailedToLoad { failure, .. } => {
                 self.last = format!("model {label} failed to load: {failure}");
                 eprintln!("{}", self.last);
             }
-            Live2dEvent::ModelReportedProblem { problem, .. } => {
+            ModelEvent::Problem { problem, .. } => {
                 self.last = format!("model {label}: {problem}");
                 eprintln!("{}", self.last);
             }
-            Live2dEvent::MotionStarted { group, .. } => {
+            ModelEvent::MotionStarted { group, .. } => {
                 self.last = format!("model {label} started {}", group.name());
             }
-            Live2dEvent::MotionEnded {
+            ModelEvent::MotionEnded {
                 group,
                 ended: MotionEnd::Completed,
                 ..
@@ -244,10 +244,9 @@ impl App {
                     pane.model.play_random_motion(group.clone());
                 }
             }
-            Live2dEvent::MotionEnded { group, .. } => {
+            ModelEvent::MotionEnded { group, .. } => {
                 self.last = format!("model {label} interrupted {}", group.name());
             }
-            Live2dEvent::Input(_) => {}
         }
     }
 
@@ -271,11 +270,11 @@ impl App {
 }
 
 /// The widget is rebuilt every frame, so every hook is bound here.
-fn widget(pane: &Pane) -> Live2d<'_, Message, Raw, GestureMode> {
+fn widget(pane: &Pane) -> Live2d<'_, Message, Raw, GestureMode, SpecificInput> {
     live2d(&pane.model)
         .fill(pane.fill)
         .gestures(Gestures::default())
-        .on_event(Message::Live2d)
+        .on_model_event(Message::Live2d)
         .cursor(|hover| match hover {
             Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
             Hover { area: Some(_), .. } => mouse::Interaction::Pointer,

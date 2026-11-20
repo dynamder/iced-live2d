@@ -91,6 +91,15 @@ pub(crate) enum PointerEventKind {
 /// widget turns these [`KeyId`]s back into typed keys.
 #[derive(Debug, Clone)]
 pub(crate) enum PipelineEvent {
+    /// A model event, broadcast to every widget drawing the model.
+    Model(ModelEventKind),
+    /// A pointer event, delivered to the widget whose view produced it.
+    Pointer(PointerEventKind),
+}
+
+/// A model event before the widget types its keys.
+#[derive(Debug, Clone)]
+pub(crate) enum ModelEventKind {
     Loaded {
         info: Arc<ModelInfo>,
     },
@@ -109,7 +118,6 @@ pub(crate) enum PipelineEvent {
         clip: MotionClipIndex,
         ended: MotionEnd,
     },
-    Pointer(PointerEventKind),
 }
 
 /// Something the host asked the model to do, reduced to vocabulary indices.
@@ -382,9 +390,9 @@ impl Live2dPipeline {
         pending.render_failures.insert(model, message);
         pending.events.push((
             model,
-            PipelineEvent::Problem(Problem::Renderer {
+            PipelineEvent::Model(ModelEventKind::Problem(Problem::Renderer {
                 error: Arc::new(error),
-            }),
+            })),
         ));
     }
 
@@ -706,12 +714,12 @@ fn register(slot: &mut ModelSlot, events: Option<&Sender<PipelineEvent>>) {
     }
 
     let event = match &slot.state {
-        ModelState::Ready(ready) => PipelineEvent::Loaded {
+        ModelState::Ready(ready) => PipelineEvent::Model(ModelEventKind::Loaded {
             info: Arc::clone(ready.model.info()),
-        },
-        ModelState::Failed(failure) => PipelineEvent::LoadFailed {
+        }),
+        ModelState::Failed(failure) => PipelineEvent::Model(ModelEventKind::LoadFailed {
             failure: failure.clone(),
-        },
+        }),
     };
 
     let _ = events.send(event);
@@ -801,7 +809,10 @@ fn reconcile(
     }
 
     for problem in &inputs.problems {
-        broadcast(listeners, PipelineEvent::Problem(problem.clone()));
+        broadcast(
+            listeners,
+            PipelineEvent::Model(ModelEventKind::Problem(problem.clone())),
+        );
     }
 
     let mut cost = Cost::default();
@@ -851,12 +862,12 @@ fn reconcile(
         match motion_key(primitive.asset, info, &ready.mapping, started.group) {
             Some(group) => broadcast(
                 listeners,
-                PipelineEvent::MotionStarted {
+                PipelineEvent::Model(ModelEventKind::MotionStarted {
                     group,
                     clip: started.clip,
                     duration: started.duration,
                     looping: started.looping,
-                },
+                }),
             ),
             None => vocabulary_problem("motion", started.group.get(), listeners),
         }
@@ -866,11 +877,11 @@ fn reconcile(
         match motion_key(primitive.asset, info, &ready.mapping, ended.group) {
             Some(group) => broadcast(
                 listeners,
-                PipelineEvent::MotionEnded {
+                PipelineEvent::Model(ModelEventKind::MotionEnded {
                     group,
                     clip: ended.clip,
                     ended: ended.reason,
-                },
+                }),
             ),
             None => vocabulary_problem("motion", ended.group.get(), listeners),
         }
@@ -1134,9 +1145,9 @@ fn report(
 
     broadcast(
         listeners,
-        PipelineEvent::Problem(Problem::Renderer {
+        PipelineEvent::Model(ModelEventKind::Problem(Problem::Renderer {
             error: Arc::new(error),
-        }),
+        })),
     );
 }
 
@@ -1147,7 +1158,10 @@ fn vocabulary_problem(
 ) {
     broadcast(
         listeners,
-        PipelineEvent::Problem(Problem::Vocabulary { vocabulary, index }),
+        PipelineEvent::Model(ModelEventKind::Problem(Problem::Vocabulary {
+            vocabulary,
+            index,
+        })),
     );
 }
 
@@ -1266,7 +1280,9 @@ mod tests {
     use super::*;
 
     fn problem() -> PipelineEvent {
-        PipelineEvent::Problem(Problem::CommandQueueOverflow { dropped: 1 })
+        PipelineEvent::Model(ModelEventKind::Problem(Problem::CommandQueueOverflow {
+            dropped: 1,
+        }))
     }
 
     #[test]

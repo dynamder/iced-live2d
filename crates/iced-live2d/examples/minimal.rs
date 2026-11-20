@@ -1,6 +1,6 @@
 //! Two models in one window, driven through the `Raw` interface: any model works
 //! without declaring an interface first, and keys are minted from the `ModelInfo`
-//! a `ModelLoaded` event carries.
+//! a `Loaded` event carries.
 //!
 //! This example stays on the **raw** vocabulary: every press, release, drag, hover and
 //! scroll is printed with the instant it happened, so a double click shows up as two
@@ -17,6 +17,9 @@
 //!
 //! Every event carries a [`Live2dId`], so the models are keyed by it and no
 //! position in a `Vec` has to be tracked through events.
+//!
+//! The widget reports model events and interaction separately: `on_model_event`
+//! receives the former, `on_event` every raw pointer event.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -26,8 +29,8 @@ use iced::advanced::Widget as _;
 use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Hover, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo, ModelOptions,
-    MotionClipIndex, MotionEnd, Raw, RawEvent, live2d, look_at, raw,
+    AssetOptions, Hover, Live2dAsset, Live2dId, Live2dModel, ModelEvent, ModelInfo, ModelOptions,
+    MotionClipIndex, MotionEnd, Raw, RawInput, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -70,7 +73,8 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(RawEvent<Raw>),
+    Live2d(ModelEvent<Raw>),
+    Input(RawInput<Raw>),
     Key(keyboard::Event),
 }
 
@@ -110,7 +114,8 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Live2d(event) => self.on_event(event),
+            Message::Live2d(event) => self.on_model(event),
+            Message::Input(input) => self.on_input(input),
             Message::Key(keyboard::Event::KeyPressed {
                 text: Some(text),
                 repeat: false,
@@ -141,7 +146,9 @@ impl App {
                 .values()
                 .map(|slot| {
                     live2d(&slot.model)
-                        .on_event(Message::Live2d)
+                        .raw()
+                        .on_event(Message::Input)
+                        .on_model_event(Message::Live2d)
                         .look_at(look_at::cursor)
                         .cursor(|hover| match hover {
                             Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
@@ -171,12 +178,19 @@ impl App {
             .map_or(0, |index| index + 1)
     }
 
-    fn on_event(&mut self, event: RawEvent<Raw>) {
+    fn on_input(&mut self, input: RawInput<Raw>) {
+        let status = format!("model {} pointer {input:?}", self.label(input.model()));
+
+        println!("{status}");
+        self.status = status;
+    }
+
+    fn on_model(&mut self, event: ModelEvent<Raw>) {
         let id = event.model();
         let label = self.label(id);
 
         let status = match &event {
-            Live2dEvent::ModelLoaded { info, .. } => {
+            ModelEvent::Loaded { info, .. } => {
                 let start = raw::motions(info).into_iter().next();
 
                 if let Some(slot) = self.slots.get_mut(&id) {
@@ -197,13 +211,13 @@ impl App {
                     info.hit_areas.len(),
                 )
             }
-            Live2dEvent::ModelFailedToLoad { failure, .. } => {
+            ModelEvent::FailedToLoad { failure, .. } => {
                 format!("model {label} failed to load: {failure}")
             }
-            Live2dEvent::ModelReportedProblem { problem, .. } => {
+            ModelEvent::Problem { problem, .. } => {
                 format!("model {label}: {problem}")
             }
-            Live2dEvent::MotionStarted {
+            ModelEvent::MotionStarted {
                 group,
                 clip,
                 duration,
@@ -214,7 +228,7 @@ impl App {
                 group.name(),
                 clip
             ),
-            Live2dEvent::MotionEnded {
+            ModelEvent::MotionEnded {
                 group,
                 clip,
                 ended: MotionEnd::Completed,
@@ -227,10 +241,9 @@ impl App {
 
                 format!("model {label} finished {} #{}", group.name(), clip)
             }
-            Live2dEvent::MotionEnded { group, clip, .. } => {
+            ModelEvent::MotionEnded { group, clip, .. } => {
                 format!("model {label} interrupted {} #{}", group.name(), clip)
             }
-            Live2dEvent::Input(input) => format!("model {label} pointer {input:?}"),
         };
 
         println!("{status}");

@@ -1,10 +1,10 @@
 //! What the component tells the host.
 //!
-//! Two kinds of thing arrive here, and they are different types on purpose: what the
-//! *model* says (loaded, failed, problems, motions) and what the *pointer* did. The
-//! second one depends on the widget's vocabulary — raw facts or classified gestures —
-//! so a widget reports `Live2dEvent<I, PointerEvent<I::HitArea>>` or
-//! `Live2dEvent<I, Gesture<I::HitArea>>` and never both.
+//! Model events and interaction events are different types on purpose. What the
+//! *model* says — loaded, failed, problems, motions — is the same whatever
+//! vocabulary the widget reports, so [`ModelEvent`] carries no input parameter.
+//! What the *pointer* did depends on that vocabulary: [`RawInput`] is a stream of
+//! pointer facts, [`GestureInput`] a stream of classified gestures.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -16,16 +16,16 @@ use crate::interaction::{Gesture, PointerEvent};
 use crate::interface::{Interface, MissingNames};
 use crate::model::Live2dId;
 
-/// Something the component wants the host to know, delivered one frame late.
+/// Something one model did, delivered one frame late.
 ///
 /// Events are **per model**, not per widget: two widgets drawing one model both
 /// receive all of them, and the second still receives the load result.
-pub enum Live2dEvent<I: Interface, In> {
+pub enum ModelEvent<I: Interface> {
     /// The model is loaded, its interface validated, and drawn from this frame on.
     ///
     /// `info` is the asset's own description, and the identity raw keys are minted
     /// with.
-    ModelLoaded {
+    Loaded {
         /// Which model.
         model: Live2dId,
         /// What the model exposes.
@@ -34,7 +34,7 @@ pub enum Live2dEvent<I: Interface, In> {
     /// The model could not be loaded, or lacks what the interface names. It is not
     /// retried; the widget keeps reserving its space, so a host that wants the
     /// layout to collapse has to stop showing it.
-    ModelFailedToLoad {
+    FailedToLoad {
         /// Which model.
         model: Live2dId,
         /// Which path failed, and why.
@@ -42,7 +42,7 @@ pub enum Live2dEvent<I: Interface, In> {
     },
     /// Playback continues, but not the way the model file asked for. A cause that
     /// repeats every frame is reported once.
-    ModelReportedProblem {
+    Problem {
         /// Which model.
         model: Live2dId,
         /// What went wrong.
@@ -76,32 +76,117 @@ pub enum Live2dEvent<I: Interface, In> {
         /// Whether it reached its own end or was stopped.
         ended: MotionEnd,
     },
-    /// The pointer did something, in the widget's vocabulary.
-    Input(In),
 }
 
-/// Everything one raw widget reports: the model's own events and raw pointer events.
-pub type RawEvent<I> = Live2dEvent<I, PointerEvent<<I as Interface>::HitArea>>;
-
-/// Everything one classified widget reports: the model's own events and gestures.
-pub type GestureEvent<I> = Live2dEvent<I, Gesture<<I as Interface>::HitArea>>;
-
-impl<I: Interface, In> Live2dEvent<I, In> {
+impl<I: Interface> ModelEvent<I> {
     /// Which model this is about.
-    pub fn model(&self) -> Live2dId
-    where
-        In: Associated,
-    {
+    pub fn model(&self) -> Live2dId {
         match self {
-            Live2dEvent::ModelLoaded { model, .. }
-            | Live2dEvent::ModelFailedToLoad { model, .. }
-            | Live2dEvent::ModelReportedProblem { model, .. }
-            | Live2dEvent::MotionStarted { model, .. }
-            | Live2dEvent::MotionEnded { model, .. } => *model,
-            Live2dEvent::Input(input) => input.model(),
+            ModelEvent::Loaded { model, .. }
+            | ModelEvent::FailedToLoad { model, .. }
+            | ModelEvent::Problem { model, .. }
+            | ModelEvent::MotionStarted { model, .. }
+            | ModelEvent::MotionEnded { model, .. } => *model,
         }
     }
 }
+
+impl<I: Interface> Clone for ModelEvent<I> {
+    fn clone(&self) -> Self {
+        match self {
+            ModelEvent::Loaded { model, info } => ModelEvent::Loaded {
+                model: *model,
+                info: Arc::clone(info),
+            },
+            ModelEvent::FailedToLoad { model, failure } => ModelEvent::FailedToLoad {
+                model: *model,
+                failure: failure.clone(),
+            },
+            ModelEvent::Problem { model, problem } => ModelEvent::Problem {
+                model: *model,
+                problem: problem.clone(),
+            },
+            ModelEvent::MotionStarted {
+                model,
+                group,
+                clip,
+                duration,
+                looping,
+            } => ModelEvent::MotionStarted {
+                model: *model,
+                group: group.clone(),
+                clip: *clip,
+                duration: *duration,
+                looping: *looping,
+            },
+            ModelEvent::MotionEnded {
+                model,
+                group,
+                clip,
+                ended,
+            } => ModelEvent::MotionEnded {
+                model: *model,
+                group: group.clone(),
+                clip: *clip,
+                ended: *ended,
+            },
+        }
+    }
+}
+
+impl<I: Interface> fmt::Debug for ModelEvent<I> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ModelEvent::Loaded { model, info } => formatter
+                .debug_struct("Loaded")
+                .field("model", model)
+                .field("info", info)
+                .finish(),
+            ModelEvent::FailedToLoad { model, failure } => formatter
+                .debug_struct("FailedToLoad")
+                .field("model", model)
+                .field("failure", failure)
+                .finish(),
+            ModelEvent::Problem { model, problem } => formatter
+                .debug_struct("Problem")
+                .field("model", model)
+                .field("problem", problem)
+                .finish(),
+            ModelEvent::MotionStarted {
+                model,
+                group,
+                clip,
+                duration,
+                looping,
+            } => formatter
+                .debug_struct("MotionStarted")
+                .field("model", model)
+                .field("group", group)
+                .field("clip", clip)
+                .field("duration", duration)
+                .field("looping", looping)
+                .finish(),
+            ModelEvent::MotionEnded {
+                model,
+                group,
+                clip,
+                ended,
+            } => formatter
+                .debug_struct("MotionEnded")
+                .field("model", model)
+                .field("group", group)
+                .field("clip", clip)
+                .field("ended", ended)
+                .finish(),
+        }
+    }
+}
+
+/// Everything a widget reports as raw input.
+pub type RawInput<I> = PointerEvent<<I as Interface>::HitArea>;
+
+/// Everything a widget reports as classified input.
+pub type GestureInput<I> = Gesture<<I as Interface>::HitArea>;
 
 /// Anything an input payload can be asked of.
 pub trait Associated {
@@ -118,101 +203,6 @@ impl<A> Associated for PointerEvent<A> {
 impl<A> Associated for Gesture<A> {
     fn model(&self) -> Live2dId {
         Gesture::model(self)
-    }
-}
-
-impl<I: Interface, In: Clone> Clone for Live2dEvent<I, In> {
-    fn clone(&self) -> Self {
-        match self {
-            Live2dEvent::ModelLoaded { model, info } => Live2dEvent::ModelLoaded {
-                model: *model,
-                info: Arc::clone(info),
-            },
-            Live2dEvent::ModelFailedToLoad { model, failure } => Live2dEvent::ModelFailedToLoad {
-                model: *model,
-                failure: failure.clone(),
-            },
-            Live2dEvent::ModelReportedProblem { model, problem } => {
-                Live2dEvent::ModelReportedProblem {
-                    model: *model,
-                    problem: problem.clone(),
-                }
-            }
-            Live2dEvent::MotionStarted {
-                model,
-                group,
-                clip,
-                duration,
-                looping,
-            } => Live2dEvent::MotionStarted {
-                model: *model,
-                group: group.clone(),
-                clip: *clip,
-                duration: *duration,
-                looping: *looping,
-            },
-            Live2dEvent::MotionEnded {
-                model,
-                group,
-                clip,
-                ended,
-            } => Live2dEvent::MotionEnded {
-                model: *model,
-                group: group.clone(),
-                clip: *clip,
-                ended: *ended,
-            },
-            Live2dEvent::Input(input) => Live2dEvent::Input(input.clone()),
-        }
-    }
-}
-
-impl<I: Interface, In: fmt::Debug> fmt::Debug for Live2dEvent<I, In> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Live2dEvent::ModelLoaded { model, info } => formatter
-                .debug_struct("ModelLoaded")
-                .field("model", model)
-                .field("info", info)
-                .finish(),
-            Live2dEvent::ModelFailedToLoad { model, failure } => formatter
-                .debug_struct("ModelFailedToLoad")
-                .field("model", model)
-                .field("failure", failure)
-                .finish(),
-            Live2dEvent::ModelReportedProblem { model, problem } => formatter
-                .debug_struct("ModelReportedProblem")
-                .field("model", model)
-                .field("problem", problem)
-                .finish(),
-            Live2dEvent::MotionStarted {
-                model,
-                group,
-                clip,
-                duration,
-                looping,
-            } => formatter
-                .debug_struct("MotionStarted")
-                .field("model", model)
-                .field("group", group)
-                .field("clip", clip)
-                .field("duration", duration)
-                .field("looping", looping)
-                .finish(),
-            Live2dEvent::MotionEnded {
-                model,
-                group,
-                clip,
-                ended,
-            } => formatter
-                .debug_struct("MotionEnded")
-                .field("model", model)
-                .field("group", group)
-                .field("clip", clip)
-                .field("ended", ended)
-                .finish(),
-            Live2dEvent::Input(input) => formatter.debug_tuple("Input").field(input).finish(),
-        }
     }
 }
 
@@ -270,6 +260,12 @@ pub enum Problem {
         /// How many commands were dropped.
         dropped: usize,
     },
+    /// More than 64 interaction events were queued before the host took them. The
+    /// oldest were dropped, keeping the latest position of each pointer.
+    EventQueueOverflow {
+        /// How many events were dropped.
+        dropped: usize,
+    },
     /// A key minted from one asset was handed to a model of another. It was
     /// rejected, and is reported once per distinct name.
     ForeignKey {
@@ -295,6 +291,10 @@ impl fmt::Display for Problem {
             Problem::CommandQueueOverflow { dropped } => write!(
                 formatter,
                 "dropped {dropped} command(s): the render layer is behind the host"
+            ),
+            Problem::EventQueueOverflow { dropped } => write!(
+                formatter,
+                "dropped {dropped} event(s): the host is behind the widget"
             ),
             Problem::ForeignKey { vocabulary, name } => write!(
                 formatter,
@@ -330,7 +330,7 @@ mod tests {
         let model = Live2dId::unique();
         let asset = live2d_render::AssetId::unique();
 
-        let pointer = RawEvent::<Raw>::Input(PointerEvent::Moved(Moving {
+        let pointer = RawInput::<Raw>::Moved(Moving {
             model,
             at: Sample {
                 pixels: iced::Point::ORIGIN,
@@ -338,8 +338,8 @@ mod tests {
                 model: [0.0, 0.0],
             },
             when: Instant::now(),
-        }));
-        let started = RawEvent::<Raw>::MotionStarted {
+        });
+        let started = ModelEvent::<Raw>::MotionStarted {
             model,
             group: motion(asset),
             clip: MotionClipIndex::new(0),

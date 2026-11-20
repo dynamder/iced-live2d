@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use iced::{Fill, Subscription, Task, Widget, keyboard, mouse, window};
 use iced_live2d::{
-    AssetOptions, Fade, GestureEvent, Gestures, Hover, Live2dAsset, Live2dEvent, Live2dModel,
+    AssetOptions, Fade, GestureInput, Gestures, Hover, Live2dAsset, Live2dModel, ModelEvent,
     ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, Raw, live2d, look_at, raw,
 };
 
@@ -62,7 +62,8 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Live2d(GestureEvent<Raw>),
+    Live2d(ModelEvent<Raw>),
+    Input(GestureInput<Raw>),
     NextMotion,
     NextExpression,
     ClearExpressions,
@@ -97,6 +98,7 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Live2d(event) => self.report(event),
+            Message::Input(input) => println!("live2d: gesture: {input:?}"),
             Message::NextMotion => self.next_motion(),
             Message::NextExpression => self.next_expression(),
             Message::ClearExpressions => self.model.clear_expressions(),
@@ -112,7 +114,8 @@ impl App {
         live2d(&self.model)
             // The vocabulary first: it decides the event type the closure below sees.
             .gestures(Gestures::default())
-            .on_event(Message::Live2d)
+            .on_event(Message::Input)
+            .on_model_event(Message::Live2d)
             .look_at(look_at::cursor)
             .cursor(|hover| match hover {
                 Hover { pressed: true, .. } => mouse::Interaction::Grabbing,
@@ -143,9 +146,9 @@ impl App {
         })
     }
 
-    fn report(&mut self, event: GestureEvent<Raw>) {
+    fn report(&mut self, event: ModelEvent<Raw>) {
         match &event {
-            Live2dEvent::ModelLoaded { info, .. } => {
+            ModelEvent::Loaded { info, .. } => {
                 self.info = Some(Arc::clone(info));
 
                 println!(
@@ -163,11 +166,11 @@ impl App {
                     self.model.play_motion(group, MotionClipIndex::new(0));
                 }
             }
-            Live2dEvent::ModelFailedToLoad { failure, .. } => {
+            ModelEvent::FailedToLoad { failure, .. } => {
                 eprintln!("live2d: failed to load {failure}");
             }
-            Live2dEvent::ModelReportedProblem { problem, .. } => eprintln!("live2d: {problem}"),
-            Live2dEvent::MotionStarted {
+            ModelEvent::Problem { problem, .. } => eprintln!("live2d: {problem}"),
+            ModelEvent::MotionStarted {
                 group,
                 clip,
                 duration,
@@ -178,7 +181,7 @@ impl App {
                 group.name(),
                 clip
             ),
-            Live2dEvent::MotionEnded {
+            ModelEvent::MotionEnded {
                 group, clip, ended, ..
             } => {
                 println!(
@@ -203,7 +206,6 @@ impl App {
                     );
                 }
             }
-            Live2dEvent::Input(input) => println!("live2d: gesture: {input:?}"),
         }
     }
 
