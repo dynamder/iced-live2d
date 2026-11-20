@@ -254,6 +254,12 @@ pub enum Problem {
         /// What went wrong. Shared so events stay cloneable.
         error: Arc<Error>,
     },
+    /// The asset loaded, but something in it did not: a sidecar it could not read,
+    /// a physics file it could not parse. Drawing continues.
+    Asset {
+        /// What was skipped. Shared so events stay cloneable.
+        error: Arc<Error>,
+    },
     /// More than 64 commands were queued before the render layer took them. The
     /// oldest were dropped.
     CommandQueueOverflow {
@@ -269,7 +275,8 @@ pub enum Problem {
     /// A key minted from one asset was handed to a model of another. It was
     /// rejected, and is reported once per distinct name.
     ForeignKey {
-        /// Which vocabulary the key belongs to: `"parameter"` or `"part"`.
+        /// Which vocabulary the key belongs to: `"parameter"`, `"part"`,
+        /// `"motion"` or `"expression"`.
         vocabulary: &'static str,
         /// The key's name in its own model.
         name: String,
@@ -287,7 +294,7 @@ pub enum Problem {
 impl fmt::Display for Problem {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Problem::Renderer { error } => write!(formatter, "{error}"),
+            Problem::Renderer { error } | Problem::Asset { error } => write!(formatter, "{error}"),
             Problem::CommandQueueOverflow { dropped } => write!(
                 formatter,
                 "dropped {dropped} command(s): the render layer is behind the host"

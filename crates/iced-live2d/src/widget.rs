@@ -411,7 +411,7 @@ impl<'a, Message, I: Interface, M: Mode, H: HandlerState> Live2d<'a, Message, I,
     /// inside the widget or not.
     ///
     /// Returns whether the event needs a frame, which is also true while the model
-    /// is paused: a frozen model still has a pose to hit-test.
+    /// is frozen: it still has a pose to hit-test.
     fn queue_input(
         &self,
         state: &mut Live2dState<I, M>,
@@ -1146,7 +1146,7 @@ impl<Message, I: Interface, M: Plumbing, H: HandlerState> shader::Program<Messag
         let mut next_frame = None::<Instant>;
 
         if let iced::Event::Window(window::Event::RedrawRequested(at)) = event
-            && !self.model.is_paused()
+            && !self.model.is_frozen()
         {
             next_frame = Some(*at + REDRAW_LEAD);
         }
@@ -1228,7 +1228,7 @@ impl<Message, I: Interface, M: Plumbing, H: HandlerState> shader::Program<Messag
                 fade: model.fade(),
                 fade_limit: model.fade_limit(),
                 physics_enabled: model.physics_enabled(),
-                paused: model.paused(),
+                frozen: model.frozen(),
                 cursor: inside,
                 position: observing.then(|| cursor.position()).flatten(),
                 pointer: state.pointer.borrow_mut().drain(..).collect(),

@@ -114,7 +114,7 @@ pub(crate) struct Inner<I: Interface> {
     look_at_mode: Cell<LookAtMode>,
     fade: Cell<Option<Fade>>,
     fade_limit: Cell<Option<usize>>,
-    paused: Cell<bool>,
+    frozen: Cell<bool>,
     physics_enabled: Cell<bool>,
     /// The view that currently owns the pointer, if any. A `Weak` so a widget
     /// leaving the tree does not keep the model alive.
@@ -227,7 +227,7 @@ impl<I: Interface> Live2dModel<I> {
                 look_at_mode: Cell::new(LookAtMode::default()),
                 fade: Cell::new(None),
                 fade_limit: Cell::new(None),
-                paused: Cell::new(false),
+                frozen: Cell::new(false),
                 physics_enabled: Cell::new(true),
                 focus: RefCell::new(None),
                 problems: RefCell::new(Vec::new()),
@@ -344,21 +344,24 @@ impl<I: Interface> Live2dModel<I> {
         self.inner.fade_limit.get()
     }
 
-    /// Stops time — a **total freeze**: no motion, no physics, no pointer events,
-    /// and the widget stops asking for frames. To stop only the motion, use
+    /// Stops the clock: no step, no deform, no upload, and the widget stops asking
+    /// for frames.
+    ///
+    /// Input keeps arriving and hit-testing keeps working against the last pose, so
+    /// a frozen model can still be poked. To stop only the motion, use
     /// [`Live2dModel::stop_motion`].
-    pub fn pause(&self) {
-        self.inner.paused.set(true);
+    pub fn freeze(&self) {
+        self.inner.frozen.set(true);
     }
 
-    /// Restarts time after [`Live2dModel::pause`].
+    /// Restarts the clock after [`Live2dModel::freeze`].
     pub fn resume(&self) {
-        self.inner.paused.set(false);
+        self.inner.frozen.set(false);
     }
 
-    /// Whether time is stopped.
-    pub fn is_paused(&self) -> bool {
-        self.inner.paused.get()
+    /// Whether the clock is stopped.
+    pub fn is_frozen(&self) -> bool {
+        self.inner.frozen.get()
     }
 
     /// Turns physics evaluation on or off, for a still frame or a diagnostic A/B.
@@ -376,18 +379,33 @@ impl<I: Interface> Live2dModel<I> {
     /// An out-of-range pair is reported as a
     /// [`Problem::Renderer`](crate::Problem::Renderer), not ignored.
     pub fn play_motion(&self, group: I::Motion, clip: MotionClipIndex) {
+        if !self.inner.accepts(group.asset(), "motion", group.name()) {
+            return;
+        }
+
         self.inner.push_command(Command::PlayMotion { group, clip });
     }
 
     /// Plays a random clip of `group` — the usual way to pick an idle clip when one
     /// finishes. The component has no idle policy of its own.
     pub fn play_random_motion(&self, group: I::Motion) {
+        if !self.inner.accepts(group.asset(), "motion", group.name()) {
+            return;
+        }
+
         self.inner.push_command(Command::PlayRandomMotion { group });
     }
 
     /// Applies an expression on top of the motion. Applying the same one twice
     /// restarts it.
     pub fn play_expression(&self, expression: I::Expression) {
+        if !self
+            .inner
+            .accepts(expression.asset(), "expression", expression.name())
+        {
+            return;
+        }
+
         self.inner
             .push_command(Command::PlayExpression { expression });
     }
@@ -622,8 +640,8 @@ impl<I: Interface> Inner<I> {
         self.look_at.get()
     }
 
-    pub(crate) fn paused(&self) -> bool {
-        self.paused.get()
+    pub(crate) fn frozen(&self) -> bool {
+        self.frozen.get()
     }
 
     pub(crate) fn look_at_mode(&self) -> LookAtMode {
@@ -806,6 +824,34 @@ mod tests {
     }
 
     #[test]
+    fn a_motion_key_from_another_asset_is_rejected_before_it_is_queued() {
+        let own = asset();
+        let model = Live2dModel::<Raw>::new(&own, ModelOptions::default());
+        let foreign = RawMotion::from_id(&crate::interface::KeyId {
+            asset: AssetId::unique(),
+            index: 0,
+            name: Arc::from("Idle"),
+        })
+        .expect("a raw key");
+
+        model.play_motion(foreign.clone(), MotionClipIndex::new(0));
+        model.play_random_motion(foreign);
+
+        assert!(model.inner.drain_commands().is_empty());
+
+        let problems = model.inner.take_problems();
+
+        assert_eq!(problems.len(), 1);
+        assert!(matches!(
+            problems.first(),
+            Some(Problem::ForeignKey {
+                vocabulary: "motion",
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn a_key_from_the_same_asset_is_accepted() {
         let asset = Live2dAsset::new("model.model3.json", AssetOptions::default());
         let model = Live2dModel::<Raw>::new(&asset, ModelOptions::default());
@@ -880,19 +926,19 @@ mod tests {
     }
 
     #[test]
-    fn pause_and_physics_are_readable_back() {
+    fn freeze_and_physics_are_readable_back() {
         let model = Live2dModel::<Raw>::new(&asset(), ModelOptions::default());
 
-        model.pause();
+        model.freeze();
         model.set_physics_enabled(false);
 
-        assert!(model.is_paused());
+        assert!(model.is_frozen());
         assert!(!model.physics_enabled());
 
         model.resume();
         model.set_physics_enabled(true);
 
-        assert!(!model.is_paused());
+        assert!(!model.is_frozen());
         assert!(model.physics_enabled());
     }
 

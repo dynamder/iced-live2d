@@ -1,7 +1,7 @@
 //! Which stage a parameter write reaches physics at.
 //!
 //! ```text
-//! cargo run -p live2d-render --example policy -- \
+//! cargo run -p live2d-render --example policy-render -- \
 //!     "path/to/model.model3.json" ParamMouthOpenY 0.8 auto
 //! ```
 //!

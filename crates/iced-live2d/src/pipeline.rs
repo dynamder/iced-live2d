@@ -161,7 +161,7 @@ pub(crate) struct FrameInputs {
     pub(crate) fade: Option<Fade>,
     pub(crate) fade_limit: Option<usize>,
     pub(crate) physics_enabled: bool,
-    pub(crate) paused: bool,
+    pub(crate) frozen: bool,
     /// Where the cursor is, in window pixels, when it is over the widget.
     pub(crate) cursor: Option<Point>,
     /// Where the pointer is, in window pixels, inside the widget or not: a drag
@@ -519,6 +519,8 @@ struct Ready {
     last_problem: Option<String>,
     parameters: Vec<(usize, ParameterWrite)>,
     parts: Vec<(usize, f32)>,
+    /// Asset problems found while loading, reported on registration.
+    issues: Vec<Arc<Error>>,
 }
 
 /// Parses the asset if needed, then validates this model's interface against it
@@ -576,8 +578,9 @@ fn build_model(
             };
 
             match prepared.upload(gpu.renderer, gpu.device, gpu.queue, primitive.asset_options) {
-                Ok(asset) => {
-                    let slot = new_ready(primitive, &asset, mapping, presence, gpu);
+                Ok(mut asset) => {
+                    let issues = asset.take_issues().into_iter().map(Arc::new).collect();
+                    let slot = new_ready(primitive, &asset, mapping, presence, gpu, issues);
                     assets.insert(
                         primitive.asset,
                         AssetSlot {
@@ -625,7 +628,7 @@ fn build_model(
                 }
             };
 
-            let slot = new_ready(primitive, &asset, mapping, presence, gpu);
+            let slot = new_ready(primitive, &asset, mapping, presence, gpu, Vec::new());
             assets.insert(
                 primitive.asset,
                 AssetSlot {
@@ -667,6 +670,7 @@ fn new_ready(
     mapping: Mapping,
     presence: Weak<Presence>,
     gpu: &Gpu<'_>,
+    issues: Vec<Arc<Error>>,
 ) -> ModelSlot {
     let model = asset.model();
 
@@ -698,6 +702,7 @@ fn new_ready(
             last_problem: None,
             parameters: Vec::new(),
             parts: Vec::new(),
+            issues,
         })),
     }
 }
@@ -723,6 +728,16 @@ fn register(slot: &mut ModelSlot, events: Option<&Sender<PipelineEvent>>) {
     };
 
     let _ = events.send(event);
+
+    if let ModelState::Ready(ready) = &slot.state {
+        for issue in &ready.issues {
+            let _ = events.send(PipelineEvent::Model(ModelEventKind::Problem(
+                Problem::Asset {
+                    error: Arc::clone(issue),
+                },
+            )));
+        }
+    }
 }
 
 /// Records a listener, returning whether it was new.
@@ -768,39 +783,41 @@ fn reconcile(
         .set_look_at_blend(primitive.model_options.look_at_blend);
 
     ready.parameters.clear();
-    ready
-        .parameters
-        .extend(inputs.parameters.iter().filter_map(|&(vocabulary, write)| {
-            ready
-                .mapping
-                .parameter(vocabulary)
-                .map(|index| (index, write))
-        }));
+
+    for &(vocabulary, write) in &inputs.parameters {
+        match ready.mapping.parameter(vocabulary) {
+            Some(index) => ready.parameters.push((index, write)),
+            None => vocabulary_problem("parameter", vocabulary, listeners),
+        }
+    }
+
     ready.model.set_parameters(&ready.parameters);
 
     ready.parts.clear();
-    ready
-        .parts
-        .extend(inputs.parts.iter().filter_map(|&(vocabulary, value)| {
-            ready.mapping.part(vocabulary).map(|index| (index, value))
-        }));
+
+    for &(vocabulary, value) in &inputs.parts {
+        match ready.mapping.part(vocabulary) {
+            Some(index) => ready.parts.push((index, value)),
+            None => vocabulary_problem("part", vocabulary, listeners),
+        }
+    }
+
     ready.model.set_parts(&ready.parts);
 
     for command in &inputs.commands {
         match *command {
-            PrimitiveCommand::PlayMotion { group, clip } => {
-                if let Some(group) = ready.mapping.motion(group) {
-                    ready.model.play_motion(group, clip);
-                }
-            }
-            PrimitiveCommand::PlayRandomMotion { group } => {
-                if let Some(group) = ready.mapping.motion(group) {
-                    ready.model.play_random_motion(group);
-                }
-            }
+            PrimitiveCommand::PlayMotion { group, clip } => match ready.mapping.motion(group) {
+                Some(index) => ready.model.play_motion(index, clip),
+                None => vocabulary_problem("motion", group, listeners),
+            },
+            PrimitiveCommand::PlayRandomMotion { group } => match ready.mapping.motion(group) {
+                Some(index) => ready.model.play_random_motion(index),
+                None => vocabulary_problem("motion", group, listeners),
+            },
             PrimitiveCommand::PlayExpression { expression } => {
-                if let Some(expression) = ready.mapping.expression(expression) {
-                    ready.model.play_expression(expression);
+                match ready.mapping.expression(expression) {
+                    Some(index) => ready.model.play_expression(index),
+                    None => vocabulary_problem("expression", expression, listeners),
                 }
             }
             PrimitiveCommand::StopMotion => ready.model.stop_motion(),
@@ -817,8 +834,8 @@ fn reconcile(
 
     let mut cost = Cost::default();
 
-    if inputs.paused {
-        // Time that passes while paused must not be replayed on resume.
+    if inputs.frozen {
+        // Time that passes while frozen must not be replayed on resume.
         ready.last = None;
     } else {
         let now = Instant::now();
@@ -897,7 +914,7 @@ fn reconcile(
 /// Turns this frame's pointer state into hit tests and pointer events.
 ///
 /// Runs for this view only, so two widgets on one model never see each other's
-/// presses or hover. It also runs while the model is paused: nothing steps, but
+/// presses or hover. It also runs while the model is frozen: nothing steps, but
 /// the pose on screen is still hit-testable.
 ///
 /// Positions are window pixels throughout, so the events do not move when the

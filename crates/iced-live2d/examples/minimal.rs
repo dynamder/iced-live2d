@@ -11,7 +11,7 @@
 //! cargo run -p iced-live2d --example minimal -- <model.model3.json> [<second.model3.json>]
 //! ```
 //!
-//! Keys: `R` random clip of the next group, `E` next expression, `P` pause/resume,
+//! Keys: `R` random clip of the next group, `E` next expression, `P` freeze/resume,
 //! `1`/`2` drop the first/second live model. `LIVE2D_PROFILE=1` prints the
 //! per-frame cost.
 //!
@@ -30,7 +30,7 @@ use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Hover, Live2dAsset, Live2dId, Live2dModel, ModelEvent, ModelInfo, ModelOptions,
-    MotionClipIndex, MotionEnd, Raw, RawInput, live2d, look_at, raw,
+    MotionClipIndex, MotionEnd, Raw, RawInput, Vocabulary, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -67,7 +67,7 @@ struct App {
     /// Keyed by the identity every event carries, so iteration order is creation
     /// order and nothing shifts when one is dropped.
     slots: BTreeMap<Live2dId, Slot>,
-    paused: bool,
+    frozen: bool,
     status: String,
 }
 
@@ -107,7 +107,7 @@ impl App {
 
         Self {
             slots,
-            paused: false,
+            frozen: false,
             status: "waiting for the models to load".to_owned(),
         }
     }
@@ -123,7 +123,7 @@ impl App {
             }) => match text.as_str() {
                 "r" => self.next_motion(),
                 "e" => self.next_expression(),
-                "p" => self.toggle_pause(),
+                "p" => self.toggle_freeze(),
                 "1" => self.drop_nth(0),
                 "2" => self.drop_nth(1),
                 _ => {}
@@ -282,19 +282,19 @@ impl App {
         }
     }
 
-    fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
+    fn toggle_freeze(&mut self) {
+        self.frozen = !self.frozen;
 
         for slot in self.slots.values_mut() {
-            if self.paused {
-                slot.model.pause();
+            if self.frozen {
+                slot.model.freeze();
             } else {
                 slot.model.resume();
             }
         }
 
-        self.status = if self.paused {
-            "paused (nothing steps; pointer events still arrive)".to_owned()
+        self.status = if self.frozen {
+            "frozen (nothing steps; pointer events still arrive)".to_owned()
         } else {
             "running".to_owned()
         };

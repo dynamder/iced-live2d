@@ -324,7 +324,7 @@ mod tests {
     fn info(parameters: &[&str], motions: &[&str]) -> ModelInfo {
         ModelInfo {
             asset: AssetId::unique(),
-            bounds: live2d_render::ModelBounds::new([0.0, 0.0], [1.0, 1.0]),
+            bounds: live2d_render::ModelBounds::try_new([0.0, 0.0], [1.0, 1.0]).expect("a box"),
             parameters: parameters
                 .iter()
                 .map(|name| live2d_render::ParameterRange {

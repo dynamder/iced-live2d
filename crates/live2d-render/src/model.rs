@@ -733,7 +733,7 @@ mod tests {
     fn info(clips: &[usize]) -> ModelInfo {
         ModelInfo {
             asset: crate::AssetId::unique(),
-            bounds: crate::ModelBounds::new([0.0, 0.0], [1.0, 1.0]),
+            bounds: crate::ModelBounds::try_new([0.0, 0.0], [1.0, 1.0]).expect("a box"),
             parameters: Arc::from([]),
             parts: Arc::from([]),
             motions: clips

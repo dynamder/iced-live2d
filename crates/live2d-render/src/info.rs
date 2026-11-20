@@ -139,7 +139,7 @@ mod tests {
     fn info(clips: &[usize]) -> ModelInfo {
         ModelInfo {
             asset: AssetId::unique(),
-            bounds: ModelBounds::new([0.0, 0.0], [1.0, 1.0]),
+            bounds: ModelBounds::try_new([0.0, 0.0], [1.0, 1.0]).expect("a box"),
             parameters: Arc::from([]),
             parts: Arc::from([]),
             motions: clips

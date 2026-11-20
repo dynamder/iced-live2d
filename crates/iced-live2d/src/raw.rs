@@ -92,17 +92,17 @@ impl<T> std::fmt::Debug for RawKey<T> {
 
 impl<T> RawKey<T> {
     /// The model's name for this entry.
-    pub fn name(&self) -> &str {
+    pub fn key_name(&self) -> &str {
         &self.name
     }
 
     /// The model index this key addresses.
-    pub fn index(&self) -> usize {
+    pub fn key_index(&self) -> usize {
         self.index
     }
 
     /// The asset this key belongs to.
-    pub fn asset(&self) -> AssetId {
+    pub fn key_asset(&self) -> AssetId {
         self.asset
     }
 }
@@ -111,11 +111,11 @@ impl<T: 'static> Vocabulary for RawKey<T> {
     const SPEC: VocabularySpec = VocabularySpec::Model;
 
     fn name(&self) -> &str {
-        self.name()
+        self.key_name()
     }
 
     fn index(&self) -> usize {
-        self.index()
+        self.key_index()
     }
 
     fn from_id(id: &KeyId) -> Result<Self, VocabularyError> {
@@ -128,7 +128,7 @@ impl<T: 'static> Vocabulary for RawKey<T> {
     }
 
     fn asset(&self) -> Option<AssetId> {
-        Some(self.asset)
+        Some(self.key_asset())
     }
 }
 
@@ -237,7 +237,7 @@ mod tests {
     fn info() -> ModelInfo {
         ModelInfo {
             asset: AssetId::unique(),
-            bounds: live2d_render::ModelBounds::new([0.0, 0.0], [1.0, 1.0]),
+            bounds: live2d_render::ModelBounds::try_new([0.0, 0.0], [1.0, 1.0]).expect("a box"),
             parameters: vec![live2d_render::ParameterRange {
                 name: Arc::from("ParamAngleX"),
                 minimum: -30.0,
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(parameters.len(), 1);
         assert_eq!(parameters[0].index(), 0);
         assert_eq!(parameters[0].name(), "ParamAngleX");
-        assert_eq!(parameters[0].asset(), info.asset);
+        assert_eq!(parameters[0].key_asset(), info.asset);
     }
 
     #[test]
@@ -276,9 +276,9 @@ mod tests {
         let info = info();
         let key = motions(&info).remove(0);
         let id = KeyId {
-            asset: key.asset(),
-            index: key.index(),
-            name: Arc::from(key.name()),
+            asset: key.key_asset(),
+            index: key.key_index(),
+            name: Arc::from(key.key_name()),
         };
 
         assert_eq!(RawMotion::from_id(&id), Ok(key));

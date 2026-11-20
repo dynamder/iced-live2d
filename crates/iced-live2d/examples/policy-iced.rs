@@ -1,11 +1,11 @@
 //! One layer on top of the first clip, with the write policy switchable at runtime.
 //!
 //! ```text
-//! cargo run --release -p iced-live2d --example policy -- path/to/model.model3.json
+//! cargo run --release -p iced-live2d --example policy-iced -- path/to/model.model3.json
 //! ```
 //!
 //! `B` cycles the blend (overwrite, add, multiply), `S` cycles the stage (auto,
-//! before physics, after physics), `L` cycles the look-at blend and `P` pauses.
+//! before physics, after physics), `L` cycles the look-at blend and `P` freezes.
 //! The status line names the current policy.
 //!
 //! On a rig whose mouth feeds physics, switching the stage changes whether the
@@ -21,7 +21,8 @@ use iced::widget::{column, text};
 use iced::{Fill, Subscription, Task, keyboard, window};
 use iced_live2d::{
     AssetOptions, Live2dAsset, Live2dModel, LookAtBlend, ModelEvent, ModelInfo, ModelOptions,
-    MotionClipIndex, ParameterBlend, ParameterPolicy, ParameterStage, Raw, live2d, look_at, raw,
+    MotionClipIndex, ParameterBlend, ParameterPolicy, ParameterStage, Raw, Vocabulary, live2d,
+    look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -51,7 +52,7 @@ struct App {
     blend: ParameterBlend,
     stage: ParameterStage,
     look: LookAtBlend,
-    paused: bool,
+    frozen: bool,
     started: Instant,
 }
 
@@ -62,7 +63,7 @@ enum Message {
     NextBlend,
     NextStage,
     NextLook,
-    TogglePause,
+    ToggleFreeze,
 }
 
 impl App {
@@ -94,7 +95,7 @@ impl App {
             blend: ParameterBlend::Overwrite,
             stage: ParameterStage::Auto,
             look: LookAtBlend::Overwrite,
-            paused: false,
+            frozen: false,
             started: Instant::now(),
         }
     }
@@ -106,7 +107,7 @@ impl App {
             Message::NextBlend => self.next_blend(),
             Message::NextStage => self.next_stage(),
             Message::NextLook => self.next_look(),
-            Message::TogglePause => self.toggle_pause(),
+            Message::ToggleFreeze => self.toggle_freeze(),
         }
 
         Task::none()
@@ -131,7 +132,7 @@ impl App {
     }
 
     fn drive(&mut self, now: Instant) {
-        if self.paused {
+        if self.frozen {
             return;
         }
 
@@ -176,11 +177,11 @@ impl App {
         *self.model.look_at_blend_mut() = self.look;
     }
 
-    fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
+    fn toggle_freeze(&mut self) {
+        self.frozen = !self.frozen;
 
-        if self.paused {
-            self.model.pause();
+        if self.frozen {
+            self.model.freeze();
         } else {
             self.model.resume();
         }
@@ -198,7 +199,7 @@ impl App {
                     "b" => Some(Message::NextBlend),
                     "s" => Some(Message::NextStage),
                     "l" => Some(Message::NextLook),
-                    "p" => Some(Message::TogglePause),
+                    "p" => Some(Message::ToggleFreeze),
                     _ => None,
                 },
                 _ => None,
@@ -208,11 +209,11 @@ impl App {
 
     fn view(&self) -> impl iced::Widget<Message> {
         let status = format!(
-            "blend {:?} · stage {:?} · look {:?}{} — B blend, S stage, L look, P pause",
+            "blend {:?} · stage {:?} · look {:?}{} — B blend, S stage, L look, P freeze",
             self.blend,
             self.stage,
             self.look,
-            if self.paused { " · paused" } else { "" },
+            if self.frozen { " · frozen" } else { "" },
         );
 
         column![

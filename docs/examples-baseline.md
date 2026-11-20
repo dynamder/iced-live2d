@@ -37,7 +37,7 @@ change the frame.
 | `app` | Hiyori | 0.5 | 1024 | 0.925 | 0,0 | 640 | 30 | `51b0896806a8125947a85441ae5abfdd2bfa033657ddc3a7d5e85e1a87e21af0` |
 | `iced-live2d --example minimal` | Hiyori | 0.5 | 1024 | 0.925 | 0,0 | 640 | 30 | `51b0896806a8125947a85441ae5abfdd2bfa033657ddc3a7d5e85e1a87e21af0` |
 | `iced-live2d --example interact` | Hiyori | 0.5 | 1024 | 0.925 | 0,0 | 640 | 30 | `51b0896806a8125947a85441ae5abfdd2bfa033657ddc3a7d5e85e1a87e21af0` |
-| `iced-live2d --example policy` | Hiyori | 0.5 | 1024 | 0.925 | 0,0 | 640 | 30 | `51b0896806a8125947a85441ae5abfdd2bfa033657ddc3a7d5e85e1a87e21af0` |
+| `iced-live2d --example policy-iced` | Hiyori | 0.5 | 1024 | 0.925 | 0,0 | 640 | 30 | `51b0896806a8125947a85441ae5abfdd2bfa033657ddc3a7d5e85e1a87e21af0` |
 | `iced-live2d --example typed` | Wanko | 0.5 | 1024 | 0.925 | 0,0 | 640 | 30 | `70406b56cb05a6f86a7adec7121e818525c74b48d0c0ca8345399d093ec4c685` |
 | `live2d-render --example offscreen` | Hiyori | 1.0 | 1024 | 0.925 | — | 900 | 30 | `54a98309e3bf735cf90466482e1e0c9f0bc518d26c5538563a323beb11992b56` |
 
@@ -57,5 +57,5 @@ renderer changes that a single still frame misses:
 
 ## Examples with no rendering state
 
-`dump`, `inspect`, `probe`, `rig`, `switch` and `live2d-render --example policy`
+`dump`, `inspect`, `probe`, `rig`, `switch` and `live2d-render --example policy-render`
 read model data or step parameters and print text; they never touch the GPU.

@@ -41,7 +41,7 @@ permanent black rectangle, reported only if the host subscribed.
 
 ### The frame loop never idles
 
-The widget asks for the next frame whenever the model is not paused
+The widget asks for the next frame whenever the model is not frozen
 ([widget.rs](../crates/iced-live2d/src/widget.rs#L934-L938)) without asking
 whether anything moved; `is_animating`
 ([model.rs](../crates/live2d-render/src/model.rs#L322-L327)) lives in the render
@@ -85,9 +85,9 @@ VRAM.
   curve per clip that happens to stay at 1.0. The first two need the
   `model3.json` `Groups` ids plumbed in, and `Opacity` needs a renderer change.
 - **Playback control.** No seek, speed or `time_scale`; the loop flag is the
-  file's; `stop_motion` has no fade-out; `ModelInfo` reports clip counts without
-  names or durations ([info.rs](../crates/live2d-render/src/info.rs#L35-L42));
-  `Model::current_motion` is not exposed through the widget.
+  file's; a clip has an index and no declared duration in `ModelInfo`
+  ([info.rs](../crates/live2d-render/src/info.rs#L35-L42)); `Model::current_motion`
+  is not exposed through the widget.
 - **Physics beyond a switch.** `mocari` has gravity, wind and reset; the render
   layer exposes one boolean ([model.rs](../crates/live2d-render/src/model.rs#L199-L211)).
   Pose playback has no toggle either.
@@ -96,9 +96,9 @@ VRAM.
   must extract its model to disk first.
 - **Model swapping** as a first-class operation, instead of building a new model
   object.
-- **Pause semantics.** `pause` is a total freeze — no steps, no deform, no upload
-  — so a paused model cannot be posed or re-framed, and physics cannot be left
-  running while the motion stops.
+- **Freeze granularity.** `freeze` stops the whole clock — no steps, no deform, no
+  upload — so physics cannot be left running while the motion stops. `stop_motion`
+  is the motion-only switch.
 - **Display names.** The `cdi3.json` parser exists in `mocari` and nothing loads
   it, so UI can only show `ParamAngleX`-style ids.
 

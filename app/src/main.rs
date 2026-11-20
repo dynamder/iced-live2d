@@ -5,7 +5,7 @@
 //! There is no frame subscription and no iced/wgpu plumbing here.
 //!
 //! Keys: `R` random clip of the next group, `E` next expression, `C` clear
-//! expressions, `S` stop the motion, `P` pause/resume, `F` cycle the fade: let the
+//! expressions, `S` stop the motion, `P` freeze/resume, `F` cycle the fade: let the
 //! model files decide, cut, 250 ms.
 
 mod cli;
@@ -16,7 +16,7 @@ use std::time::Duration;
 use iced::{Fill, Subscription, Task, Widget, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Fade, GestureInput, Gestures, Hover, Live2dAsset, Live2dModel, ModelEvent,
-    ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, Raw, live2d, look_at, raw,
+    ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, Raw, Vocabulary, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -56,7 +56,7 @@ struct App {
     info: Option<Arc<ModelInfo>>,
     next_group: usize,
     next_expression: usize,
-    paused: bool,
+    frozen: bool,
     fade: Option<Fade>,
 }
 
@@ -68,7 +68,7 @@ enum Message {
     NextExpression,
     ClearExpressions,
     StopMotion,
-    TogglePause,
+    ToggleFreeze,
     NextFade,
 }
 
@@ -90,7 +90,7 @@ impl App {
             info: None,
             next_group: 0,
             next_expression: 0,
-            paused: false,
+            frozen: false,
             fade: None,
         }
     }
@@ -103,7 +103,7 @@ impl App {
             Message::NextExpression => self.next_expression(),
             Message::ClearExpressions => self.model.clear_expressions(),
             Message::StopMotion => self.model.stop_motion(),
-            Message::TogglePause => self.toggle_pause(),
+            Message::ToggleFreeze => self.toggle_freeze(),
             Message::NextFade => self.next_fade(),
         }
 
@@ -138,7 +138,7 @@ impl App {
                 "e" => Some(Message::NextExpression),
                 "c" => Some(Message::ClearExpressions),
                 "s" => Some(Message::StopMotion),
-                "p" => Some(Message::TogglePause),
+                "p" => Some(Message::ToggleFreeze),
                 "f" => Some(Message::NextFade),
                 _ => None,
             },
@@ -248,12 +248,12 @@ impl App {
         println!("live2d: fade {:?}", self.fade);
     }
 
-    fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
+    fn toggle_freeze(&mut self) {
+        self.frozen = !self.frozen;
 
-        if self.paused {
-            self.model.pause();
-            println!("live2d: paused (no frames, no pointer events)");
+        if self.frozen {
+            self.model.freeze();
+            println!("live2d: frozen (the clock stopped, input still arrives)");
         } else {
             self.model.resume();
             println!("live2d: running");

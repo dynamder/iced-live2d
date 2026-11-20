@@ -85,7 +85,8 @@ pub enum Error {
         count: usize,
     },
 
-    /// The model directory could not be scanned for sidecar animation files.
+    /// The model directory, or one of its entries, could not be read while scanning
+    /// for sidecar animation files.
     #[error("failed to scan {path}: {source}")]
     Scan {
         /// The directory that failed.

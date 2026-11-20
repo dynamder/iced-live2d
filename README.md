@@ -44,7 +44,7 @@ Not there yet: reading back the effective parameter values, smooth transitions
 between the clip and a host layer, asynchronous loading, idle frames, DPI-aware
 texture budgets, global opacity, non-rectangular clipping, view transforms
 (pan/zoom of the framing itself), playback control (seek, speed), physics beyond a
-switch, loading a model from bytes, and a pause that is more than a total freeze.
+switch, loading a model from bytes, and a freeze that keeps physics running.
 [docs/gaps.md](docs/gaps.md) tracks each of them with where it lives and what
 closing it costs.
 
@@ -281,9 +281,9 @@ did, and the interaction input is what the pointer did, in the vocabulary chosen
   model keep separate hover, presses and drags: each reports input in its own space.
   Every event names its model and carries the position in three forms — widget pixels,
   clip space and model space (see `Sample`).
-- **`pause` freezes the pose, not the input.** Nothing steps and the model shows its
-  last frame, but the frame that input needs still happens, so hovering, clicking and
-  scrolling keep working.
+- **`freeze` stops the clock, not the input.** Nothing steps, deforms or uploads and
+  the model shows its last frame, but the frame that input needs still happens, so
+  hovering, clicking and scrolling keep working against that pose.
 - **Dropping an asset or model frees its GPU state** at the end of the next rendered
   frame, not immediately.
 
@@ -386,9 +386,9 @@ Everything takes a model path, because none is shipped:
 cargo run --release -p iced-live2d --example minimal  -- "path/to/model.model3.json" [second]
 cargo run --release -p iced-live2d --features macros --example typed -- "path/to/model.model3.json"
 cargo run --release -p iced-live2d --example interact -- "path/to/model.model3.json" [second]
-cargo run --release -p iced-live2d --example policy   -- "path/to/model.model3.json"
+cargo run --release -p iced-live2d --example policy-iced -- "path/to/model.model3.json"
 cargo run --release -p live2d-render --example offscreen -- "path/to/model.model3.json" frame.png 900 30
-cargo run --release -p live2d-render --example policy -- "path/to/model.model3.json" ParamMouthOpenY 0.8 auto
+cargo run --release -p live2d-render --example policy-render -- "path/to/model.model3.json" ParamMouthOpenY 0.8 auto
 ```
 
 | Example | Shows |
@@ -396,8 +396,8 @@ cargo run --release -p live2d-render --example policy -- "path/to/model.model3.j
 | `minimal` | two models in one window through `Raw`, keyed by `Live2dId`; keys `R`/`E`/`P`/`1`/`2`, every component event printed |
 | `typed` | a host-declared interface: typed keys for parameters, parts, motions and hit areas, and the load failure a model that lacks them produces |
 | `interact` | every input mapped to a message: click, double click, long press, drag, drag end, scroll (zooms the pane), hover, and gaze driven by the pointer |
-| `policy` (iced) | a mouth and breath layer over the first clip; `B`/`S`/`L` switch blend, stage and look blend live |
-| `policy <Param> <v> <auto\|before\|after>` (render) | which parameters a write changes, and whether staging it before physics moves the physics outputs |
+| `policy-iced` | a mouth and breath layer over the first clip; `B`/`S`/`L` switch blend, stage and look blend live |
+| `policy-render <Param> <v> <auto\|before\|after>` | which parameters a write changes, and whether staging it before physics moves the physics outputs |
 | `offscreen` | one frame into a PNG, no window |
 | `dump` | what is in the `.moc3`: drawables, mask sets, canvas, motion groups |
 | `inspect` | what is in the *files*: physics settings, motion curves, expression targets, and how the art sits in the canvas |

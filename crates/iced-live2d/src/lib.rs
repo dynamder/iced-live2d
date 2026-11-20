@@ -50,9 +50,10 @@ pub use widget::{
 pub use iced_live2d_macros::Vocabulary;
 
 pub use live2d_render::{
-    AssetId, AssetOptions, Error, Fade, HitArea, LookAtBlend, LookAtMode, ModelBounds, ModelInfo,
-    ModelOptions, MotionClipIndex, MotionEnd, MotionGroup, MotionGroupIndex, ParameterBlend,
-    ParameterPolicy, ParameterRange, ParameterStage, ParameterWrite,
+    AssetId, AssetOptions, Error, Fade, HitArea, InvalidBounds, LookAtBlend, LookAtMode,
+    ModelBounds, ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, MotionGroup,
+    MotionGroupIndex, ParameterBlend, ParameterPolicy, ParameterRange, ParameterStage,
+    ParameterWrite,
 };
 
 /// Compile-time check that events may cross the render-to-UI channel.

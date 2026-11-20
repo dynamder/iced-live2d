@@ -3,6 +3,16 @@
 use mocari::core::Matrix44;
 use mocari::moc3::{Moc3CanvasInfo, Moc3DrawableMesh};
 
+/// The corners a [`ModelBounds`] was asked for, when they do not form a box.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[error("model bounds need min < max on both axes, got min {min:?} and max {max:?}")]
+pub struct InvalidBounds {
+    /// The minimum corner that was asked for.
+    pub min: [f32; 2],
+    /// The maximum corner that was asked for.
+    pub max: [f32; 2],
+}
+
 /// Axis-aligned model-space rectangle used to frame the model.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelBounds {
@@ -15,15 +25,22 @@ pub struct ModelBounds {
 impl ModelBounds {
     /// A box from two opposite corners, in model space.
     ///
-    /// The corners are taken as given: swapping them yields a negative extent,
-    /// which [`ModelBounds::fit_matrix`] cannot frame.
-    pub fn new(min: [f32; 2], max: [f32; 2]) -> Self {
-        Self {
+    /// `min` must be strictly below `max` on both axes and every corner must be
+    /// finite, so that [`ModelBounds::fit_matrix`] always produces a usable
+    /// matrix.
+    pub fn try_new(min: [f32; 2], max: [f32; 2]) -> Result<Self, InvalidBounds> {
+        let finite = min.iter().chain(max.iter()).all(|value| value.is_finite());
+
+        if !finite || min[0] >= max[0] || min[1] >= max[1] {
+            return Err(InvalidBounds { min, max });
+        }
+
+        Ok(Self {
             min_x: min[0],
             min_y: min[1],
             max_x: max[0],
             max_y: max[1],
-        }
+        })
     }
 
     /// The artist-authored canvas from the `.moc3` header, which is the framing
@@ -173,6 +190,18 @@ mod tests {
             assert!(matrix.transform_x(x).abs() <= fill + 1e-4);
             assert!(matrix.transform_y(y).abs() <= fill + 1e-4);
         }
+    }
+
+    #[test]
+    fn a_reversed_corner_is_rejected() {
+        assert!(ModelBounds::try_new([1.0, 1.0], [0.0, 0.0]).is_err());
+        assert!(ModelBounds::try_new([0.0, 1.0], [1.0, 0.0]).is_err());
+    }
+
+    #[test]
+    fn a_degenerate_or_non_finite_box_is_rejected() {
+        assert!(ModelBounds::try_new([0.0, 0.0], [0.0, 1.0]).is_err());
+        assert!(ModelBounds::try_new([0.0, 0.0], [f32::NAN, 1.0]).is_err());
     }
 
     #[test]

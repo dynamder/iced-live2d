@@ -12,8 +12,7 @@ use crate::error::{Error, Result};
 use crate::model::Model;
 use crate::view::{ClipRect, View};
 
-/// The upper bound [`crate::ModelOptions::mask_size`] may ask for, in case a host
-/// passes something the GPU cannot allocate.
+/// The smallest mask render target worth allocating. A host may ask for less.
 const MIN_MASK_SIZE: u32 = 64;
 
 /// What a drawable set needs on the GPU, rebuilt from the CPU meshes.
@@ -37,7 +36,10 @@ impl ModelGpu {
         let mut plan = WgpuClippingPlan::from_mesh_buffers(&mesh);
         plan.prepare_single_texture_masks(&mesh)?;
         let clipping = renderer.create_clipping_resources(device, &plan)?;
-        let mask = renderer.create_mask_render_target(device, mask_size.max(MIN_MASK_SIZE))?;
+
+        let limit = device.limits().max_texture_dimension_2d;
+        let mask_size = mask_size.clamp(MIN_MASK_SIZE, limit);
+        let mask = renderer.create_mask_render_target(device, mask_size)?;
 
         Ok(Self {
             mesh,

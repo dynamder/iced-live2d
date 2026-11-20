@@ -32,7 +32,7 @@ mod rig;
 mod view;
 
 pub use asset::{Asset, AssetOptions, IDLE_GROUP, ModelOptions, Prepared, SCANNED_GROUP};
-pub use bounds::ModelBounds;
+pub use bounds::{InvalidBounds, ModelBounds};
 pub use error::{Error, Result};
 pub use fade::Fade;
 pub use gpu::ModelGpu;

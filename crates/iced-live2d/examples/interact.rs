@@ -25,7 +25,8 @@ use iced::widget::{column, container, row, text};
 use iced::{Element, Fill, Length, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, GestureMode, Gestures, Hover, Live2d, Live2dAsset, Live2dId, Live2dModel,
-    ModelEvent, ModelOptions, MotionClipIndex, MotionEnd, Raw, SpecificInput, live2d, raw,
+    ModelEvent, ModelOptions, MotionClipIndex, MotionEnd, Raw, SpecificInput, Vocabulary, live2d,
+    raw,
 };
 
 fn main() -> iced::Result {
@@ -58,7 +59,7 @@ struct Pane {
 struct App {
     panes: BTreeMap<Live2dId, Pane>,
     last: String,
-    paused: bool,
+    frozen: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -116,7 +117,7 @@ impl App {
         Self {
             panes,
             last: "click, double click, hold, drag or scroll over a model".to_owned(),
-            paused: false,
+            frozen: false,
         }
     }
 
@@ -154,7 +155,7 @@ impl App {
                 ..
             }) => {
                 if text == " " {
-                    self.toggle_pause();
+                    self.toggle_freeze();
                 }
             }
             Message::Key(_) => {}
@@ -250,19 +251,19 @@ impl App {
         }
     }
 
-    fn toggle_pause(&mut self) {
-        self.paused = !self.paused;
+    fn toggle_freeze(&mut self) {
+        self.frozen = !self.frozen;
 
         for pane in self.panes.values() {
-            if self.paused {
-                pane.model.pause();
+            if self.frozen {
+                pane.model.freeze();
             } else {
                 pane.model.resume();
             }
         }
 
-        self.last = if self.paused {
-            "paused — the pose is frozen, input still arrives".to_owned()
+        self.last = if self.frozen {
+            "frozen — the clock stopped, input still arrives".to_owned()
         } else {
             "running".to_owned()
         };

@@ -63,6 +63,8 @@ impl Default for AssetOptions {
 pub struct ModelOptions {
     /// Edge length of the instance's mask render target. Raise it if a complex rig
     /// shows clipped geometry: packed mask contexts can run out of atlas space.
+    ///
+    /// Clamped to `64..=device.limits().max_texture_dimension_2d`.
     pub mask_size: u32,
     /// How writes that do not name their own blend or stage are applied.
     pub parameter_policy: ParameterPolicy,
@@ -485,7 +487,18 @@ fn collect_sidecars(
         }
     };
 
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(source) => {
+                issues.push(Error::Scan {
+                    path: dir.to_path_buf(),
+                    source,
+                });
+                continue;
+            }
+        };
+
         let path = entry.path();
 
         if path.is_dir() {

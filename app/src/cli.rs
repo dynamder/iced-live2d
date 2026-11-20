@@ -17,7 +17,7 @@ OPTIONS:
 
 KEYS:
     R  next motion      E  next expression      mouse  tracking
-    F  fade mode        S  stop motion          P  pause/resume
+    F  fade mode        S  stop motion          P  freeze/resume
 ";
 
 #[derive(Debug)]
