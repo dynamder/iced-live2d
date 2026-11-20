@@ -110,6 +110,16 @@ pub enum Error {
     #[error("failed to allocate Live2D mesh buffers")]
     MeshBuffers,
 
+    /// A host write was applied before physics to a parameter physics writes, so
+    /// physics overwrites it in the same step.
+    #[error(
+        "parameter {name:?} is written by physics; a write before physics is overwritten (use ParameterStage::AfterPhysics)"
+    )]
+    ParameterOverwritten {
+        /// The parameter whose write was overwritten.
+        name: String,
+    },
+
     /// The model data could not produce a valid mesh update.
     #[error("failed to rebuild Live2D meshes")]
     MeshUpdate,

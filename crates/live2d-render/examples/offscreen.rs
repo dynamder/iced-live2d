@@ -57,6 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         live2d_render::ModelOptions {
             mask_size: knobs.mask_size,
+            ..Default::default()
         },
     )?;
 

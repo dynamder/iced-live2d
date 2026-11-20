@@ -3,6 +3,7 @@
 //! Pure CPU state — no GPU handle, no `wgpu` call — so the whole update order can
 //! be tested without a device.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use crate::asset::{MotionRef, Shared};
 use crate::error::Error;
 use crate::fade::Fade;
 use crate::info::ModelInfo;
+use crate::policy::{LookAtBlend, ParameterPolicy, ParameterStage, ParameterWrite};
 use crate::rig::LookAtMode;
 
 /// The animation step a model advances in, whatever the host's frame rate: 60 Hz is
@@ -70,10 +72,11 @@ pub enum MotionEnd {
 
 /// One model instance, built with [`Asset::model`](crate::Asset::model).
 ///
-/// [`Model::advance`] is the only place parameters are written, in Cubism's order:
-/// `reset → motion → expression → host parameters → look-at → parts → physics →
-/// pose`. A host parameter therefore wins over the motion, and physics sees the
-/// final input.
+/// [`Model::advance`] is the only place parameters are written:
+/// `reset → motion → expression → look-at → host (before physics) → parts →
+/// physics → host (after physics) → pose`. A host write therefore wins over the
+/// motion, and [`ParameterPolicy`] decides whether the simulation sees it and how
+/// it combines with what played.
 pub struct Model {
     shared: Shared,
     runtime: ModelRuntime,
@@ -83,7 +86,9 @@ pub struct Model {
     fading: Vec<MotionPlayer>,
     current: Option<(usize, usize)>,
     expressions: ExpressionManager,
-    parameters: Vec<(usize, f32)>,
+    parameters: Vec<(usize, ParameterWrite)>,
+    parameter_policy: ParameterPolicy,
+    look_at_blend: LookAtBlend,
     parts: Vec<(usize, f32)>,
     look_at: Option<[f32; 2]>,
     look_at_mode: LookAtMode,
@@ -97,6 +102,8 @@ pub struct Model {
     fade: Option<Fade>,
     /// `None` lets every interrupted motion fade out fully.
     fade_limit: Option<usize>,
+    /// Parameter names already reported as overwritten by physics.
+    reported_overwrites: BTreeSet<Arc<str>>,
     issues: Vec<Error>,
 }
 
@@ -110,6 +117,8 @@ impl Model {
             current: None,
             expressions: ExpressionManager::new(),
             parameters: Vec::new(),
+            parameter_policy: ParameterPolicy::default(),
+            look_at_blend: LookAtBlend::default(),
             parts: Vec::new(),
             look_at: None,
             look_at_mode: LookAtMode::default(),
@@ -121,6 +130,7 @@ impl Model {
             ended: Vec::new(),
             fade: None,
             fade_limit: None,
+            reported_overwrites: BTreeSet::new(),
             issues: Vec::new(),
         }
     }
@@ -164,15 +174,45 @@ impl Model {
         self.runtime.meshes()
     }
 
-    /// The raw parameter overrides to replay every step, as `(model index, raw
-    /// value)` pairs. Setting an identical slice again is free.
-    pub fn set_parameters(&mut self, overrides: &[(usize, f32)]) {
-        if self.parameters == overrides {
+    /// The host writes to replay every step, as `(model index, write)` pairs.
+    /// Setting an identical slice again is free.
+    pub fn set_parameters(&mut self, writes: &[(usize, ParameterWrite)]) {
+        if self.parameters == writes {
             return;
         }
 
         self.parameters.clear();
-        self.parameters.extend_from_slice(overrides);
+        self.parameters.extend_from_slice(writes);
+        self.dirty = true;
+    }
+
+    /// How writes that do not name their own blend or stage are applied.
+    pub fn parameter_policy(&self) -> ParameterPolicy {
+        self.parameter_policy
+    }
+
+    /// Changes how unnamed writes are applied from the next step on.
+    pub fn set_parameter_policy(&mut self, policy: ParameterPolicy) {
+        if self.parameter_policy == policy {
+            return;
+        }
+
+        self.parameter_policy = policy;
+        self.dirty = true;
+    }
+
+    /// How the built-in look-at combines with what the model plays.
+    pub fn look_at_blend(&self) -> LookAtBlend {
+        self.look_at_blend
+    }
+
+    /// Changes how the built-in look-at combines with the pose.
+    pub fn set_look_at_blend(&mut self, blend: LookAtBlend) {
+        if self.look_at_blend == blend {
+            return;
+        }
+
+        self.look_at_blend = blend;
         self.dirty = true;
     }
 
@@ -426,11 +466,8 @@ impl Model {
         self.expressions.tick(seconds);
         self.expressions.apply(&mut self.runtime);
 
-        for &(index, value) in &self.parameters {
-            self.runtime.set_parameter_by_index(index, value);
-        }
-
         self.apply_look_at();
+        self.apply_writes(ParameterStage::BeforePhysics);
 
         for &(index, opacity) in &self.parts {
             self.runtime.set_part_opacity_by_index(index, opacity);
@@ -440,6 +477,7 @@ impl Model {
             self.runtime.apply_physics(seconds);
         }
 
+        self.apply_writes(ParameterStage::AfterPhysics);
         self.runtime.apply_pose(seconds);
 
         if self.player.as_ref().is_some_and(MotionPlayer::is_finished) {
@@ -473,6 +511,55 @@ impl Model {
         self.fading.retain(|player| !player.is_finished());
     }
 
+    fn apply_writes(&mut self, stage: ParameterStage) {
+        for index in 0..self.parameters.len() {
+            let (parameter, write) = self.parameters[index];
+
+            if self.write_stage(parameter, write) != stage {
+                continue;
+            }
+
+            if stage == ParameterStage::BeforePhysics {
+                self.report_physics_override(parameter);
+            }
+
+            let current = self
+                .runtime
+                .parameter_value_by_index(parameter)
+                .unwrap_or_default();
+
+            self.runtime
+                .set_parameter_by_index(parameter, write.apply(current, self.parameter_policy));
+        }
+    }
+
+    fn write_stage(&self, parameter: usize, write: ParameterWrite) -> ParameterStage {
+        write.resolved_stage(
+            self.parameter_policy,
+            self.shared.facts.is_physics_output(parameter),
+        )
+    }
+
+    fn report_physics_override(&mut self, parameter: usize) {
+        if !self.physics_enabled || !self.shared.facts.is_physics_output(parameter) {
+            return;
+        }
+
+        let Some(name) = self.shared.facts.name(parameter) else {
+            return;
+        };
+
+        let name: Arc<str> = Arc::from(name);
+
+        if !self.reported_overwrites.insert(name.clone()) {
+            return;
+        }
+
+        self.issues.push(Error::ParameterOverwritten {
+            name: name.to_string(),
+        });
+    }
+
     fn apply_look_at(&mut self) {
         let Some(target) = self.look_at else {
             return;
@@ -481,11 +568,34 @@ impl Model {
         let rig = self.shared.rigs.get(self.look_at_mode);
 
         for binding in rig.bindings() {
-            let offset = binding.slot.axis().of(target);
-            let amount = (offset.clamp(-1.0, 1.0) + 1.0) * 0.5;
+            let offset = binding.slot.axis().of(target).clamp(-1.0, 1.0);
 
-            self.runtime
-                .set_parameter_normalized_by_index(binding.parameter, amount);
+            match self.look_at_blend {
+                LookAtBlend::Overwrite => {
+                    let amount = (offset + 1.0) * 0.5;
+
+                    self.runtime
+                        .set_parameter_normalized_by_index(binding.parameter, amount);
+                }
+                LookAtBlend::Add => {
+                    let (Some(minimum), Some(maximum)) = (
+                        self.runtime.parameter_minimum_by_index(binding.parameter),
+                        self.runtime.parameter_maximum_by_index(binding.parameter),
+                    ) else {
+                        continue;
+                    };
+
+                    let current = self
+                        .runtime
+                        .parameter_value_by_index(binding.parameter)
+                        .unwrap_or_default();
+
+                    self.runtime.set_parameter_by_index(
+                        binding.parameter,
+                        current + offset * (maximum - minimum) * 0.5,
+                    );
+                }
+            }
         }
     }
 
@@ -547,8 +657,8 @@ impl Model {
         self.runtime.parameter_value_by_index(index)
     }
 
-    /// Writes a raw parameter value. Diagnostics and tests only; hosts set
-    /// overrides through [`Model::set_parameters`].
+    /// Writes a raw parameter value. Diagnostics and tests only; hosts write
+    /// through [`Model::set_parameters`].
     pub fn set_parameter_raw(&mut self, index: usize, value: f32) -> bool {
         self.runtime.set_parameter_by_index(index, value)
     }

@@ -16,7 +16,7 @@
 //! motion playing.
 
 use live2d_render::wgpu;
-use live2d_render::{AssetOptions, ModelOptions};
+use live2d_render::{AssetOptions, ModelOptions, ParameterWrite};
 
 #[path = "shared/gpu.rs"]
 mod gpu;
@@ -52,7 +52,9 @@ fn drive(session: &mut Session, direct: &Option<String>, x: f32) {
     let amount = (x.clamp(-1.0, 1.0) + 1.0) * 0.5;
     let raw = range.minimum + amount * (range.maximum - range.minimum);
 
-    session.model().set_parameters(&[(index, raw)]);
+    session
+        .model()
+        .set_parameters(&[(index, ParameterWrite::new(raw))]);
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

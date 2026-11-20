@@ -18,6 +18,7 @@ use crate::bounds::ModelBounds;
 use crate::error::{Error, Result};
 use crate::info::{AssetId, HitArea, ModelInfo, MotionGroup, ParameterRange};
 use crate::model::Model;
+use crate::policy::{LookAtBlend, ParameterPolicy};
 use crate::rig::{self, LookAtMode, ModelFacts, Rig};
 
 /// The group a model's own idle motions conventionally live in. A constant, not a
@@ -56,17 +57,26 @@ impl Default for AssetOptions {
     }
 }
 
-/// What one instance may spend on GPU memory.
+/// What one instance is created with: the GPU budget, and how host writes are
+/// applied.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelOptions {
     /// Edge length of the instance's mask render target. Raise it if a complex rig
     /// shows clipped geometry: packed mask contexts can run out of atlas space.
     pub mask_size: u32,
+    /// How writes that do not name their own blend or stage are applied.
+    pub parameter_policy: ParameterPolicy,
+    /// How the built-in look-at combines with what the model plays.
+    pub look_at_blend: LookAtBlend,
 }
 
 impl Default for ModelOptions {
     fn default() -> Self {
-        Self { mask_size: 1024 }
+        Self {
+            mask_size: 1024,
+            parameter_policy: ParameterPolicy::default(),
+            look_at_blend: LookAtBlend::default(),
+        }
     }
 }
 
@@ -78,6 +88,9 @@ pub(crate) struct Shared {
     pub motions: Arc<[Arc<[MotionRef]>]>,
     pub expressions: Arc<[ExpressionRef]>,
     pub rigs: Arc<Rigs>,
+    /// Which parameters physics reads and writes, resolved once from the model
+    /// files.
+    pub facts: Arc<ModelFacts>,
 }
 
 #[derive(Debug, Clone)]
@@ -244,6 +257,7 @@ impl Asset {
                     .collect(),
                 expressions: expressions.into(),
                 rigs: Arc::new(rigs),
+                facts: Arc::new(facts),
             },
             template,
             loaded,
@@ -261,6 +275,14 @@ impl Prepared {
     /// Problems found while parsing, which do not stop the model from drawing.
     pub fn issues(&self) -> &[Error] {
         &self.issues
+    }
+
+    /// A CPU instance of the parsed model, before its textures reach the GPU.
+    ///
+    /// The instance can be stepped, hit-tested and read back; only drawing needs
+    /// the device.
+    pub fn model(&self) -> Model {
+        Model::new(self.template.clone(), self.shared.clone())
     }
 
     /// Uploads the textures and keeps the result as the shared asset.

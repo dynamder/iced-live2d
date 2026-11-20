@@ -26,6 +26,7 @@ mod fade;
 mod gpu;
 mod info;
 mod model;
+mod policy;
 mod rig;
 mod view;
 
@@ -36,6 +37,7 @@ pub use fade::Fade;
 pub use gpu::ModelGpu;
 pub use info::{AssetId, HitArea, ModelInfo, MotionGroup, ParameterRange};
 pub use model::{Ended, Model, MotionEnd, STEP, Started};
+pub use policy::{LookAtBlend, ParameterBlend, ParameterPolicy, ParameterStage, ParameterWrite};
 pub use rig::{Axis, Binding, LookAtMode, ModelFacts, Rig, Route, Slot, Source, resolve};
 pub use view::{ClipRect, View};
 

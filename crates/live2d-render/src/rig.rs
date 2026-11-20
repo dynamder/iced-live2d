@@ -247,7 +247,7 @@ impl ModelFacts {
         self.find(conventional).is_some()
     }
 
-    fn is_physics_output(&self, index: usize) -> bool {
+    pub(crate) fn is_physics_output(&self, index: usize) -> bool {
         self.parameters
             .get(index)
             .is_some_and(|parameter| self.physics_outputs.contains(&normalize(parameter)))
