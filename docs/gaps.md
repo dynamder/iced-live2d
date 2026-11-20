@@ -102,6 +102,21 @@ VRAM.
 - **Display names.** The `cdi3.json` parser exists in `mocari` and nothing loads
   it, so UI can only show `ParamAngleX`-style ids.
 
+## Recorded limitations
+
+- **Model state is not shared, only the textures are.** `Asset::model` clones the
+  whole `ModelRuntime`, so every instance pays for the static rig again: measured
+  ~31 MB for the 715-drawable rig and ~0.9 MB for Hiyori
+  ([asset.rs](../crates/live2d-render/src/asset.rs#L247-L249)). Splitting mocari's
+  static data from its mutable state closes it; that is mocari/vendor work.
+- **A failed interface check keeps decoded textures.** The `Prepared` stays in the
+  pipeline's `Parsed` state so a corrected click can retry, which also keeps the
+  decoded texture bytes alive after the model was rejected
+  ([pipeline.rs](../crates/iced-live2d/src/pipeline.rs#L546-L556)).
+- **Only motion indices are newtypes.** Parameter, part, expression, hit-area and
+  drawable positions are still bare `usize`; a later round converts them the same
+  way.
+
 ## Deliberately not here
 
 - Keyboard input, focus and accessibility: a character canvas has little to say.
