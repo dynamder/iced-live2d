@@ -15,6 +15,7 @@ use mocari::{ExpressionManager, ModelRuntime};
 use crate::asset::{MotionRef, Shared};
 use crate::error::Error;
 use crate::fade::Fade;
+use crate::index::{MotionClipIndex, MotionGroupIndex};
 use crate::info::ModelInfo;
 use crate::policy::{LookAtBlend, ParameterPolicy, ParameterStage, ParameterWrite};
 use crate::rig::LookAtMode;
@@ -40,10 +41,10 @@ const RANDOM_SEED: u64 = 0x2545_F491_4F6C_DD1D;
 /// A motion that has just started playing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Started {
-    /// Model index of the motion group.
-    pub group: usize,
-    /// Index of the clip inside that group.
-    pub clip: usize,
+    /// The motion group that started.
+    pub group: MotionGroupIndex,
+    /// The clip inside that group.
+    pub clip: MotionClipIndex,
     /// Length of the clip in seconds, as declared by the motion file.
     pub duration: f32,
     /// Whether the file asks for looping.
@@ -53,10 +54,10 @@ pub struct Started {
 /// A motion that stopped being the current one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ended {
-    /// Model index of the motion group.
-    pub group: usize,
-    /// Index of the clip inside that group.
-    pub clip: usize,
+    /// The motion group that stopped.
+    pub group: MotionGroupIndex,
+    /// The clip inside that group.
+    pub clip: MotionClipIndex,
     /// Whether it reached its own end or was stopped.
     pub reason: MotionEnd,
 }
@@ -84,7 +85,7 @@ pub struct Model {
     /// Motions that were interrupted and are still fading out, oldest first — the
     /// order they applied in while they were live.
     fading: Vec<MotionPlayer>,
-    current: Option<(usize, usize)>,
+    current: Option<(MotionGroupIndex, MotionClipIndex)>,
     expressions: ExpressionManager,
     parameters: Vec<(usize, ParameterWrite)>,
     parameter_policy: ParameterPolicy,
@@ -278,21 +279,13 @@ impl Model {
     /// Whatever was playing fades out over its own fade-out time while this one fades
     /// in, which is what the Cubism viewer does; [`Model::set_fade`] sets the value
     /// used when nothing in the model folder declares one.
-    pub fn play_motion(&mut self, group: usize, clip: usize) {
-        let Some(reference) = self
-            .shared
-            .motions
-            .get(group)
-            .and_then(|clips| clips.get(clip))
-            .cloned()
-        else {
-            let count = self.shared.info.motion_clips(group);
-
-            self.issues.push(match self.shared.motions.get(group) {
-                Some(_) => Error::MotionClip { group, clip, count },
-                None => Error::MotionGroup { group, count },
-            });
-            return;
+    pub fn play_motion(&mut self, group: MotionGroupIndex, clip: MotionClipIndex) {
+        let reference = match clip_ref(&self.shared.info, &self.shared.motions, group, clip) {
+            Ok(reference) => reference.clone(),
+            Err(error) => {
+                self.issues.push(error);
+                return;
+            }
         };
 
         match load_motion(&reference.path) {
@@ -305,20 +298,13 @@ impl Model {
     }
 
     /// Plays a random clip of `group`.
-    pub fn play_random_motion(&mut self, group: usize) {
-        let count = self.shared.info.motion_clips(group);
+    pub fn play_random_motion(&mut self, group: MotionGroupIndex) {
+        let draw = self.next_random();
 
-        if count == 0 {
-            self.issues.push(Error::MotionClip {
-                group,
-                clip: 0,
-                count,
-            });
-            return;
+        match pick_clip(&self.shared.info, group, draw) {
+            Ok(clip) => self.play_motion(group, clip),
+            Err(error) => self.issues.push(error),
         }
-
-        let clip = (self.next_random() as usize) % count;
-        self.play_motion(group, clip);
     }
 
     /// Applies an expression on top of the motion.
@@ -599,7 +585,13 @@ impl Model {
         }
     }
 
-    fn start(&mut self, group: usize, clip: usize, motion: Motion3, reference: &MotionRef) {
+    fn start(
+        &mut self,
+        group: MotionGroupIndex,
+        clip: MotionClipIndex,
+        motion: Motion3,
+        reference: &MotionRef,
+    ) {
         self.started.push(Started {
             group,
             clip,
@@ -642,8 +634,8 @@ impl Model {
         (self.random >> 32) as u32
     }
 
-    /// The index of the motion currently playing, as `(group, clip)`.
-    pub fn current_motion(&self) -> Option<(usize, usize)> {
+    /// The motion currently playing, as `(group, clip)`.
+    pub fn current_motion(&self) -> Option<(MotionGroupIndex, MotionClipIndex)> {
         self.current
     }
 
@@ -662,6 +654,42 @@ impl Model {
     pub fn set_parameter_raw(&mut self, index: usize, value: f32) -> bool {
         self.runtime.set_parameter_by_index(index, value)
     }
+}
+
+/// How many clips `group` holds, or the error that names what is missing.
+fn group_clips(info: &ModelInfo, group: MotionGroupIndex) -> Result<usize, Error> {
+    info.motion_clips(group).ok_or(Error::UnknownMotionGroup {
+        group,
+        groups: info.motions.len(),
+    })
+}
+
+fn clip_ref<'a>(
+    info: &ModelInfo,
+    motions: &'a [Arc<[MotionRef]>],
+    group: MotionGroupIndex,
+    clip: MotionClipIndex,
+) -> Result<&'a MotionRef, Error> {
+    let clips = group_clips(info, group)?;
+
+    motions
+        .get(group.get())
+        .and_then(|clips| clips.get(clip.get()))
+        .ok_or(Error::UnknownMotionClip { group, clip, clips })
+}
+
+fn pick_clip(
+    info: &ModelInfo,
+    group: MotionGroupIndex,
+    draw: u32,
+) -> Result<MotionClipIndex, Error> {
+    let clips = group_clips(info, group)?;
+
+    if clips == 0 {
+        return Err(Error::EmptyMotionGroup { group });
+    }
+
+    Ok(MotionClipIndex::new(draw as usize % clips))
 }
 
 /// Explicit setting, then the `.model3.json` reference, then the motion's own `Meta`,
@@ -701,6 +729,82 @@ impl Stepper {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn info(clips: &[usize]) -> ModelInfo {
+        ModelInfo {
+            asset: crate::AssetId::unique(),
+            bounds: crate::ModelBounds::new([0.0, 0.0], [1.0, 1.0]),
+            parameters: Arc::from([]),
+            parts: Arc::from([]),
+            motions: clips
+                .iter()
+                .map(|&clips| crate::MotionGroup {
+                    name: Arc::from("group"),
+                    clips,
+                })
+                .collect(),
+            expressions: Arc::from([]),
+            hit_areas: Arc::from([]),
+        }
+    }
+
+    #[test]
+    fn an_unknown_group_reports_how_many_groups_exist() {
+        assert!(matches!(
+            clip_ref(
+                &info(&[1, 1]),
+                &[],
+                MotionGroupIndex::new(2),
+                MotionClipIndex::new(0)
+            ),
+            Err(Error::UnknownMotionGroup { groups: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn an_unknown_clip_reports_how_many_the_group_holds() {
+        assert!(matches!(
+            clip_ref(
+                &info(&[3]),
+                &[],
+                MotionGroupIndex::new(0),
+                MotionClipIndex::new(3)
+            ),
+            Err(Error::UnknownMotionClip { clips: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn an_empty_group_is_not_an_unknown_one() {
+        assert!(matches!(
+            pick_clip(&info(&[0]), MotionGroupIndex::new(0), 0),
+            Err(Error::EmptyMotionGroup { .. })
+        ));
+    }
+
+    #[test]
+    fn an_unknown_group_is_reported_before_the_clip() {
+        assert!(matches!(
+            clip_ref(
+                &info(&[3]),
+                &[],
+                MotionGroupIndex::new(1),
+                MotionClipIndex::new(9)
+            ),
+            Err(Error::UnknownMotionGroup { .. })
+        ));
+    }
+
+    #[test]
+    fn a_random_pick_stays_inside_the_group() {
+        let info = info(&[3]);
+
+        for draw in [0, 1, 2, 3, 7, u32::MAX] {
+            let clip = pick_clip(&info, MotionGroupIndex::new(0), draw).expect("a clip");
+
+            assert!(clip.get() < 3);
+        }
+    }
 
     /// Most steps a `Stepper` can hand out across the given intervals.
     fn steps_over(deltas: &[Duration]) -> u32 {

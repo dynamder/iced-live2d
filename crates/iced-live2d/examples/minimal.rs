@@ -27,7 +27,7 @@ use iced::widget::{column, row, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Hover, Live2dAsset, Live2dEvent, Live2dId, Live2dModel, ModelInfo, ModelOptions,
-    MotionEnd, Raw, RawEvent, live2d, look_at, raw,
+    MotionClipIndex, MotionEnd, Raw, RawEvent, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -184,7 +184,7 @@ impl App {
 
                     // Nothing plays until the host says so.
                     if let Some(group) = start {
-                        slot.model.play_motion(group, 0);
+                        slot.model.play_motion(group, MotionClipIndex::new(0));
                     }
                 }
 

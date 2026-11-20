@@ -17,7 +17,8 @@ use iced::widget::shader;
 use iced::{Point, Rectangle};
 use live2d_render::{
     Asset, AssetId, AssetOptions, ClipRect, Error, Fade, LookAtMode, Model, ModelGpu, ModelInfo,
-    ModelOptions, MotionEnd, ParameterWrite, Prepared, View, WgpuLive2dRenderer,
+    ModelOptions, MotionClipIndex, MotionEnd, MotionGroupIndex, ParameterWrite, Prepared, View,
+    WgpuLive2dRenderer,
 };
 
 use crate::event::{LoadFailure, Problem};
@@ -99,13 +100,13 @@ pub(crate) enum PipelineEvent {
     Problem(Problem),
     MotionStarted {
         group: KeyId,
-        clip: usize,
+        clip: MotionClipIndex,
         duration: f32,
         looping: bool,
     },
     MotionEnded {
         group: KeyId,
-        clip: usize,
+        clip: MotionClipIndex,
         ended: MotionEnd,
     },
     Pointer(PointerEventKind),
@@ -114,7 +115,7 @@ pub(crate) enum PipelineEvent {
 /// Something the host asked the model to do, reduced to vocabulary indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveCommand {
-    PlayMotion { group: usize, clip: usize },
+    PlayMotion { group: usize, clip: MotionClipIndex },
     PlayRandomMotion { group: usize },
     PlayExpression { expression: usize },
     StopMotion,
@@ -857,7 +858,7 @@ fn reconcile(
                     looping: started.looping,
                 },
             ),
-            None => vocabulary_problem("motion", started.group, listeners),
+            None => vocabulary_problem("motion", started.group.get(), listeners),
         }
     }
 
@@ -871,7 +872,7 @@ fn reconcile(
                     ended: ended.reason,
                 },
             ),
-            None => vocabulary_problem("motion", ended.group, listeners),
+            None => vocabulary_problem("motion", ended.group.get(), listeners),
         }
     }
 
@@ -1150,9 +1151,14 @@ fn vocabulary_problem(
     );
 }
 
-fn motion_key(asset: AssetId, info: &ModelInfo, mapping: &Mapping, group: usize) -> Option<KeyId> {
+fn motion_key(
+    asset: AssetId,
+    info: &ModelInfo,
+    mapping: &Mapping,
+    group: MotionGroupIndex,
+) -> Option<KeyId> {
     let index = mapping.motion_vocabulary(group)?;
-    let name = Arc::clone(&info.motions.get(group)?.name);
+    let name = Arc::clone(&info.motions.get(group.get())?.name);
 
     Some(KeyId { asset, index, name })
 }

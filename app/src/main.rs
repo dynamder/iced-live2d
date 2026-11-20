@@ -16,7 +16,7 @@ use std::time::Duration;
 use iced::{Fill, Subscription, Task, Widget, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Fade, GestureEvent, Gestures, Hover, Live2dAsset, Live2dEvent, Live2dModel,
-    ModelInfo, ModelOptions, MotionEnd, Raw, live2d, look_at, raw,
+    ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, Raw, live2d, look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -160,7 +160,7 @@ impl App {
 
                 // The app, not the component, decides what plays first.
                 if let Some(group) = raw::motions(info).into_iter().next() {
-                    self.model.play_motion(group, 0);
+                    self.model.play_motion(group, MotionClipIndex::new(0));
                 }
             }
             Live2dEvent::ModelFailedToLoad { failure, .. } => {
@@ -197,7 +197,10 @@ impl App {
                     && let Some(clips) = info.motions.get(group.index()).map(|item| item.clips)
                     && clips > 0
                 {
-                    self.model.play_motion(group.clone(), (*clip + 1) % clips);
+                    self.model.play_motion(
+                        group.clone(),
+                        MotionClipIndex::new((clip.get() + 1) % clips),
+                    );
                 }
             }
             Live2dEvent::Input(input) => println!("live2d: gesture: {input:?}"),

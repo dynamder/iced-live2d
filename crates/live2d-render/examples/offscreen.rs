@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session.set_fill(&queue, fill);
     }
 
-    knobs.apply(&mut session);
+    knobs.apply(&mut session)?;
 
     // Let physics and the motion settle, so the frame is not the rest pose.
     for _ in 0..steps {
@@ -186,13 +186,22 @@ impl Knobs {
         })
     }
 
-    fn apply(&self, session: &mut Session) {
+    fn apply(&self, session: &mut Session) -> Result<(), Box<dyn std::error::Error>> {
         // The fade is resolved when a motion starts, so it has to be set first.
         if let Some(fade) = self.fade {
             session.model().set_fade(Some(fade));
         }
 
         if let Some((group, clip)) = self.motion {
+            let info = std::sync::Arc::clone(session.info());
+
+            let group = info
+                .motion_at(group)
+                .ok_or_else(|| format!("LIVE2D_MOTION group {group} does not exist"))?;
+            let clip = info
+                .motion_clip(group, clip)
+                .ok_or_else(|| format!("LIVE2D_MOTION clip {clip} is out of range"))?;
+
             session.model().play_motion(group, clip);
         }
 
@@ -215,6 +224,8 @@ impl Knobs {
         if let Some(target) = self.look_at {
             session.model().set_look_at(Some(target));
         }
+
+        Ok(())
     }
 }
 

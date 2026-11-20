@@ -4,7 +4,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use live2d_render::{AssetId, ModelInfo};
+use live2d_render::{AssetId, ModelInfo, MotionGroupIndex};
 
 /// How a vocabulary's entries are identified in the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,7 +123,9 @@ impl InterfaceSpec {
             info.parameter(name)
         });
         let parts = resolve(self.part, info.parts.len(), |name| info.part(name));
-        let motions = resolve(self.motion, info.motions.len(), |name| info.motion(name));
+        let motions = resolve(self.motion, info.motions.len(), |name| {
+            info.motion(name).map(MotionGroupIndex::get)
+        });
         let expressions = resolve(self.expression, info.expressions.len(), |name| {
             info.expression(name)
         });
@@ -172,8 +174,10 @@ impl Mapping {
         self.parts.get(index).copied()
     }
 
-    pub(crate) fn motion(&self, index: usize) -> Option<usize> {
-        self.motions.get(index).copied()
+    pub(crate) fn motion(&self, index: usize) -> Option<MotionGroupIndex> {
+        self.motions
+            .get(index)
+            .map(|group| MotionGroupIndex::new(*group))
     }
 
     pub(crate) fn expression(&self, index: usize) -> Option<usize> {
@@ -182,8 +186,10 @@ impl Mapping {
 
     /// The vocabulary index of a model motion group: the reverse of
     /// [`Mapping::motion`], for events that start in the render layer.
-    pub(crate) fn motion_vocabulary(&self, group: usize) -> Option<usize> {
-        self.motions.iter().position(|mapped| *mapped == group)
+    pub(crate) fn motion_vocabulary(&self, group: MotionGroupIndex) -> Option<usize> {
+        self.motions
+            .iter()
+            .position(|mapped| *mapped == group.get())
     }
 
     /// The vocabulary index of a model hit area.
@@ -341,8 +347,8 @@ mod tests {
             .resolve(&info(&["A", "B"], &["Idle", "Tap"]))
             .expect("resolves");
 
-        assert_eq!(mapping.motion(1), Some(1));
-        assert_eq!(mapping.motion_vocabulary(1), Some(1));
+        assert_eq!(mapping.motion(1), Some(MotionGroupIndex::new(1)));
+        assert_eq!(mapping.motion_vocabulary(MotionGroupIndex::new(1)), Some(1));
     }
 
     #[test]
@@ -351,10 +357,10 @@ mod tests {
             .resolve(&info(&["A", "B"], &["Tap", "Idle"]))
             .expect("resolves");
 
-        assert_eq!(mapping.motion(0), Some(0));
-        assert_eq!(mapping.motion_vocabulary(0), Some(0));
-        assert_eq!(mapping.motion_vocabulary(1), Some(1));
-        assert_eq!(mapping.motion_vocabulary(2), None);
+        assert_eq!(mapping.motion(0), Some(MotionGroupIndex::new(0)));
+        assert_eq!(mapping.motion_vocabulary(MotionGroupIndex::new(0)), Some(0));
+        assert_eq!(mapping.motion_vocabulary(MotionGroupIndex::new(1)), Some(1));
+        assert_eq!(mapping.motion_vocabulary(MotionGroupIndex::new(2)), None);
     }
 
     #[test]
@@ -367,9 +373,9 @@ mod tests {
             .resolve(&info(&["A", "B"], &["Idle", "Tap"]))
             .expect("resolves");
 
-        assert_eq!(mapping.motion(0), Some(1));
-        assert_eq!(mapping.motion_vocabulary(1), Some(0));
-        assert_eq!(mapping.motion_vocabulary(0), None);
+        assert_eq!(mapping.motion(0), Some(MotionGroupIndex::new(1)));
+        assert_eq!(mapping.motion_vocabulary(MotionGroupIndex::new(1)), Some(0));
+        assert_eq!(mapping.motion_vocabulary(MotionGroupIndex::new(0)), None);
     }
 
     #[test]

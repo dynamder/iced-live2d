@@ -167,8 +167,8 @@ let hiyori = Live2dModel::<Face>::new(&asset, ModelOptions::default());
   any declared name fails to load with the missing names listed
   (`LoadFailure::Interface`) instead of silently driving nothing.
 - **Keys are typed.** A key can only be produced by the vocabulary that declares it,
-  so `play_motion(FaceMotion::TapBody, 0)` cannot be called on a model whose interface
-  has no `TapBody`.
+  so `play_motion(FaceMotion::TapBody, MotionClipIndex::new(0))` cannot be called on a
+  model whose interface has no `TapBody`.
 - **`Raw` is the escape hatch.** `Live2dModel::<Raw>::new(&asset, options)` takes the
   model's own `ModelInfo` as the vocabulary; keys carry the asset they were minted
   from, so a key handed to a model of another asset is rejected and reported instead
@@ -183,10 +183,13 @@ model.parameters().insert(FaceParameter::MouthOpenY, 0.8);   // overwrite, the d
 model.parameters().add(FaceParameter::AngleX, wave);         // add on top of what plays
 model.parameters().multiply(FaceParameter::AngleY, 0.5);     // multiply what plays
 model.parts().insert(FacePart::ArmA, 0.0);                   // 0.0..=1.0
-model.play_motion(FaceMotion::TapBody, 0);                   // (group, clip), as Cubism indexes
+model.play_motion(FaceMotion::TapBody, MotionClipIndex::new(0)); // 0-based, as Cubism indexes
 model.play_random_motion(FaceMotion::Idle);
 model.stop_motion();
 ```
+
+The interface names groups; a clip is a file inside one, so it is named by
+`MotionClipIndex` rather than by the host's vocabulary.
 
 Every write is **replayed on every step**, after look-at:
 
@@ -240,7 +243,7 @@ stays in its rest pose. "Idle" is the host's five lines:
 
 ```rust
 // on load: start something
-Live2dEvent::ModelLoaded { .. } => model.play_motion(FaceMotion::Idle, 0),
+Live2dEvent::ModelLoaded { .. } => model.play_motion(FaceMotion::Idle, MotionClipIndex::new(0)),
 // and when a one-shot ends: start the next one
 Live2dEvent::MotionFinishedPlaying { .. } => model.play_random_motion(FaceMotion::Idle),
 ```

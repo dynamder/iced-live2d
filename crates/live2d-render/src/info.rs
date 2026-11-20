@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bounds::ModelBounds;
+use crate::index::{MotionClipIndex, MotionGroupIndex};
 
 /// Identity of one asset. Keys carry it, so a key handed to a model of another
 /// asset is recognisably foreign.
@@ -53,23 +54,23 @@ pub struct HitArea {
 /// Everything a loaded asset declares, as plain data: what a host displays and
 /// what the escape-hatch interface enumerates.
 ///
-/// Lists are in model order, which is the order a model-scoped vocabulary indexes
-/// into.
+/// List order is stable within one loaded asset, but it is not the `model3.json`
+/// order. Use names for semantics and indices only as identity within that asset.
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
     /// The asset this describes.
     pub asset: AssetId,
     /// Model-space rectangle the model was framed from.
     pub bounds: ModelBounds,
-    /// Every parameter, in model order, with its declared range.
+    /// Every parameter, with its declared range.
     pub parameters: Arc<[ParameterRange]>,
-    /// Every part id, in model order.
+    /// Every part id.
     pub parts: Arc<[Arc<str>]>,
-    /// Every motion group, in model order.
+    /// Every motion group.
     pub motions: Arc<[MotionGroup]>,
-    /// Every expression name, in model order.
+    /// Every expression name.
     pub expressions: Arc<[Arc<str>]>,
-    /// Every hit area, in model order.
+    /// Every hit area.
     pub hit_areas: Arc<[HitArea]>,
 }
 
@@ -84,14 +85,30 @@ impl ModelInfo {
         self.parts.iter().position(|item| &**item == name)
     }
 
-    /// The model index of a motion group, by exact name.
-    pub fn motion(&self, name: &str) -> Option<usize> {
-        self.motions.iter().position(|item| &*item.name == name)
+    /// The position of a motion group, by exact name.
+    pub fn motion(&self, name: &str) -> Option<MotionGroupIndex> {
+        self.motions
+            .iter()
+            .position(|item| &*item.name == name)
+            .map(MotionGroupIndex::new)
     }
 
-    /// How many clips a motion group holds. Out-of-range groups hold none.
-    pub fn motion_clips(&self, group: usize) -> usize {
-        self.motions.get(group).map_or(0, |item| item.clips)
+    /// Turns a raw position into a group this model declares.
+    pub fn motion_at(&self, index: usize) -> Option<MotionGroupIndex> {
+        self.motions
+            .get(index)
+            .map(|_| MotionGroupIndex::new(index))
+    }
+
+    /// How many clips a motion group holds, or `None` when the model declares no
+    /// such group. A declared group can still hold zero clips.
+    pub fn motion_clips(&self, group: MotionGroupIndex) -> Option<usize> {
+        self.motions.get(group.get()).map(|item| item.clips)
+    }
+
+    /// Turns a raw clip position into one the group holds.
+    pub fn motion_clip(&self, group: MotionGroupIndex, clip: usize) -> Option<MotionClipIndex> {
+        (clip < self.motion_clips(group)?).then(|| MotionClipIndex::new(clip))
     }
 
     /// The model index of an expression, by declared name.
@@ -112,5 +129,61 @@ impl ModelInfo {
     /// Every motion file the model ships with, across all groups.
     pub fn motion_count(&self) -> usize {
         self.motions.iter().map(|group| group.clips).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(clips: &[usize]) -> ModelInfo {
+        ModelInfo {
+            asset: AssetId::unique(),
+            bounds: ModelBounds::new([0.0, 0.0], [1.0, 1.0]),
+            parameters: Arc::from([]),
+            parts: Arc::from([]),
+            motions: clips
+                .iter()
+                .map(|&clips| MotionGroup {
+                    name: Arc::from("group"),
+                    clips,
+                })
+                .collect(),
+            expressions: Arc::from([]),
+            hit_areas: Arc::from([]),
+        }
+    }
+
+    #[test]
+    fn an_unknown_group_has_no_clip_count() {
+        assert_eq!(info(&[1, 2]).motion_clips(MotionGroupIndex::new(2)), None);
+    }
+
+    #[test]
+    fn a_declared_group_reports_its_clips_even_at_zero() {
+        assert_eq!(
+            info(&[0, 2]).motion_clips(MotionGroupIndex::new(0)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_group_position_is_typed_only_inside_the_list() {
+        let info = info(&[1, 2]);
+
+        assert_eq!(info.motion_at(1), Some(MotionGroupIndex::new(1)));
+        assert_eq!(info.motion_at(2), None);
+    }
+
+    #[test]
+    fn a_clip_position_is_typed_only_inside_its_group() {
+        let info = info(&[2, 0]);
+
+        assert_eq!(
+            info.motion_clip(MotionGroupIndex::new(0), 1),
+            Some(MotionClipIndex::new(1))
+        );
+        assert_eq!(info.motion_clip(MotionGroupIndex::new(0), 2), None);
+        assert_eq!(info.motion_clip(MotionGroupIndex::new(1), 0), None);
     }
 }

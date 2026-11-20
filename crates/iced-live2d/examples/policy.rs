@@ -21,7 +21,8 @@ use iced::widget::{column, text};
 use iced::{Fill, Subscription, Task, keyboard, window};
 use iced_live2d::{
     AssetOptions, Live2dAsset, Live2dEvent, Live2dModel, LookAtBlend, ModelInfo, ModelOptions,
-    ParameterBlend, ParameterPolicy, ParameterStage, Raw, RawEvent, live2d, look_at, raw,
+    MotionClipIndex, ParameterBlend, ParameterPolicy, ParameterStage, Raw, RawEvent, live2d,
+    look_at, raw,
 };
 
 fn main() -> iced::Result {
@@ -126,7 +127,7 @@ impl App {
         self.breath = find(info, "ParamBreath");
 
         if let Some(group) = raw::motions(info).into_iter().next() {
-            self.model.play_motion(group, 0);
+            self.model.play_motion(group, MotionClipIndex::new(0));
         }
     }
 

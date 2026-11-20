@@ -25,7 +25,7 @@ use iced::widget::{column, container, row, text};
 use iced::{Element, Fill, Length, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, GestureEvent, GestureMode, Gestures, Hover, Live2d, Live2dAsset, Live2dEvent,
-    Live2dId, Live2dModel, ModelOptions, MotionEnd, Raw, live2d, raw,
+    Live2dId, Live2dModel, ModelOptions, MotionClipIndex, MotionEnd, Raw, live2d, raw,
 };
 
 fn main() -> iced::Result {
@@ -219,7 +219,7 @@ impl App {
                 if let Some(group) = raw::motions(info).into_iter().next()
                     && let Some(pane) = self.panes.get(&model)
                 {
-                    pane.model.play_motion(group, 0);
+                    pane.model.play_motion(group, MotionClipIndex::new(0));
                 }
 
                 self.last = format!("model {label} loaded");

@@ -19,7 +19,7 @@ use iced::widget::{column, text};
 use iced::{Element, Fill, Subscription, Task, keyboard, mouse, window};
 use iced_live2d::{
     AssetOptions, Gesture, GestureEvent, Gestures, Hover, Interface, Live2dAsset, Live2dEvent,
-    Live2dModel, ModelInfo, ModelOptions, MotionEnd, Vocabulary, live2d, look_at,
+    Live2dModel, ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, Vocabulary, live2d, look_at,
 };
 
 /// The parameters this interface drives.
@@ -133,9 +133,13 @@ impl App {
                 "m" => self.toggle_mouth(),
                 "c" => self.toggle_cheeks(),
                 "h" => self.toggle_arm(),
-                "t" => self.model.play_motion(FaceMotion::TapBody, 0),
+                "t" => self
+                    .model
+                    .play_motion(FaceMotion::TapBody, MotionClipIndex::new(0)),
                 "s" => self.model.stop_motion(),
-                "r" => self.model.play_motion(FaceMotion::Idle, 0),
+                "r" => self
+                    .model
+                    .play_motion(FaceMotion::Idle, MotionClipIndex::new(0)),
                 _ => {}
             },
             Message::Key(_) => {}
@@ -172,7 +176,8 @@ impl App {
                 self.info = Some(Arc::clone(info));
 
                 // Playing `Idle` is this example's policy, not the component's.
-                self.model.play_motion(FaceMotion::Idle, 0);
+                self.model
+                    .play_motion(FaceMotion::Idle, MotionClipIndex::new(0));
                 self.status = format!(
                     "loaded: {} parameters, {} parts, {} motion groups, {} expressions, {} hit areas",
                     info.parameters.len(),
@@ -206,7 +211,8 @@ impl App {
             } => {
                 // Back to the first idle clip, which is this example's policy.
                 if *group == FaceMotion::Idle {
-                    self.model.play_motion(FaceMotion::Idle, 0);
+                    self.model
+                        .play_motion(FaceMotion::Idle, MotionClipIndex::new(0));
                 }
 
                 self.status = format!("finished {group:?} #{clip}");
@@ -216,7 +222,8 @@ impl App {
             }
             Live2dEvent::Input(Gesture::Clicked(tap)) => {
                 if tap.area == Some(FaceHitArea::Body) {
-                    self.model.play_motion(FaceMotion::TapBody, 0);
+                    self.model
+                        .play_motion(FaceMotion::TapBody, MotionClipIndex::new(0));
                     self.status = "clicked Body: TapBody".to_owned();
                 } else {
                     self.status = format!("clicked {:?}", tap.area);

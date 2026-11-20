@@ -9,6 +9,8 @@ use mocari::render::wgpu::{
     WgpuClippingLayoutError, WgpuMeshUpdateError, WgpuRenderError, WgpuTextureError,
 };
 
+use crate::index::{MotionClipIndex, MotionGroupIndex};
+
 /// The render layer's result type.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -48,23 +50,30 @@ pub enum Error {
     NoDrawables,
 
     /// A motion group index is not one the model declares.
-    #[error("motion group #{group} does not exist, the model exposes {count}")]
-    MotionGroup {
-        /// The group index that was asked for.
-        group: usize,
+    #[error("motion group #{group} does not exist, the model exposes {groups}")]
+    UnknownMotionGroup {
+        /// The group that was asked for.
+        group: MotionGroupIndex,
         /// How many groups the model declares.
-        count: usize,
+        groups: usize,
     },
 
     /// A motion clip index is not one the group holds.
-    #[error("motion clip #{clip} is out of range for group #{group}, which has {count}")]
-    MotionClip {
-        /// The group index that was asked for.
-        group: usize,
-        /// The clip index that was asked for.
-        clip: usize,
+    #[error("motion clip #{clip} is out of range for group #{group}, which has {clips}")]
+    UnknownMotionClip {
+        /// The group that was asked for.
+        group: MotionGroupIndex,
+        /// The clip that was asked for.
+        clip: MotionClipIndex,
         /// How many clips the group holds.
-        count: usize,
+        clips: usize,
+    },
+
+    /// The group exists but declares no clips to pick from.
+    #[error("motion group #{group} has no clips")]
+    EmptyMotionGroup {
+        /// The empty group.
+        group: MotionGroupIndex,
     },
 
     /// An expression index is not one the model declares.

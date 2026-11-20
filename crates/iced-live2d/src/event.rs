@@ -10,7 +10,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use live2d_render::{Error, ModelInfo, MotionEnd};
+use live2d_render::{Error, ModelInfo, MotionClipIndex, MotionEnd};
 
 use crate::interaction::{Gesture, PointerEvent};
 use crate::interface::{Interface, MissingNames};
@@ -54,8 +54,8 @@ pub enum Live2dEvent<I: Interface, In> {
         model: Live2dId,
         /// The motion group the clip belongs to.
         group: I::Motion,
-        /// Index of the clip inside that group.
-        clip: usize,
+        /// The clip inside that group.
+        clip: MotionClipIndex,
         /// Length of the clip in seconds, as declared by the motion file.
         duration: f32,
         /// Whether the clip loops. A looping clip never completes on its own, so it
@@ -71,8 +71,8 @@ pub enum Live2dEvent<I: Interface, In> {
         model: Live2dId,
         /// The motion group the clip belonged to.
         group: I::Motion,
-        /// Index of the clip inside that group.
-        clip: usize,
+        /// The clip inside that group.
+        clip: MotionClipIndex,
         /// Whether it reached its own end or was stopped.
         ended: MotionEnd,
     },
@@ -342,7 +342,7 @@ mod tests {
         let started = RawEvent::<Raw>::MotionStarted {
             model,
             group: motion(asset),
-            clip: 0,
+            clip: MotionClipIndex::new(0),
             duration: 1.0,
             looping: false,
         };

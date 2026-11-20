@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use live2d_render::{
-    AssetId, AssetOptions, Fade, LookAtBlend, LookAtMode, ModelOptions, ParameterPolicy,
-    ParameterWrite,
+    AssetId, AssetOptions, Fade, LookAtBlend, LookAtMode, ModelOptions, MotionClipIndex,
+    ParameterPolicy, ParameterWrite,
 };
 
 use crate::event::Problem;
@@ -144,9 +144,16 @@ impl Live2dId {
 
 /// Something the host asked the model to do, queued until the render layer can.
 pub(crate) enum Command<I: Interface> {
-    PlayMotion { group: I::Motion, clip: usize },
-    PlayRandomMotion { group: I::Motion },
-    PlayExpression { expression: I::Expression },
+    PlayMotion {
+        group: I::Motion,
+        clip: MotionClipIndex,
+    },
+    PlayRandomMotion {
+        group: I::Motion,
+    },
+    PlayExpression {
+        expression: I::Expression,
+    },
     StopMotion,
     ClearExpressions,
 }
@@ -373,7 +380,7 @@ impl<I: Interface> Live2dModel<I> {
     ///
     /// An out-of-range pair is reported as a
     /// [`Problem::Renderer`](crate::Problem::Renderer), not ignored.
-    pub fn play_motion(&self, group: I::Motion, clip: usize) {
+    pub fn play_motion(&self, group: I::Motion, clip: MotionClipIndex) {
         self.inner.push_command(Command::PlayMotion { group, clip });
     }
 
@@ -721,7 +728,7 @@ mod tests {
         })
         .expect("a raw key");
 
-        model.play_motion(group.clone(), 1);
+        model.play_motion(group.clone(), MotionClipIndex::new(1));
         model.stop_motion();
 
         assert_eq!(model.inner.drain_commands().len(), 2);
@@ -739,7 +746,7 @@ mod tests {
         .expect("a raw key");
 
         for clip in 0..(MAX_QUEUED_COMMANDS + 6) {
-            model.play_motion(group.clone(), clip);
+            model.play_motion(group.clone(), MotionClipIndex::new(clip));
         }
 
         assert_eq!(model.inner.drain_commands().len(), MAX_QUEUED_COMMANDS);

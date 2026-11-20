@@ -10,7 +10,7 @@
 //! let prepared = Asset::parse(AssetId::unique(), "Hiyori.model3.json", options)?;
 //! let asset = prepared.upload(&renderer, &device, &queue, options)?;
 //! let mut model = asset.model();
-//! model.play_motion(0, 0);
+//! model.play_motion(MotionGroupIndex::new(0), MotionClipIndex::new(0));
 //! if model.advance(STEP) > 0 && model.deform() {
 //!     gpu.upload(&renderer, &device, &queue, &model)?;
 //! }
@@ -24,6 +24,7 @@ mod bounds;
 mod error;
 mod fade;
 mod gpu;
+mod index;
 mod info;
 mod model;
 mod policy;
@@ -35,6 +36,7 @@ pub use bounds::ModelBounds;
 pub use error::{Error, Result};
 pub use fade::Fade;
 pub use gpu::ModelGpu;
+pub use index::{MotionClipIndex, MotionGroupIndex};
 pub use info::{AssetId, HitArea, ModelInfo, MotionGroup, ParameterRange};
 pub use model::{Ended, Model, MotionEnd, STEP, Started};
 pub use policy::{LookAtBlend, ParameterBlend, ParameterPolicy, ParameterStage, ParameterWrite};
