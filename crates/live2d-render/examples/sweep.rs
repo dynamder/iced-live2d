@@ -37,15 +37,19 @@ const TRACKED: &[&str] = &[
     "FrontHairX1",
 ];
 
-fn drive(session: &mut Session, direct: &Option<String>, x: f32) {
+fn drive(
+    session: &mut Session,
+    direct: &Option<String>,
+    x: f32,
+) -> Result<(), Box<dyn std::error::Error>> {
     let Some(id) = direct else {
         session.model().set_look_at(Some([x, 0.0]));
-        return;
+        return Ok(());
     };
 
     let info = session.info();
     let Some(index) = info.parameter(id) else {
-        return;
+        return Err(format!("SWEEP_DIRECT {id:?} is not a parameter of this model").into());
     };
 
     let range = &info.parameters[index.get()];
@@ -55,6 +59,8 @@ fn drive(session: &mut Session, direct: &Option<String>, x: f32) {
     session
         .model()
         .set_parameters(&[(index, ParameterWrite::new(raw))]);
+
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Let physics settle at the left end before the first recorded frame.
     for _ in 0..settle {
-        drive(&mut session, &direct, low);
+        drive(&mut session, &direct, low)?;
         session.advance(&device, &queue, live2d_render::STEP)?;
     }
 
@@ -128,7 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = frame as f32 / (frames.max(2) - 1) as f32;
         let x = low + (high - low) * t;
 
-        drive(&mut session, &direct, x);
+        drive(&mut session, &direct, x)?;
         session.advance(&device, &queue, live2d_render::STEP)?;
 
         let values: Vec<Option<f32>> = watched
