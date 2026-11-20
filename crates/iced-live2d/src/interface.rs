@@ -4,7 +4,9 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use live2d_render::{AssetId, ModelInfo, MotionGroupIndex};
+use live2d_render::{
+    AssetId, ExpressionIndex, HitAreaIndex, ModelInfo, MotionGroupIndex, ParameterIndex, PartIndex,
+};
 
 /// How a vocabulary's entries are identified in the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,19 +151,31 @@ impl InterfaceSpec {
     /// All of it or none: a partial mapping would leave keys silently addressing
     /// the wrong entry.
     pub(crate) fn resolve(&self, info: &ModelInfo) -> Result<Mapping, MissingNames> {
-        let parameters = resolve(self.parameter, info.parameters.len(), |name| {
-            info.parameter(name)
-        });
-        let parts = resolve(self.part, info.parts.len(), |name| info.part(name));
-        let motions = resolve(self.motion, info.motions.len(), |name| {
-            info.motion(name).map(MotionGroupIndex::get)
-        });
-        let expressions = resolve(self.expression, info.expressions.len(), |name| {
-            info.expression(name)
-        });
-        let hit_areas = resolve(self.hit_area, info.hit_areas.len(), |name| {
-            info.hit_area(name)
-        });
+        let parameters = resolve(
+            self.parameter,
+            |position| info.parameter_at(position),
+            |name| info.parameter(name),
+        );
+        let parts = resolve(
+            self.part,
+            |position| info.part_at(position),
+            |name| info.part(name),
+        );
+        let motions = resolve(
+            self.motion,
+            |position| info.motion_at(position),
+            |name| info.motion(name),
+        );
+        let expressions = resolve(
+            self.expression,
+            |position| info.expression_at(position),
+            |name| info.expression(name),
+        );
+        let hit_areas = resolve(
+            self.hit_area,
+            |position| info.hit_area_at(position),
+            |name| info.hit_area(name),
+        );
 
         let missing = MissingNames {
             parameters: parameters.1,
@@ -188,42 +202,38 @@ impl InterfaceSpec {
 /// Which model entry each vocabulary index points at.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Mapping {
-    parameters: Vec<usize>,
-    parts: Vec<usize>,
-    motions: Vec<usize>,
-    expressions: Vec<usize>,
-    hit_areas: Vec<usize>,
+    parameters: Vec<ParameterIndex>,
+    parts: Vec<PartIndex>,
+    motions: Vec<MotionGroupIndex>,
+    expressions: Vec<ExpressionIndex>,
+    hit_areas: Vec<HitAreaIndex>,
 }
 
 impl Mapping {
-    pub(crate) fn parameter(&self, index: usize) -> Option<usize> {
+    pub(crate) fn parameter(&self, index: usize) -> Option<ParameterIndex> {
         self.parameters.get(index).copied()
     }
 
-    pub(crate) fn part(&self, index: usize) -> Option<usize> {
+    pub(crate) fn part(&self, index: usize) -> Option<PartIndex> {
         self.parts.get(index).copied()
     }
 
     pub(crate) fn motion(&self, index: usize) -> Option<MotionGroupIndex> {
-        self.motions
-            .get(index)
-            .map(|group| MotionGroupIndex::new(*group))
+        self.motions.get(index).copied()
     }
 
-    pub(crate) fn expression(&self, index: usize) -> Option<usize> {
+    pub(crate) fn expression(&self, index: usize) -> Option<ExpressionIndex> {
         self.expressions.get(index).copied()
     }
 
     /// The vocabulary index of a model motion group: the reverse of
     /// [`Mapping::motion`], for events that start in the render layer.
     pub(crate) fn motion_vocabulary(&self, group: MotionGroupIndex) -> Option<usize> {
-        self.motions
-            .iter()
-            .position(|mapped| *mapped == group.get())
+        self.motions.iter().position(|mapped| *mapped == group)
     }
 
     /// The vocabulary index of a model hit area.
-    pub(crate) fn hit_area_vocabulary(&self, area: usize) -> Option<usize> {
+    pub(crate) fn hit_area_vocabulary(&self, area: HitAreaIndex) -> Option<usize> {
         self.hit_areas.iter().position(|mapped| *mapped == area)
     }
 }
@@ -294,20 +304,28 @@ impl fmt::Display for MissingNames {
 }
 
 /// Resolves one vocabulary: the mapping, and the names that did not resolve.
-fn resolve(
+fn resolve<T>(
     spec: VocabularySpec,
-    count: usize,
-    look_up: impl Fn(&str) -> Option<usize>,
-) -> (Vec<usize>, Vec<&'static str>) {
+    at: impl Fn(usize) -> Option<T>,
+    look_up: impl Fn(&str) -> Option<T>,
+) -> (Vec<T>, Vec<&'static str>) {
     match spec {
-        VocabularySpec::Model => ((0..count).collect(), Vec::new()),
+        VocabularySpec::Model => {
+            let mut mapping = Vec::new();
+
+            while let Some(item) = at(mapping.len()) {
+                mapping.push(item);
+            }
+
+            (mapping, Vec::new())
+        }
         VocabularySpec::Static(names) => {
             let mut mapping = Vec::with_capacity(names.len());
             let mut missing = Vec::new();
 
             for &name in names {
                 match look_up(name) {
-                    Some(index) => mapping.push(index),
+                    Some(item) => mapping.push(item),
                     None => missing.push(name),
                 }
             }
@@ -359,8 +377,8 @@ mod tests {
     fn a_static_vocabulary_maps_by_name() {
         let mapping = SPEC.resolve(&info(&["B", "A"], &[])).expect("resolves");
 
-        assert_eq!(mapping.parameter(0), Some(1));
-        assert_eq!(mapping.parameter(1), Some(0));
+        assert_eq!(mapping.parameter(0), Some(ParameterIndex::new(1)));
+        assert_eq!(mapping.parameter(1), Some(ParameterIndex::new(0)));
     }
 
     #[test]

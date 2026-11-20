@@ -16,9 +16,9 @@ use iced::wgpu;
 use iced::widget::shader;
 use iced::{Point, Rectangle};
 use live2d_render::{
-    Asset, AssetId, AssetOptions, ClipRect, Error, Fade, LookAtMode, Model, ModelGpu, ModelInfo,
-    ModelOptions, MotionClipIndex, MotionEnd, MotionGroupIndex, ParameterWrite, Prepared, View,
-    WgpuLive2dRenderer,
+    Asset, AssetId, AssetOptions, ClipRect, Error, Fade, HitAreaIndex, LookAtMode, Model, ModelGpu,
+    ModelInfo, ModelOptions, MotionClipIndex, MotionEnd, MotionGroupIndex, ParameterIndex,
+    ParameterWrite, PartIndex, Prepared, View, WgpuLive2dRenderer,
 };
 
 use crate::event::{LoadFailure, Problem};
@@ -476,7 +476,7 @@ struct ViewSlot {
 #[derive(Default)]
 struct Interaction {
     /// The hit area under the cursor, as a model index.
-    hover: Option<usize>,
+    hover: Option<HitAreaIndex>,
     /// Every pointer currently held down, at most a handful.
     down: Vec<Down>,
     /// The last position reported as a `Moved`, in window pixels: inside only, so
@@ -487,7 +487,7 @@ struct Interaction {
 struct Down {
     pointer: Pointer,
     /// The hit area under the press, if any: a drag reports where it started.
-    area: Option<usize>,
+    area: Option<HitAreaIndex>,
     origin: Point,
     /// Where the pointer is now, from the frame cursor or from a touch move.
     current: Point,
@@ -517,8 +517,8 @@ struct Ready {
     /// Last problem reported from the update path, so a repeating failure is not
     /// reported sixty times a second.
     last_problem: Option<String>,
-    parameters: Vec<(usize, ParameterWrite)>,
-    parts: Vec<(usize, f32)>,
+    parameters: Vec<(ParameterIndex, ParameterWrite)>,
+    parts: Vec<(PartIndex, f32)>,
     /// Asset problems found while loading, reported on registration.
     issues: Vec<Arc<Error>>,
 }
@@ -1174,9 +1174,14 @@ fn motion_key(
     Some(KeyId { asset, index, name })
 }
 
-fn area_key(asset: AssetId, info: &ModelInfo, mapping: &Mapping, area: usize) -> Option<KeyId> {
+fn area_key(
+    asset: AssetId,
+    info: &ModelInfo,
+    mapping: &Mapping,
+    area: HitAreaIndex,
+) -> Option<KeyId> {
     let index = mapping.hit_area_vocabulary(area)?;
-    let name = Arc::clone(&info.hit_areas.get(area)?.name);
+    let name = Arc::clone(&info.hit_areas.get(area.get())?.name);
 
     Some(KeyId { asset, index, name })
 }

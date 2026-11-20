@@ -15,7 +15,9 @@ use mocari::{ExpressionManager, ModelRuntime};
 use crate::asset::{MotionRef, Shared};
 use crate::error::Error;
 use crate::fade::Fade;
-use crate::index::{MotionClipIndex, MotionGroupIndex};
+use crate::index::{
+    ExpressionIndex, HitAreaIndex, MotionClipIndex, MotionGroupIndex, ParameterIndex, PartIndex,
+};
 use crate::info::ModelInfo;
 use crate::policy::{LookAtBlend, ParameterPolicy, ParameterStage, ParameterWrite};
 use crate::rig::LookAtMode;
@@ -87,10 +89,10 @@ pub struct Model {
     fading: Vec<MotionPlayer>,
     current: Option<(MotionGroupIndex, MotionClipIndex)>,
     expressions: ExpressionManager,
-    parameters: Vec<(usize, ParameterWrite)>,
+    parameters: Vec<(ParameterIndex, ParameterWrite)>,
     parameter_policy: ParameterPolicy,
     look_at_blend: LookAtBlend,
-    parts: Vec<(usize, f32)>,
+    parts: Vec<(PartIndex, f32)>,
     look_at: Option<[f32; 2]>,
     look_at_mode: LookAtMode,
     physics_enabled: bool,
@@ -105,6 +107,10 @@ pub struct Model {
     fade_limit: Option<usize>,
     /// Parameter names already reported as overwritten by physics.
     reported_overwrites: BTreeSet<Arc<str>>,
+    /// Positions already reported as parameters the model does not declare.
+    reported_parameters: BTreeSet<ParameterIndex>,
+    /// Positions already reported as parts the model does not declare.
+    reported_parts: BTreeSet<PartIndex>,
     issues: Vec<Error>,
 }
 
@@ -132,6 +138,8 @@ impl Model {
             fade: None,
             fade_limit: None,
             reported_overwrites: BTreeSet::new(),
+            reported_parameters: BTreeSet::new(),
+            reported_parts: BTreeSet::new(),
             issues: Vec::new(),
         }
     }
@@ -175,15 +183,17 @@ impl Model {
         self.runtime.meshes()
     }
 
-    /// The host writes to replay every step, as `(model index, write)` pairs.
-    /// Setting an identical slice again is free.
-    pub fn set_parameters(&mut self, writes: &[(usize, ParameterWrite)]) {
+    /// The host writes to replay every step, as `(parameter, write)` pairs.
+    /// Setting an identical slice again is free. A parameter the model does not
+    /// declare is reported once as an issue and never written.
+    pub fn set_parameters(&mut self, writes: &[(ParameterIndex, ParameterWrite)]) {
         if self.parameters == writes {
             return;
         }
 
         self.parameters.clear();
         self.parameters.extend_from_slice(writes);
+        self.report_unknown_parameters();
         self.dirty = true;
     }
 
@@ -217,15 +227,17 @@ impl Model {
         self.dirty = true;
     }
 
-    /// The part opacities to replay every step, as `(model index, opacity)` pairs,
-    /// clamped to `0.0..=1.0`. Pose fading applies on top.
-    pub fn set_parts(&mut self, overrides: &[(usize, f32)]) {
+    /// The part opacities to replay every step, as `(part, opacity)` pairs, clamped
+    /// to `0.0..=1.0`. Pose fading applies on top. A part the model does not
+    /// declare is reported once as an issue and never written.
+    pub fn set_parts(&mut self, overrides: &[(PartIndex, f32)]) {
         if self.parts == overrides {
             return;
         }
 
         self.parts.clear();
         self.parts.extend_from_slice(overrides);
+        self.report_unknown_parts();
         self.dirty = true;
     }
 
@@ -307,11 +319,12 @@ impl Model {
         }
     }
 
-    /// Applies an expression on top of the motion.
-    pub fn play_expression(&mut self, expression: usize) {
-        let Some(path) = self.shared.expressions.get(expression).cloned() else {
+    /// Applies an expression on top of the motion. A position the model does not
+    /// declare is reported as an issue, not a silent no-op.
+    pub fn play_expression(&mut self, expression: ExpressionIndex) {
+        let Some(path) = self.shared.expressions.get(expression.get()).cloned() else {
             let count = self.shared.expressions.len();
-            self.issues.push(Error::ExpressionIndex {
+            self.issues.push(Error::UnknownExpression {
                 index: expression,
                 count,
             });
@@ -415,7 +428,7 @@ impl Model {
     }
 
     /// The first hit area containing a model-space point.
-    pub fn hit_area(&self, point: [f32; 2]) -> Option<usize> {
+    pub fn hit_area(&self, point: [f32; 2]) -> Option<HitAreaIndex> {
         let hit = self.runtime.hit_test(point[0], point[1])?;
         self.shared.info.hit_area_of_drawable(hit.id())
     }
@@ -456,7 +469,7 @@ impl Model {
         self.apply_writes(ParameterStage::BeforePhysics);
 
         for &(index, opacity) in &self.parts {
-            self.runtime.set_part_opacity_by_index(index, opacity);
+            self.runtime.set_part_opacity_by_index(index.get(), opacity);
         }
 
         if self.physics_enabled {
@@ -509,24 +522,25 @@ impl Model {
                 self.report_physics_override(parameter);
             }
 
-            let current = self
-                .runtime
-                .parameter_value_by_index(parameter)
-                .unwrap_or_default();
+            let Some(current) = self.runtime.parameter_value_by_index(parameter.get()) else {
+                continue;
+            };
 
-            self.runtime
-                .set_parameter_by_index(parameter, write.apply(current, self.parameter_policy));
+            self.runtime.set_parameter_by_index(
+                parameter.get(),
+                write.apply(current, self.parameter_policy),
+            );
         }
     }
 
-    fn write_stage(&self, parameter: usize, write: ParameterWrite) -> ParameterStage {
+    fn write_stage(&self, parameter: ParameterIndex, write: ParameterWrite) -> ParameterStage {
         write.resolved_stage(
             self.parameter_policy,
             self.shared.facts.is_physics_output(parameter),
         )
     }
 
-    fn report_physics_override(&mut self, parameter: usize) {
+    fn report_physics_override(&mut self, parameter: ParameterIndex) {
         if !self.physics_enabled || !self.shared.facts.is_physics_output(parameter) {
             return;
         }
@@ -546,6 +560,33 @@ impl Model {
         });
     }
 
+    fn report_unknown_parameters(&mut self) {
+        let count = self.shared.info.parameters.len();
+
+        for &(parameter, _) in &self.parameters {
+            if parameter.get() < count || !self.reported_parameters.insert(parameter) {
+                continue;
+            }
+
+            self.issues.push(Error::UnknownParameter {
+                index: parameter,
+                count,
+            });
+        }
+    }
+
+    fn report_unknown_parts(&mut self) {
+        let count = self.shared.info.parts.len();
+
+        for &(part, _) in &self.parts {
+            if part.get() < count || !self.reported_parts.insert(part) {
+                continue;
+            }
+
+            self.issues.push(Error::UnknownPart { index: part, count });
+        }
+    }
+
     fn apply_look_at(&mut self) {
         let Some(target) = self.look_at else {
             return;
@@ -561,23 +602,27 @@ impl Model {
                     let amount = (offset + 1.0) * 0.5;
 
                     self.runtime
-                        .set_parameter_normalized_by_index(binding.parameter, amount);
+                        .set_parameter_normalized_by_index(binding.parameter.get(), amount);
                 }
                 LookAtBlend::Add => {
                     let (Some(minimum), Some(maximum)) = (
-                        self.runtime.parameter_minimum_by_index(binding.parameter),
-                        self.runtime.parameter_maximum_by_index(binding.parameter),
+                        self.runtime
+                            .parameter_minimum_by_index(binding.parameter.get()),
+                        self.runtime
+                            .parameter_maximum_by_index(binding.parameter.get()),
                     ) else {
                         continue;
                     };
 
-                    let current = self
+                    let Some(current) = self
                         .runtime
-                        .parameter_value_by_index(binding.parameter)
-                        .unwrap_or_default();
+                        .parameter_value_by_index(binding.parameter.get())
+                    else {
+                        continue;
+                    };
 
                     self.runtime.set_parameter_by_index(
-                        binding.parameter,
+                        binding.parameter.get(),
                         current + offset * (maximum - minimum) * 0.5,
                     );
                 }
@@ -645,14 +690,15 @@ impl Model {
     }
 
     /// A raw parameter value by model index. Diagnostics and tests only.
-    pub fn parameter_value_by_index(&self, index: usize) -> Option<f32> {
-        self.runtime.parameter_value_by_index(index)
+    pub fn parameter_value_by_index(&self, index: ParameterIndex) -> Option<f32> {
+        self.runtime.parameter_value_by_index(index.get())
     }
 
     /// Writes a raw parameter value. Diagnostics and tests only; hosts write
-    /// through [`Model::set_parameters`].
-    pub fn set_parameter_raw(&mut self, index: usize, value: f32) -> bool {
-        self.runtime.set_parameter_by_index(index, value)
+    /// through [`Model::set_parameters`]. `false` means the model declares no such
+    /// parameter.
+    pub fn set_parameter_raw(&mut self, index: ParameterIndex, value: f32) -> bool {
+        self.runtime.set_parameter_by_index(index.get(), value)
     }
 }
 

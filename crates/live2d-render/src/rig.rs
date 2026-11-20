@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::index::ParameterIndex;
+
 /// The six slots a LookAt target drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Slot {
@@ -128,7 +130,7 @@ pub struct Binding {
     /// Which of the six slots this binding drives.
     pub slot: Slot,
     /// Model parameter index; the model's own spelling is `ModelFacts::name`.
-    pub parameter: usize,
+    pub parameter: ParameterIndex,
     /// How the written value reaches the mesh.
     pub route: Route,
     /// Why this parameter was chosen.
@@ -187,7 +189,7 @@ impl Rig {
         self.bindings.iter().find(|binding| binding.slot == slot)
     }
 
-    fn push(&mut self, slot: Slot, parameter: usize, route: Route, source: Source) {
+    fn push(&mut self, slot: Slot, parameter: ParameterIndex, route: Route, source: Source) {
         self.bindings.push(Binding {
             slot,
             parameter,
@@ -202,7 +204,7 @@ impl Rig {
 pub struct ModelFacts {
     /// Parameter ids in the asset's list order, so an index stays meaningful.
     parameters: Vec<String>,
-    by_name: BTreeMap<String, usize>,
+    by_name: BTreeMap<String, ParameterIndex>,
     physics_outputs: BTreeSet<String>,
 }
 
@@ -216,7 +218,7 @@ impl ModelFacts {
         let by_name = parameters
             .iter()
             .enumerate()
-            .map(|(index, parameter)| (normalize(parameter), index))
+            .map(|(index, parameter)| (normalize(parameter), ParameterIndex::new(index)))
             .collect();
 
         Self {
@@ -233,13 +235,13 @@ impl ModelFacts {
     ///
     /// Ignores case and underscores: `PARAM_ANGLE_X` and `ParamAngleX` are one
     /// slot.
-    pub fn find(&self, conventional: &str) -> Option<usize> {
+    pub fn find(&self, conventional: &str) -> Option<ParameterIndex> {
         self.by_name.get(&normalize(conventional)).copied()
     }
 
     /// The model's own spelling of a parameter index.
-    pub fn name(&self, index: usize) -> Option<&str> {
-        self.parameters.get(index).map(String::as_str)
+    pub fn name(&self, index: ParameterIndex) -> Option<&str> {
+        self.parameters.get(index.get()).map(String::as_str)
     }
 
     /// Whether the model has a parameter under a conventional name.
@@ -247,9 +249,9 @@ impl ModelFacts {
         self.find(conventional).is_some()
     }
 
-    pub(crate) fn is_physics_output(&self, index: usize) -> bool {
+    pub(crate) fn is_physics_output(&self, index: ParameterIndex) -> bool {
         self.parameters
-            .get(index)
+            .get(index.get())
             .is_some_and(|parameter| self.physics_outputs.contains(&normalize(parameter)))
     }
 }

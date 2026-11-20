@@ -36,7 +36,9 @@ pub use bounds::{InvalidBounds, ModelBounds};
 pub use error::{Error, Result};
 pub use fade::Fade;
 pub use gpu::ModelGpu;
-pub use index::{MotionClipIndex, MotionGroupIndex};
+pub use index::{
+    ExpressionIndex, HitAreaIndex, MotionClipIndex, MotionGroupIndex, ParameterIndex, PartIndex,
+};
 pub use info::{AssetId, HitArea, ModelInfo, MotionGroup, ParameterRange};
 pub use model::{Ended, Model, MotionEnd, STEP, Started};
 pub use policy::{LookAtBlend, ParameterBlend, ParameterPolicy, ParameterStage, ParameterWrite};

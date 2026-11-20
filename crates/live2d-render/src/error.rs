@@ -9,7 +9,7 @@ use mocari::render::wgpu::{
     WgpuClippingLayoutError, WgpuMeshUpdateError, WgpuRenderError, WgpuTextureError,
 };
 
-use crate::index::{MotionClipIndex, MotionGroupIndex};
+use crate::index::{ExpressionIndex, MotionClipIndex, MotionGroupIndex, ParameterIndex, PartIndex};
 
 /// The render layer's result type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -76,11 +76,29 @@ pub enum Error {
         group: MotionGroupIndex,
     },
 
+    /// A parameter index is not one the model declares.
+    #[error("parameter #{index} does not exist, the model exposes {count}")]
+    UnknownParameter {
+        /// The parameter that was asked for.
+        index: ParameterIndex,
+        /// How many parameters the model declares.
+        count: usize,
+    },
+
+    /// A part index is not one the model declares.
+    #[error("part #{index} does not exist, the model exposes {count}")]
+    UnknownPart {
+        /// The part that was asked for.
+        index: PartIndex,
+        /// How many parts the model declares.
+        count: usize,
+    },
+
     /// An expression index is not one the model declares.
-    #[error("expression #{index} is out of range, the model exposes {count}")]
-    ExpressionIndex {
-        /// The index that was asked for.
-        index: usize,
+    #[error("expression #{index} does not exist, the model exposes {count}")]
+    UnknownExpression {
+        /// The expression that was asked for.
+        index: ExpressionIndex,
         /// How many expressions the model declares.
         count: usize,
     },

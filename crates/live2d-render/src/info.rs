@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bounds::ModelBounds;
-use crate::index::{MotionClipIndex, MotionGroupIndex};
+use crate::index::{
+    ExpressionIndex, HitAreaIndex, MotionClipIndex, MotionGroupIndex, ParameterIndex, PartIndex,
+};
 
 /// Identity of one asset. Keys carry it, so a key handed to a model of another
 /// asset is recognisably foreign.
@@ -76,13 +78,31 @@ pub struct ModelInfo {
 
 impl ModelInfo {
     /// The model index of a parameter, by exact name.
-    pub fn parameter(&self, name: &str) -> Option<usize> {
-        self.parameters.iter().position(|item| &*item.name == name)
+    pub fn parameter(&self, name: &str) -> Option<ParameterIndex> {
+        self.parameters
+            .iter()
+            .position(|item| &*item.name == name)
+            .map(ParameterIndex::new)
+    }
+
+    /// Turns a raw position into a parameter this model declares.
+    pub fn parameter_at(&self, index: usize) -> Option<ParameterIndex> {
+        self.parameters
+            .get(index)
+            .map(|_| ParameterIndex::new(index))
     }
 
     /// The model index of a part, by exact id.
-    pub fn part(&self, name: &str) -> Option<usize> {
-        self.parts.iter().position(|item| &**item == name)
+    pub fn part(&self, name: &str) -> Option<PartIndex> {
+        self.parts
+            .iter()
+            .position(|item| &**item == name)
+            .map(PartIndex::new)
+    }
+
+    /// Turns a raw position into a part this model declares.
+    pub fn part_at(&self, index: usize) -> Option<PartIndex> {
+        self.parts.get(index).map(|_| PartIndex::new(index))
     }
 
     /// The position of a motion group, by exact name.
@@ -112,18 +132,39 @@ impl ModelInfo {
     }
 
     /// The model index of an expression, by declared name.
-    pub fn expression(&self, name: &str) -> Option<usize> {
-        self.expressions.iter().position(|item| &**item == name)
+    pub fn expression(&self, name: &str) -> Option<ExpressionIndex> {
+        self.expressions
+            .iter()
+            .position(|item| &**item == name)
+            .map(ExpressionIndex::new)
+    }
+
+    /// Turns a raw position into an expression this model declares.
+    pub fn expression_at(&self, index: usize) -> Option<ExpressionIndex> {
+        self.expressions
+            .get(index)
+            .map(|_| ExpressionIndex::new(index))
     }
 
     /// The model index of a hit area, by declared name.
-    pub fn hit_area(&self, name: &str) -> Option<usize> {
-        self.hit_areas.iter().position(|item| &*item.name == name)
+    pub fn hit_area(&self, name: &str) -> Option<HitAreaIndex> {
+        self.hit_areas
+            .iter()
+            .position(|item| &*item.name == name)
+            .map(HitAreaIndex::new)
+    }
+
+    /// Turns a raw position into a hit area this model declares.
+    pub fn hit_area_at(&self, index: usize) -> Option<HitAreaIndex> {
+        self.hit_areas.get(index).map(|_| HitAreaIndex::new(index))
     }
 
     /// The model index of the hit area backed by a drawable id.
-    pub fn hit_area_of_drawable(&self, id: &str) -> Option<usize> {
-        self.hit_areas.iter().position(|item| &*item.id == id)
+    pub fn hit_area_of_drawable(&self, id: &str) -> Option<HitAreaIndex> {
+        self.hit_areas
+            .iter()
+            .position(|item| &*item.id == id)
+            .map(HitAreaIndex::new)
     }
 
     /// Every motion file the model ships with, across all groups.
@@ -185,5 +226,63 @@ mod tests {
         );
         assert_eq!(info.motion_clip(MotionGroupIndex::new(0), 2), None);
         assert_eq!(info.motion_clip(MotionGroupIndex::new(1), 0), None);
+    }
+
+    fn listed() -> ModelInfo {
+        ModelInfo {
+            parameters: vec![ParameterRange {
+                name: Arc::from("ParamAngleX"),
+                minimum: -30.0,
+                maximum: 30.0,
+                default: 0.0,
+            }]
+            .into(),
+            parts: Arc::from([Arc::from("PartArmA")]),
+            expressions: Arc::from([Arc::from("Smile")]),
+            hit_areas: vec![HitArea {
+                id: Arc::from("ArtMesh1"),
+                name: Arc::from("Head"),
+            }]
+            .into(),
+            ..info(&[])
+        }
+    }
+
+    #[test]
+    fn every_list_types_its_own_positions() {
+        let info = listed();
+
+        assert_eq!(info.parameter("ParamAngleX"), Some(ParameterIndex::new(0)));
+        assert_eq!(info.part("PartArmA"), Some(PartIndex::new(0)));
+        assert_eq!(info.expression("Smile"), Some(ExpressionIndex::new(0)));
+        assert_eq!(info.hit_area("Head"), Some(HitAreaIndex::new(0)));
+        assert_eq!(
+            info.hit_area_of_drawable("ArtMesh1"),
+            Some(HitAreaIndex::new(0))
+        );
+    }
+
+    #[test]
+    fn a_name_the_model_lacks_has_no_position() {
+        let info = listed();
+
+        assert_eq!(info.parameter("AngleX"), None);
+        assert_eq!(info.part("PartArmB"), None);
+        assert_eq!(info.expression("Frown"), None);
+        assert_eq!(info.hit_area("Body"), None);
+    }
+
+    #[test]
+    fn a_raw_position_is_typed_only_inside_its_list() {
+        let info = listed();
+
+        assert_eq!(info.parameter_at(0), Some(ParameterIndex::new(0)));
+        assert_eq!(info.parameter_at(1), None);
+        assert_eq!(info.part_at(0), Some(PartIndex::new(0)));
+        assert_eq!(info.part_at(1), None);
+        assert_eq!(info.expression_at(0), Some(ExpressionIndex::new(0)));
+        assert_eq!(info.expression_at(1), None);
+        assert_eq!(info.hit_area_at(0), Some(HitAreaIndex::new(0)));
+        assert_eq!(info.hit_area_at(1), None);
     }
 }

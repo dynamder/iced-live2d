@@ -292,7 +292,7 @@ impl App {
         };
 
         info.parameters
-            .get(index)
+            .get(index.get())
             .map_or(1.0, |range| range.maximum)
     }
 }

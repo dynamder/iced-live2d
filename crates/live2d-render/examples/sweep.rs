@@ -48,7 +48,7 @@ fn drive(session: &mut Session, direct: &Option<String>, x: f32) {
         return;
     };
 
-    let range = &info.parameters[index];
+    let range = &info.parameters[index.get()];
     let amount = (x.clamp(-1.0, 1.0) + 1.0) * 0.5;
     let raw = range.minimum + amount * (range.maximum - range.minimum);
 

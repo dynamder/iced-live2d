@@ -75,7 +75,7 @@ impl Session {
         self.asset
             .info()
             .hit_areas
-            .get(index)
+            .get(index.get())
             .map(|area| &*area.name)
     }
 

@@ -50,9 +50,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut changed = 0;
 
-    for (other, parameter) in info.parameters.iter().enumerate() {
-        let before = plain.parameter_value_by_index(other).unwrap_or_default();
-        let after = written.parameter_value_by_index(other).unwrap_or_default();
+    for (position, parameter) in info.parameters.iter().enumerate() {
+        let Some(other) = info.parameter_at(position) else {
+            continue;
+        };
+
+        let (Some(before), Some(after)) = (
+            plain.parameter_value_by_index(other),
+            written.parameter_value_by_index(other),
+        ) else {
+            continue;
+        };
 
         if (after - before).abs() > 1e-6 {
             changed += 1;

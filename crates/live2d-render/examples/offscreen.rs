@@ -206,6 +206,11 @@ impl Knobs {
         }
 
         if let Some(expression) = self.expression {
+            let expression = session
+                .info()
+                .expression_at(expression)
+                .ok_or_else(|| format!("LIVE2D_EXPR {expression} is out of range"))?;
+
             session.model().play_expression(expression);
         }
 
