@@ -48,10 +48,10 @@ switch, loading a model from bytes, and a pause that is more than a total freeze
 [docs/gaps.md](docs/gaps.md) tracks each of them with where it lives and what
 closing it costs.
 
-Deliberately out of scope: keyboard and focus, accessibility, pinch, pen pressure,
-inertia and physics drags, breathing/eye-blink/lip-sync helpers, a desktop-pet
-shell (transparent, on-top, click-through), motion priority policy, and the
-tiny-skia and wasm targets.
+Deliberately out of scope: keyboard input and keyboard focus, accessibility, touch
+input (and with it pinch and pen pressure), inertia and physics drags,
+breathing/eye-blink/lip-sync helpers, a desktop-pet shell (transparent, on-top,
+click-through), motion priority policy, and the tiny-skia and wasm targets.
 
 ## Fidelity
 
@@ -111,9 +111,10 @@ fn view(app: &App) -> impl iced::Widget<Message> {
 }
 ```
 
-The asset/model split is what makes several instances cheap: they share the textures
-and the parsed model, and each keeps its own parameter values, playback position and
-physics state.
+The asset/model split is what makes several instances share what is expensive: the
+textures and the parsed metadata are loaded once, and each instance keeps its own
+parameter values, playback position and physics state. The mutable model state is
+still copied per instance; [docs/gaps.md](docs/gaps.md) records the cost.
 
 Both constructors take their options explicitly, and there is no variant that invents
 them: whether to spend 592 MB of VRAM on 4096px textures or 37 on half-size, whether a
@@ -364,8 +365,13 @@ Decisions worth knowing:
   never twice.
 - **The hit area of a drag** is the one under the press, fixed for the whole drag —
   dragging off a head does not turn the drag into a drag of nothing.
-- **A press is a promise.** Losing focus, or a touch the platform takes away, reports
+- **A press is a promise.** When the window loses focus, every held button reports
   `Cancelled`, so a host's own state machine always has a way out.
+- **One view owns the pointer.** Two widgets drawing one model each keep their own
+  hover, but a press belongs to the widget it landed on: until that button is
+  released, other widgets on the same model report no movement, drags or wheel, and
+  their presses are ignored. Releasing the last held button frees the pointer for
+  the next widget.
 - **`capture(true)`** stops a parent `scrollable` or draggable surface from also
   reacting while a press is held.
 - **`Sample` carries the same point three ways**: widget pixels (what window dragging

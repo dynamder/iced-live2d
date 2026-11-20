@@ -120,7 +120,7 @@ VRAM.
 ## Deliberately not here
 
 - Keyboard input, focus and accessibility: a character canvas has little to say.
-- Pinch and pen pressure: touch and tablet surfaces.
+- Touch input (not supported yet), and with it pinch and pen pressure.
 - wasm and the tiny-skia backend: the renderer is wgpu only.
 - A desktop-pet shell (transparent, on-top, click-through): the host's job.
 - Motion priority, queues and interruption rules: policy belongs to the host once

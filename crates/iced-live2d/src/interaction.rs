@@ -9,17 +9,14 @@ use std::time::{Duration, Instant};
 
 use iced::Point;
 use iced::mouse;
-use iced::touch;
 
 use crate::model::Live2dId;
 
 /// Which pointer did something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pointer {
-    /// A mouse button.
+    /// A mouse button. Touch is not supported yet.
     Mouse(mouse::Button),
-    /// One finger on a touch screen.
-    Touch(touch::Finger),
 }
 
 /// Where a pointer was, in the three spaces a host may need.
@@ -117,8 +114,7 @@ pub struct Scrolling {
     pub when: Instant,
 }
 
-/// A press that will never be released: the window lost focus, or the touch was
-/// taken away.
+/// A press that will never be released: the window lost focus.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cancelled {
     /// Which model.
@@ -132,10 +128,10 @@ pub struct Cancelled {
 /// What a pointer did, as the widget saw it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PointerEvent<A> {
-    /// A button or finger went down.
+    /// A button went down.
     Pressed(Pointing<A>),
-    /// A button or finger came up. Reported wherever the pointer is, inside the
-    /// widget or not.
+    /// A button came up. Reported wherever the pointer is, inside the widget or
+    /// not.
     Released(Pointing<A>),
     /// The press was cancelled; nothing will be released.
     Cancelled(Cancelled),

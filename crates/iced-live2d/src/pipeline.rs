@@ -1046,15 +1046,6 @@ fn pointer(
                     }),
                 );
             }
-            PointerInput::Moved { pointer, at } => {
-                if let Some(down) = interaction
-                    .down
-                    .iter_mut()
-                    .find(|down| down.pointer == pointer)
-                {
-                    down.current = at;
-                }
-            }
             PointerInput::Scrolled { lines, at, when } => {
                 if let Some(at) = sample(at) {
                     send(
@@ -1062,17 +1053,6 @@ fn pointer(
                         PipelineEvent::Pointer(PointerEventKind::Scrolled { lines, at, when }),
                     );
                 }
-            }
-            PointerInput::Cancelled { pointer } => {
-                interaction.down.retain(|down| down.pointer != pointer);
-
-                send(
-                    listener,
-                    PipelineEvent::Pointer(PointerEventKind::Cancelled {
-                        pointer,
-                        when: Instant::now(),
-                    }),
-                );
             }
             PointerInput::CancelAll => {
                 for down in interaction.down.drain(..) {

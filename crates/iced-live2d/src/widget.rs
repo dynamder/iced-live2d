@@ -12,7 +12,7 @@ use iced::advanced::layout;
 use iced::advanced::widget::tree;
 use iced::advanced::{Layout, Widget, renderer};
 use iced::widget::shader;
-use iced::{Length, Rectangle, mouse, touch, window};
+use iced::{Length, Rectangle, mouse, window};
 use live2d_render::STEP;
 
 use crate::event::{ModelEvent, Problem};
@@ -45,7 +45,8 @@ const MAX_PENDING: usize = 64;
 ///
 /// The widget borrows the model, so the model must outlive the UI tree. Two
 /// widgets may draw one model; each frames it and reports pointer input in its own
-/// space, but its model events reach both.
+/// space, but only one of them owns the pointer at a time, and model events reach
+/// both.
 pub fn live2d<Message, I: Interface>(model: &Live2dModel<I>) -> Live2d<'_, Message, I, Unset> {
     Live2d::new(model)
 }
@@ -420,31 +421,42 @@ impl<'a, Message, I: Interface, M: Mode, H: HandlerState> Live2d<'a, Message, I,
         when: Instant,
     ) -> bool {
         let model = self.model.inner();
+        let view = state.presence();
 
         match event {
             iced::Event::Mouse(mouse::Event::ButtonPressed(button)) if cursor.is_over(bounds) => {
-                state.pressed = true;
+                let pointer = Pointer::Mouse(*button);
+
+                if !model.claim_focus(&view) {
+                    return false;
+                }
+
+                state.press(pointer);
 
                 if let Some(at) = cursor.position() {
-                    model.push_pointer(PointerInput::Pressed {
-                        pointer: Pointer::Mouse(*button),
-                        at,
-                        when,
-                    });
+                    state.push_pointer(PointerInput::Pressed { pointer, at, when });
                 }
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(button)) => {
-                state.pressed = false;
+                let pointer = Pointer::Mouse(*button);
+
+                if !state.release(pointer) {
+                    return false;
+                }
 
                 if let Some(at) = cursor.position() {
-                    model.push_pointer(PointerInput::Released {
-                        pointer: Pointer::Mouse(*button),
-                        at,
-                        when,
-                    });
+                    state.push_pointer(PointerInput::Released { pointer, at, when });
+                }
+
+                if state.pressed.borrow().is_empty() {
+                    model.clear_focus(&view);
                 }
             }
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+                if !model.focus_allows(&view) {
+                    return false;
+                }
+
                 let lines = match delta {
                     mouse::ScrollDelta::Lines { x, y } => [*x, *y],
                     mouse::ScrollDelta::Pixels { x, y } => {
@@ -453,37 +465,23 @@ impl<'a, Message, I: Interface, M: Mode, H: HandlerState> Live2d<'a, Message, I,
                 };
 
                 if let Some(at) = cursor.position() {
-                    model.push_pointer(PointerInput::Scrolled { lines, at, when });
+                    state.push_pointer(PointerInput::Scrolled { lines, at, when });
                 }
             }
-            iced::Event::Touch(touch::Event::FingerPressed { id, position }) => {
-                model.push_pointer(PointerInput::Pressed {
-                    pointer: Pointer::Touch(*id),
-                    at: *position,
-                    when,
-                });
-            }
-            iced::Event::Touch(touch::Event::FingerMoved { id, position }) => {
-                model.push_pointer(PointerInput::Moved {
-                    pointer: Pointer::Touch(*id),
-                    at: *position,
-                });
-            }
-            iced::Event::Touch(touch::Event::FingerLifted { id, position }) => {
-                model.push_pointer(PointerInput::Released {
-                    pointer: Pointer::Touch(*id),
-                    at: *position,
-                    when,
-                });
-            }
-            iced::Event::Touch(touch::Event::FingerLost { id, .. }) => {
-                model.push_pointer(PointerInput::Cancelled {
-                    pointer: Pointer::Touch(*id),
-                });
-            }
             iced::Event::Window(window::Event::Unfocused) => {
-                state.pressed = false;
-                model.push_pointer(PointerInput::CancelAll);
+                if !model.focus_allows(&view) {
+                    return false;
+                }
+
+                let held = !state.pressed.borrow().is_empty();
+                state.pressed.borrow_mut().clear();
+                model.clear_focus(&view);
+
+                if !held {
+                    return false;
+                }
+
+                state.push_pointer(PointerInput::CancelAll);
             }
             _ => return false,
         }
@@ -1006,17 +1004,48 @@ pub struct Live2dState<I: Interface, M: Mode = RawMode> {
     recognizer: Recognizer<I::HitArea>,
     produced: Vec<M::Input<I::HitArea>>,
     hover: Option<I::HitArea>,
-    pressed: bool,
+    /// The buttons this view is holding down. Only the focus view has any.
+    pressed: RefCell<Vec<Pointer>>,
+    /// Pointer input waiting for the next `draw`, which is where it reaches the
+    /// render layer. Per view: this is the queue two widgets on one model do not
+    /// share.
+    pointer: RefCell<Vec<PointerInput>>,
     /// Events dropped to keep the queue bounded, not yet reported.
     dropped: usize,
     view: ViewId,
     presence: Arc<Presence>,
 }
 
-#[allow(private_bounds)]
-impl<I: Interface, M: Plumbing> Live2dState<I, M> {
+impl<I: Interface, M: Mode> Live2dState<I, M> {
     fn presence(&self) -> Arc<Presence> {
         Arc::clone(&self.presence)
+    }
+
+    /// Records that this view now holds `pointer` down.
+    fn press(&mut self, pointer: Pointer) {
+        let mut pressed = self.pressed.borrow_mut();
+
+        if !pressed.contains(&pointer) {
+            pressed.push(pointer);
+        }
+    }
+
+    /// Forgets `pointer`, reporting whether this view was holding it.
+    fn release(&mut self, pointer: Pointer) -> bool {
+        let mut pressed = self.pressed.borrow_mut();
+
+        match pressed.iter().position(|held| *held == pointer) {
+            Some(index) => {
+                pressed.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Queues one pointer input for the next `draw`.
+    fn push_pointer(&mut self, input: PointerInput) {
+        self.pointer.borrow_mut().push(input);
     }
 
     /// Queues one event, dropping the oldest once the queue is full.
@@ -1028,7 +1057,10 @@ impl<I: Interface, M: Plumbing> Live2dState<I, M> {
 
         self.pending.push_back(event);
     }
+}
 
+#[allow(private_bounds)]
+impl<I: Interface, M: Plumbing> Live2dState<I, M> {
     /// Queues interaction input, keeping only the latest of a repeated stream.
     fn push_input(&mut self, input: M::Input<I::HitArea>) {
         if let Some(key) = M::coalesce_key(&input) {
@@ -1073,7 +1105,8 @@ impl<I: Interface, M: Mode> Default for Live2dState<I, M> {
             recognizer: Recognizer::default(),
             produced: Vec::new(),
             hover: None,
-            pressed: false,
+            pressed: RefCell::new(Vec::new()),
+            pointer: RefCell::new(Vec::new()),
             dropped: 0,
             view: ViewId::unique(),
             presence: Arc::new(Presence),
@@ -1134,7 +1167,7 @@ impl<Message, I: Interface, M: Plumbing, H: HandlerState> shader::Program<Messag
             (None, None) => return None,
         };
 
-        if self.capture && state.pressed {
+        if self.capture && !state.pressed.borrow().is_empty() {
             action = action.and_capture();
         }
 
@@ -1158,7 +1191,9 @@ impl<Message, I: Interface, M: Plumbing, H: HandlerState> shader::Program<Messag
             None => model.target(),
         };
 
-        let inside = if cursor.is_over(bounds) {
+        let observing = model.focus_allows(&state.presence);
+
+        let inside = if cursor.is_over(bounds) && observing {
             cursor.position()
         } else {
             None
@@ -1195,8 +1230,8 @@ impl<Message, I: Interface, M: Plumbing, H: HandlerState> shader::Program<Messag
                 physics_enabled: model.physics_enabled(),
                 paused: model.paused(),
                 cursor: inside,
-                position: cursor.position(),
-                pointer: model.drain_pointer(),
+                position: observing.then(|| cursor.position()).flatten(),
+                pointer: state.pointer.borrow_mut().drain(..).collect(),
                 profile: self.profile,
             },
             events,
@@ -1215,7 +1250,7 @@ impl<Message, I: Interface, M: Plumbing, H: HandlerState> shader::Program<Messag
         match &self.cursor {
             Some(hook) => hook(Hover {
                 area: state.hover.as_ref(),
-                pressed: state.pressed,
+                pressed: !state.pressed.borrow().is_empty(),
             }),
             None => mouse::Interaction::Idle,
         }
@@ -1378,7 +1413,7 @@ impl<'a, Message, I: Interface, H: AcceptsSpecific> Live2d<'a, Message, I, Gestu
 }
 
 impl<'a, Message, I: Interface, H: AcceptsSpecific> Live2d<'a, Message, I, RawMode, H> {
-    /// A button or finger went down.
+    /// A button went down.
     pub fn on_press(
         mut self,
         on_press: impl Fn(Pointing<I::HitArea>) -> Message + 'a,
@@ -1387,7 +1422,7 @@ impl<'a, Message, I: Interface, H: AcceptsSpecific> Live2d<'a, Message, I, RawMo
         self.into_handler_state()
     }
 
-    /// A button or finger came up, inside the widget or not.
+    /// A button came up, inside the widget or not.
     pub fn on_release(
         mut self,
         on_release: impl Fn(Pointing<I::HitArea>) -> Message + 'a,
@@ -1489,6 +1524,202 @@ mod tests {
         assert!(matches!(
             key::<Broken>(id, "motion"),
             Err(Problem::Vocabulary { index: 3, .. })
+        ));
+    }
+
+    fn bounds() -> Rectangle {
+        Rectangle::new(iced::Point::ORIGIN, iced::Size::new(100.0, 100.0))
+    }
+
+    fn over() -> mouse::Cursor {
+        mouse::Cursor::Available(iced::Point::new(10.0, 10.0))
+    }
+
+    fn press(button: mouse::Button) -> iced::Event {
+        iced::Event::Mouse(mouse::Event::ButtonPressed(button))
+    }
+
+    fn release(button: mouse::Button) -> iced::Event {
+        iced::Event::Mouse(mouse::Event::ButtonReleased(button))
+    }
+
+    fn unfocused() -> iced::Event {
+        iced::Event::Window(window::Event::Unfocused)
+    }
+
+    fn plain<'a>(model: &'a Live2dModel<Raw>) -> Live2d<'a, (), Raw, RawMode> {
+        live2d(model).raw()
+    }
+
+    fn draw(
+        widget: &Live2d<'_, (), Raw, RawMode>,
+        state: &Live2dState<Raw, RawMode>,
+    ) -> Live2dPrimitive {
+        shader::Program::<()>::draw(widget, state, over(), bounds())
+    }
+
+    #[test]
+    fn only_the_focus_view_queues_a_press() {
+        let model = model();
+        let widget = plain(&model);
+        let (mut a, mut b) = (state(), state());
+
+        assert!(widget.queue_input(
+            &mut a,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now()
+        ));
+        assert!(!widget.queue_input(
+            &mut b,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now()
+        ));
+
+        assert_eq!(a.pointer.borrow().len(), 1);
+        assert!(b.pointer.borrow().is_empty());
+    }
+
+    #[test]
+    fn releasing_the_last_button_frees_the_pointer() {
+        let model = model();
+        let widget = plain(&model);
+        let (mut a, mut b) = (state(), state());
+
+        widget.queue_input(
+            &mut a,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+        widget.queue_input(
+            &mut b,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+        widget.queue_input(
+            &mut a,
+            &release(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+
+        assert!(widget.queue_input(
+            &mut b,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now()
+        ));
+
+        assert_eq!(b.pointer.borrow().len(), 1);
+    }
+
+    #[test]
+    fn releasing_one_button_keeps_the_other() {
+        let model = model();
+        let widget = plain(&model);
+        let (mut a, mut b) = (state(), state());
+
+        widget.queue_input(
+            &mut a,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+        widget.queue_input(
+            &mut a,
+            &press(mouse::Button::Right),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+        widget.queue_input(
+            &mut a,
+            &release(mouse::Button::Right),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+
+        assert!(!widget.queue_input(
+            &mut b,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now()
+        ));
+
+        widget.queue_input(
+            &mut a,
+            &release(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+
+        assert!(widget.queue_input(
+            &mut b,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn a_view_without_focus_reports_no_movement_and_ignores_the_wheel() {
+        let model = model();
+        let widget = plain(&model);
+        let (mut a, mut b) = (state(), state());
+
+        widget.queue_input(
+            &mut a,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+
+        let wheel = iced::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        });
+
+        assert!(!widget.queue_input(&mut b, &wheel, bounds(), over(), Instant::now()));
+        assert!(draw(&widget, &b).inputs.cursor.is_none());
+        assert!(draw(&widget, &a).inputs.cursor.is_some());
+    }
+
+    #[test]
+    fn losing_focus_cancels_the_held_press() {
+        let model = model();
+        let widget = plain(&model);
+        let mut a = state();
+
+        widget.queue_input(
+            &mut a,
+            &press(mouse::Button::Left),
+            bounds(),
+            over(),
+            Instant::now(),
+        );
+
+        let cancelling = unfocused();
+
+        assert!(widget.queue_input(&mut a, &cancelling, bounds(), over(), Instant::now()));
+
+        assert!(a.pressed.borrow().is_empty());
+        assert!(matches!(
+            a.pointer.borrow().last(),
+            Some(PointerInput::CancelAll)
         ));
     }
 

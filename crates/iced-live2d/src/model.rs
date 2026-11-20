@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 
 use live2d_render::{
     AssetId, AssetOptions, Fade, LookAtBlend, LookAtMode, ModelOptions, MotionClipIndex,
@@ -116,7 +116,9 @@ pub(crate) struct Inner<I: Interface> {
     fade_limit: Cell<Option<usize>>,
     paused: Cell<bool>,
     physics_enabled: Cell<bool>,
-    pointer: RefCell<Vec<PointerInput>>,
+    /// The view that currently owns the pointer, if any. A `Weak` so a widget
+    /// leaving the tree does not keep the model alive.
+    focus: RefCell<Option<Weak<Presence>>>,
     problems: RefCell<Vec<Problem>>,
     asset_presence: Arc<Presence>,
     reported: RefCell<BTreeSet<(&'static str, String)>>,
@@ -195,17 +197,10 @@ pub(crate) enum PointerInput {
         at: Point,
         when: Instant,
     },
-    Moved {
-        pointer: Pointer,
-        at: Point,
-    },
     Scrolled {
         lines: [f32; 2],
         at: Point,
         when: Instant,
-    },
-    Cancelled {
-        pointer: Pointer,
     },
     CancelAll,
 }
@@ -234,7 +229,7 @@ impl<I: Interface> Live2dModel<I> {
                 fade_limit: Cell::new(None),
                 paused: Cell::new(false),
                 physics_enabled: Cell::new(true),
-                pointer: RefCell::new(Vec::new()),
+                focus: RefCell::new(None),
                 problems: RefCell::new(Vec::new()),
                 asset_presence: asset.presence(),
                 reported: RefCell::new(BTreeSet::new()),
@@ -667,12 +662,35 @@ impl<I: Interface> Inner<I> {
         self.commands.borrow_mut().drain(..).collect()
     }
 
-    pub(crate) fn drain_pointer(&self) -> Vec<PointerInput> {
-        std::mem::take(&mut *self.pointer.borrow_mut())
+    /// Claims the pointer for `view` unless another live view holds it.
+    pub(crate) fn claim_focus(&self, view: &Arc<Presence>) -> bool {
+        if !self.focus_allows(view) {
+            return false;
+        }
+
+        *self.focus.borrow_mut() = Some(Arc::downgrade(view));
+        true
     }
 
-    pub(crate) fn push_pointer(&self, input: PointerInput) {
-        self.pointer.borrow_mut().push(input);
+    /// Whether `view` may report pointer input: it owns the pointer, or nobody does.
+    pub(crate) fn focus_allows(&self, view: &Arc<Presence>) -> bool {
+        match self.focus.borrow().as_ref().and_then(Weak::upgrade) {
+            Some(owner) => Arc::ptr_eq(&owner, view),
+            None => true,
+        }
+    }
+
+    /// Gives the pointer up, if `view` holds it.
+    pub(crate) fn clear_focus(&self, view: &Arc<Presence>) {
+        let mut focus = self.focus.borrow_mut();
+
+        if focus
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|owner| Arc::ptr_eq(&owner, view))
+        {
+            *focus = None;
+        }
     }
 
     pub(crate) fn take_problems(&self) -> Vec<Problem> {
