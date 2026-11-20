@@ -389,6 +389,7 @@ cargo run --release -p iced-live2d --example interact -- "path/to/model.model3.j
 cargo run --release -p iced-live2d --example policy-iced -- "path/to/model.model3.json"
 cargo run --release -p live2d-render --example offscreen -- "path/to/model.model3.json" frame.png 900 30
 cargo run --release -p live2d-render --example policy-render -- "path/to/model.model3.json" ParamMouthOpenY 0.8 auto
+cargo run --release -p live2d-render --example unknown-index -- "path/to/model.model3.json"
 ```
 
 | Example | Shows |
@@ -398,6 +399,7 @@ cargo run --release -p live2d-render --example policy-render -- "path/to/model.m
 | `interact` | every input mapped to a message: click, double click, long press, drag, drag end, scroll (zooms the pane), hover, and gaze driven by the pointer |
 | `policy-iced` | a mouth and breath layer over the first clip; `B`/`S`/`L` switch blend, stage and look blend live |
 | `policy-render <Param> <v> <auto\|before\|after>` | which parameters a write changes, and whether staging it before physics moves the physics outputs |
+| `unknown-index` | writes a parameter and a part the model lacks and plays a missing expression: each is reported as an issue, none is applied |
 | `offscreen` | one frame into a PNG, no window |
 | `dump` | what is in the `.moc3`: drawables, mask sets, canvas, motion groups |
 | `inspect` | what is in the *files*: physics settings, motion curves, expression targets, and how the art sits in the canvas |
@@ -421,7 +423,7 @@ from a command line:
 |---|---|
 | `LIVE2D_TEXTURE_SCALE` | upload resolution multiplier, default `1.0`; values quantise to `1/n`, and `0` is rejected by the hang check |
 | `LIVE2D_MASK` | mask render-target edge in pixels, default `1024`; clamped to the device limit |
-| `LIVE2D_MOTION` / `LIVE2D_EXPR` | `group,clip` to play / expression index to apply before the capture |
+| `LIVE2D_MOTION` / `LIVE2D_EXPR` | `group,clip` to play / expression index to apply before the capture; an out-of-range value fails the capture |
 | `LIVE2D_CLEAR_EXPR` / `LIVE2D_NO_MOTION` | drop the expressions / stop the motion after loading |
 | `LIVE2D_FADE` | seconds, or `cut`: overrides every fade the model files declare |
 | `LIVE2D_NO_PHYSICS` | leave physics out of the frame |

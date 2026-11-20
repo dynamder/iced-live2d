@@ -113,9 +113,6 @@ VRAM at half and full resolution.
   pipeline's `Parsed` state so a corrected click can retry, which also keeps the
   decoded texture bytes alive after the model was rejected
   ([pipeline.rs](../crates/iced-live2d/src/pipeline.rs#L546-L556)).
-- **Only motion indices are newtypes.** Parameter, part, expression, hit-area and
-  drawable positions are still bare `usize`; a later round converts them the same
-  way.
 
 ## Deliberately not here
 
@@ -123,6 +120,9 @@ VRAM at half and full resolution.
 - Touch input (not supported yet), and with it pinch and pen pressure.
 - wasm and the tiny-skia backend: the renderer is wgpu only.
 - A desktop-pet shell (transparent, on-top, click-through): the host's job.
+- A drawable index type: drawable positions never cross the public API
+  (`Model::meshes` returns the slice and the GPU layer iterates it), so there is
+  no position to type.
 - Motion priority, queues and interruption rules: policy belongs to the host once
   the render layer can blend.
 

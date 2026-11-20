@@ -676,7 +676,7 @@ cargo run --release -p live2d-render --example rig -- \
 | Item | Decision |
 |---|---|
 | `ModelRuntime` static/state split | Record in `docs/gaps.md`; mocari/vendor work, not this round |
-| Other index newtypes | Follow-up round |
+| Other index newtypes | Landed: parameter, part, expression and hit-area positions. Drawable positions never surface, so they have no type |
 | `Prepared` decoded textures after interface mismatch | Record; rework deferred |
 | `[patch.crates-io]` / publish story | Record; no change now |
 | MSRV 1.93 verification | Deferred until a toolchain is available |
